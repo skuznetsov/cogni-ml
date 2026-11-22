@@ -235,6 +235,38 @@ inline float inkling2_resident_score(
     return score - sink;
 }
 
+// Score one query against a key already loaded by the calling SIMD group.
+// The four additions per lane retain inkling2_resident_score's FP32 order
+// while allowing the shared-K prefill kernel to reuse one K tuple for GQA.
+inline float inkling2_resident_score_with_key(
+    device const float* query,
+    thread const float* key_values,
+    device const float* query_relative,
+    device const float* relative_bias,
+    float sink,
+    uint head_dim,
+    uint relative_dim,
+    uint distance,
+    uint relative_extent,
+    ushort lane)
+{
+    float qk_partial = 0.0f;
+    for (uint chunk = 0; chunk < 4; ++chunk) {
+        const uint dim = (uint)lane + chunk * 32;
+        qk_partial += query[dim] * key_values[chunk];
+    }
+    float score = simd_sum(qk_partial) * rsqrt((float)head_dim);
+    if (distance < relative_extent) {
+        float relative_partial = 0.0f;
+        const size_t bias_base = (size_t)distance * (size_t)relative_dim;
+        for (uint dim = (uint)lane; dim < relative_dim; dim += 32) {
+            relative_partial += query_relative[dim] * relative_bias[bias_base + dim];
+        }
+        score += simd_sum(relative_partial);
+    }
+    return score - sink;
+}
+
 // One SIMD group handles one query row and one query head. Scores are streamed
 // twice (max, then denominator/context), avoiding a context-length scratch tile.
 kernel void inkling2_resident_attention(
@@ -333,6 +365,287 @@ kernel void inkling2_resident_attention(
             const float sigmoid = 1.0f / (1.0f + exp(-gate_value));
             output[output_base + channel] = (context[chunk] / denominator) * sigmoid;
         }
+    }
+}
+
+// Prefill specialization for one row and query head. Four SIMD groups compute
+// four key scores at a time; the cached scores then feed max, softmax, and
+// context without recomputing QK or relative-position terms.
+kernel void inkling2_resident_attention_prefill_scores(
+    device const float* q               [[buffer(0)]],
+    device const float* k_tile          [[buffer(1)]],
+    device const float* v_tile          [[buffer(2)]],
+    device const float* q_relative      [[buffer(3)]],
+    device const float* gate            [[buffer(4)]],
+    device const float* sink            [[buffer(5)]],
+    device const float* relative_bias   [[buffer(6)]],
+    device const float* k_cache         [[buffer(7)]],
+    device const float* v_cache         [[buffer(8)]],
+    device       float* output          [[buffer(9)]],
+    constant uint& start                [[buffer(10)]],
+    constant uint& rows                 [[buffer(11)]],
+    constant uint& capacity             [[buffer(12)]],
+    constant uint& kv_width             [[buffer(13)]],
+    constant uint& n_head               [[buffer(14)]],
+    constant uint& n_head_kv            [[buffer(15)]],
+    constant uint& head_dim             [[buffer(16)]],
+    constant uint& relative_dim         [[buffer(17)]],
+    constant uint& relative_extent      [[buffer(18)]],
+    constant uint& sliding_window       [[buffer(19)]],
+    constant uint& sliding              [[buffer(20)]],
+    constant uint& query_row_offset     [[buffer(21)]],
+    constant uint& score_slots          [[buffer(22)]],
+    threadgroup float* cached_scores    [[threadgroup(0)]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort group [[simdgroup_index_in_threadgroup]],
+    uint3 tgpig [[threadgroup_position_in_grid]])
+{
+    const uint row = tgpig.y;
+    const uint head = tgpig.z;
+    if (row >= rows || head >= n_head || head_dim != 128 || relative_dim != 16) return;
+
+    const uint position = start + query_row_offset + row;
+    const uint kv_head = head / (n_head / n_head_kv);
+    const size_t q_base = (size_t)row * (size_t)n_head * (size_t)head_dim + (size_t)head * (size_t)head_dim;
+    const size_t relative_base = (size_t)row * (size_t)n_head * (size_t)relative_dim + (size_t)head * (size_t)relative_dim;
+    uint first_key = 0;
+    if (sliding != 0 && position + 1 > sliding_window) {
+        first_key = position + 1 - sliding_window;
+    }
+    const uint key_count = position - first_key + 1;
+    if (key_count > score_slots) return;
+
+    for (uint key_index = (uint)group; key_index < key_count; key_index += 4) {
+        const uint key_position = first_key + key_index;
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding != 0 ? key_position % capacity : key_position;
+        const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
+        device const float* key = k_cache + cache_base;
+        if (in_tile) {
+            const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
+            key = k_tile + tile_base;
+        }
+        const uint distance = position - key_position;
+        const float score = inkling2_resident_score(
+            q + q_base, key, q_relative + relative_base, relative_bias,
+            sink[(size_t)row * (size_t)n_head + head], head_dim, relative_dim,
+            distance, relative_extent, lane);
+        if (lane == 0) cached_scores[key_index] = score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (group == 0 && lane == 0) {
+        float max_score = 0.0f; // The learned sink is a zero logit.
+        for (uint key_index = 0; key_index < key_count; ++key_index) {
+            max_score = max(max_score, cached_scores[key_index]);
+        }
+        cached_scores[score_slots] = max_score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint thread_index = (uint)group * 32 + (uint)lane;
+    const float max_score = cached_scores[score_slots];
+    for (uint key_index = thread_index; key_index < key_count; key_index += 128) {
+        cached_scores[key_index] = exp(cached_scores[key_index] - max_score);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint channel = thread_index;
+    const size_t output_base = q_base;
+    float context = 0.0f;
+    float denominator = exp(-max_score);
+    for (uint key_index = 0; key_index < key_count; ++key_index) {
+        const uint key_position = first_key + key_index;
+        const float weight = cached_scores[key_index];
+        denominator += weight;
+
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding != 0 ? key_position % capacity : key_position;
+        const uint kv_row = in_tile ? key_position - start : slot;
+        const size_t value_base = (size_t)kv_row * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
+        device const float* value = (in_tile ? v_tile : v_cache) + value_base;
+        context += weight * value[channel];
+    }
+
+    const float gate_value = gate[output_base + channel];
+    const float sigmoid = 1.0f / (1.0f + exp(-gate_value));
+    output[output_base + channel] = (context / denominator) * sigmoid;
+}
+
+// GQA prefill specialization for two adjacent rows and one KV head. One SIMD
+// group loads each K tuple once and forms all visible scores for its six query
+// heads. The value pass likewise loads each V channel once and updates all six
+// contexts in ascending absolute-key order.
+kernel void inkling2_resident_attention_prefill_shared_kv(
+    device const float* q               [[buffer(0)]],
+    device const float* k_tile          [[buffer(1)]],
+    device const float* v_tile          [[buffer(2)]],
+    device const float* q_relative      [[buffer(3)]],
+    device const float* gate            [[buffer(4)]],
+    device const float* sink            [[buffer(5)]],
+    device const float* relative_bias   [[buffer(6)]],
+    device const float* k_cache         [[buffer(7)]],
+    device const float* v_cache         [[buffer(8)]],
+    device       float* output          [[buffer(9)]],
+    constant uint& start                [[buffer(10)]],
+    constant uint& rows                 [[buffer(11)]],
+    constant uint& capacity             [[buffer(12)]],
+    constant uint& kv_width             [[buffer(13)]],
+    constant uint& n_head               [[buffer(14)]],
+    constant uint& n_head_kv            [[buffer(15)]],
+    constant uint& head_dim             [[buffer(16)]],
+    constant uint& relative_dim         [[buffer(17)]],
+    constant uint& relative_extent      [[buffer(18)]],
+    constant uint& sliding_window       [[buffer(19)]],
+    constant uint& sliding              [[buffer(20)]],
+    constant uint& query_row_offset     [[buffer(21)]],
+    constant uint& score_slots          [[buffer(22)]],
+    threadgroup float* cached_scores    [[threadgroup(0)]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort group [[simdgroup_index_in_threadgroup]],
+    uint3 tgpig [[threadgroup_position_in_grid]])
+{
+    const uint first_row = tgpig.y * 2;
+    const uint kv_head = tgpig.z;
+    if (first_row >= rows || kv_head >= n_head_kv ||
+        head_dim != 128 || relative_dim != 16 || n_head != n_head_kv * 3) return;
+
+    const uint second_row = first_row + 1;
+    const bool has_second_row = second_row < rows;
+    const uint position0 = start + query_row_offset + first_row;
+    const uint position1 = start + query_row_offset + second_row;
+    uint first_key0 = 0;
+    uint first_key1 = 0;
+    if (sliding != 0 && position0 + 1 > sliding_window) {
+        first_key0 = position0 + 1 - sliding_window;
+    }
+    if (has_second_row && sliding != 0 && position1 + 1 > sliding_window) {
+        first_key1 = position1 + 1 - sliding_window;
+    }
+    const uint union_first = has_second_row ? min(first_key0, first_key1) : first_key0;
+    const uint union_last = has_second_row ? position1 : position0;
+    const uint union_count = union_last - union_first + 1;
+    const uint score_stride = score_slots + 1;
+    if (union_count > score_slots + 1) return;
+
+    // Each group owns every fourth absolute key. Its lanes load that key's
+    // four FP32 channel chunks once, then reuse them for up to six scores.
+    for (uint key_index = (uint)group; key_index < union_count; key_index += 4) {
+        const uint key_position = union_first + key_index;
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding != 0 ? key_position % capacity : key_position;
+        const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * 128;
+        device const float* key = k_cache + cache_base;
+        if (in_tile) {
+            const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * 128;
+            key = k_tile + tile_base;
+        }
+        float key_values[4];
+        for (uint chunk = 0; chunk < 4; ++chunk) {
+            key_values[chunk] = key[(uint)lane + chunk * 32];
+        }
+
+        for (uint output_index = 0; output_index < 6; ++output_index) {
+            const uint row_slot = output_index / 3;
+            if (row_slot == 1 && !has_second_row) continue;
+            const uint query_row = row_slot == 0 ? first_row : second_row;
+            const uint position = row_slot == 0 ? position0 : position1;
+            const uint first_key = row_slot == 0 ? first_key0 : first_key1;
+            if (key_position < first_key || key_position > position) continue;
+
+            const uint head = kv_head * 3 + (output_index % 3);
+            const size_t query_base = (size_t)query_row * (size_t)n_head * 128 + (size_t)head * 128;
+            const size_t relative_base = (size_t)query_row * (size_t)n_head * 16 + (size_t)head * 16;
+            const uint distance = position - key_position;
+            const float score = inkling2_resident_score_with_key(
+                q + query_base, key_values, q_relative + relative_base, relative_bias,
+                sink[(size_t)query_row * (size_t)n_head + head], 128, 16,
+                distance, relative_extent, lane);
+            if (lane == 0) {
+                const size_t score_base = (size_t)output_index * (size_t)score_stride;
+                cached_scores[score_base + key_position - first_key] = score;
+            }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint output_index = 0; output_index < 6; ++output_index) {
+        const uint row_slot = output_index / 3;
+        if (row_slot == 1 && !has_second_row) continue;
+        const uint position = row_slot == 0 ? position0 : position1;
+        const uint first_key = row_slot == 0 ? first_key0 : first_key1;
+        const uint key_count = position - first_key + 1;
+        const size_t score_base = (size_t)output_index * (size_t)score_stride;
+        if (group == 0 && lane == 0) {
+            float max_score = 0.0f; // The learned sink is a zero logit.
+            for (uint key_index = 0; key_index < key_count; ++key_index) {
+                max_score = max(max_score, cached_scores[score_base + key_index]);
+            }
+            cached_scores[score_base + score_slots] = max_score;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint thread_index = (uint)group * 32 + (uint)lane;
+    for (uint output_index = 0; output_index < 6; ++output_index) {
+        const uint row_slot = output_index / 3;
+        if (row_slot == 1 && !has_second_row) continue;
+        const uint position = row_slot == 0 ? position0 : position1;
+        const uint first_key = row_slot == 0 ? first_key0 : first_key1;
+        const uint key_count = position - first_key + 1;
+        const size_t score_base = (size_t)output_index * (size_t)score_stride;
+        const float max_score = cached_scores[score_base + score_slots];
+        for (uint key_index = thread_index; key_index < key_count; key_index += 128) {
+            cached_scores[score_base + key_index] = exp(cached_scores[score_base + key_index] - max_score);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float contexts[6];
+    float denominators[6];
+    for (uint output_index = 0; output_index < 6; ++output_index) {
+        contexts[output_index] = 0.0f;
+        const uint row_slot = output_index / 3;
+        if (row_slot == 1 && !has_second_row) {
+            denominators[output_index] = 1.0f;
+        } else {
+            const size_t score_base = (size_t)output_index * (size_t)score_stride;
+            denominators[output_index] = exp(-cached_scores[score_base + score_slots]);
+        }
+    }
+
+    const uint channel = thread_index;
+    for (uint key_index = 0; key_index < union_count; ++key_index) {
+        const uint key_position = union_first + key_index;
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding != 0 ? key_position % capacity : key_position;
+        const uint kv_row = in_tile ? key_position - start : slot;
+        const size_t value_base = (size_t)kv_row * (size_t)kv_width + (size_t)kv_head * 128;
+        device const float* value = (in_tile ? v_tile : v_cache) + value_base;
+        const float value_channel = value[channel];
+
+        for (uint output_index = 0; output_index < 6; ++output_index) {
+            const uint row_slot = output_index / 3;
+            if (row_slot == 1 && !has_second_row) continue;
+            const uint position = row_slot == 0 ? position0 : position1;
+            const uint first_key = row_slot == 0 ? first_key0 : first_key1;
+            if (key_position < first_key || key_position > position) continue;
+            const size_t score_base = (size_t)output_index * (size_t)score_stride;
+            const float weight = cached_scores[score_base + key_position - first_key];
+            denominators[output_index] += weight;
+            contexts[output_index] += weight * value_channel;
+        }
+    }
+
+    for (uint output_index = 0; output_index < 6; ++output_index) {
+        const uint row_slot = output_index / 3;
+        if (row_slot == 1 && !has_second_row) continue;
+        const uint query_row = row_slot == 0 ? first_row : second_row;
+        const uint head = kv_head * 3 + (output_index % 3);
+        const size_t output_base = (size_t)query_row * (size_t)n_head * 128 + (size_t)head * 128;
+        const float gate_value = gate[output_base + channel];
+        const float sigmoid = 1.0f / (1.0f + exp(-gate_value));
+        output[output_base + channel] = (contexts[output_index] / denominators[output_index]) * sigmoid;
     }
 }
 
