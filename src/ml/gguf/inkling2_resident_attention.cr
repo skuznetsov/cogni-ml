@@ -235,6 +235,7 @@ module ML::GGUF
       private INITIAL_CACHE_ROWS = 256_i32
       private SPLIT_KEY_THRESHOLD = 64_i32
       private SPLIT_KEY_PARTITIONS = 4_i32
+      private SPLIT_SCORE_CACHE_LIMIT = 256_i32
       MAX_HEAD_DIM = 256_i32
 
       getter sliding : Bool
@@ -652,6 +653,12 @@ module ML::GGUF
         encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
         encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
         encoder.set_value(query_row_offset.to_u32, 22)
+        # Reserve at most 1 KiB of scores per partition, rounded for Metal.
+        keys = start + query_row_offset + rows
+        keys = Math.min(keys, @config.sliding_window) if @sliding
+        score_slots = Math.min((keys - 1) // SPLIT_KEY_PARTITIONS + 1, SPLIT_SCORE_CACHE_LIMIT)
+        encoder.set_value(score_slots.to_u32, 23)
+        encoder.set_threadgroup_memory(((score_slots + 3) // 4) * 16, 0)
         encoder.dispatch({32 * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {32, 1, 1})
 
         encoder.set_pipeline(pipeline("inkling2_resident_attention_combine"))
