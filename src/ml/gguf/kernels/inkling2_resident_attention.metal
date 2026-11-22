@@ -346,6 +346,8 @@ kernel void inkling2_resident_attention_split(
     constant uint& sliding              [[buffer(20)]],
     constant uint& partitions           [[buffer(21)]],
     constant uint& query_row_offset     [[buffer(22)]],
+    constant uint& score_slots         [[buffer(23)]],
+    threadgroup float* cached_scores   [[threadgroup(0)]],
     ushort lane [[thread_index_in_simdgroup]],
     uint3 tgpig [[threadgroup_position_in_grid]])
 {
@@ -369,6 +371,9 @@ kernel void inkling2_resident_attention_split(
     const uint partition_end = partition_base * (partition + 1) + min(partition + 1, partition_extra);
     const size_t partial_base = (((size_t)row * (size_t)n_head + (size_t)head) * (size_t)partitions + (size_t)partition) * ((size_t)head_dim + 2);
 
+    // One SIMD group owns the partition. Keep its scores for the second
+    // pass; a larger partition recomputes them to bound scratch memory.
+    const bool save_scores = partition_end - partition_begin <= score_slots;
     float max_score = -INFINITY;
     for (uint key_index = partition_begin; key_index < partition_end; ++key_index) {
         const uint key_position = first_key + key_index;
@@ -386,7 +391,9 @@ kernel void inkling2_resident_attention_split(
             sink[(size_t)row * (size_t)n_head + head], head_dim, relative_dim,
             distance, relative_extent, lane);
         max_score = max(max_score, score);
+        if (save_scores && lane == 0) cached_scores[key_index - partition_begin] = score;
     }
+    if (save_scores) simdgroup_barrier(mem_flags::mem_threadgroup);
 
     const uint chunks = (head_dim + 31) / 32;
     float context[8];
@@ -396,19 +403,20 @@ kernel void inkling2_resident_attention_split(
         const uint key_position = first_key + key_index;
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
-        const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* key = k_cache + cache_base;
-        device const float* value = v_cache + cache_base;
-        if (in_tile) {
-            const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-            key = k_tile + tile_base;
-            value = v_tile + tile_base;
+        const uint kv_row = in_tile ? key_position - start : slot;
+        const size_t kv_base = (size_t)kv_row * kv_width + (size_t)kv_head * head_dim;
+        device const float* value = (in_tile ? v_tile : v_cache) + kv_base;
+        float score;
+        if (save_scores) {
+            score = cached_scores[key_index - partition_begin];
+        } else {
+            device const float* key = (in_tile ? k_tile : k_cache) + kv_base;
+            const uint distance = position - key_position;
+            score = inkling2_resident_score(
+                q + q_base, key, q_relative + relative_base, relative_bias,
+                sink[(size_t)row * (size_t)n_head + head], head_dim, relative_dim,
+                distance, relative_extent, lane);
         }
-        const uint distance = position - key_position;
-        const float score = inkling2_resident_score(
-            q + q_base, key, q_relative + relative_base, relative_bias,
-            sink[(size_t)row * (size_t)n_head + head], head_dim, relative_dim,
-            distance, relative_extent, lane);
         const float weight = exp(score - max_score);
         denominator += weight;
         for (uint chunk = 0; chunk < chunks; ++chunk) {
