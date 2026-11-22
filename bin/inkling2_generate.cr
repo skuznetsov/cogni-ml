@@ -29,6 +29,7 @@ staged_metal = false
 raw_prompt = false
 print_ids = false
 ngram = false
+depth_speculation = false
 trace_loops = false
 passes = nil.as(Int32?)
 prefill_tile = nil.as(Int32?)
@@ -57,6 +58,7 @@ end
 parser.on("--trace-loops", "Write position, completed_pass, and relative_delta records to stderr") { trace_loops = true }
 parser.on("--print-ids", "Write generated token IDs as CSV to stderr") { print_ids = true }
 parser.on("--ngram", "Verify repeated continuations in four-token blocks on fixed-depth resident Metal") { ngram = true }
+parser.on("--depth-speculation", "Draft at 3 passes and verify at 10 on resident Metal with research weights") { depth_speculation = true }
 parser.on("--help", "Show this help") { help = true }
 
 begin
@@ -102,7 +104,7 @@ begin
 
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
       passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
-      auto_prefill_tile: auto_prefill_tile, greedy_verifier: ngram)
+      auto_prefill_tile: auto_prefill_tile, greedy_verifier: ngram, depth_speculation: depth_speculation)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids
@@ -124,7 +126,7 @@ begin
     if max_new_tokens > 0
       first_id = ML::GGUF::Inkling2Engine.greedy_token_id(engine.prefill(prompt_ids))
       generated_ids = ML::GGUF::Inkling2GreedyDecode.generate(engine, prompt_ids, first_id,
-        max_new_tokens, tokenizer.eos_id, ngram: ngram).ids
+        max_new_tokens, tokenizer.eos_id, ngram: ngram, depth_speculation: depth_speculation).ids
     end
 
     STDERR.puts("backfilled_core_passes=#{engine.backfilled_passes}") if trace_loops && stop_delta

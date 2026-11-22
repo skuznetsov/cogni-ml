@@ -8,7 +8,11 @@ module ML::GGUF
     record Result, ids : Array(Int32), blocks : Int32, accepted_rows : Int32
 
     def generate(engine : Inkling2Engine, prefix : Array(Int32), first_id : Int32, limit : Int32,
-                 eos_id : Int32, *, ngram : Bool) : Result
+                 eos_id : Int32, *, ngram : Bool, depth_speculation : Bool = false) : Result
+      if depth_speculation
+        raise ArgumentError.new("Inkling 2 cannot combine depth speculation and n-gram verification") if ngram
+        raise ArgumentError.new("Inkling 2 depth speculation was not enabled") unless engine.depth_speculation?
+      end
       history = NgramDraft::IndexedHistory.new(prefix, max_ngram: 8, min_ngram: 6) if ngram
       ids = [] of Int32
       blocks = 0
@@ -18,6 +22,15 @@ module ML::GGUF
       while ids.size < limit
         ids << pending
         break if pending == eos_id || ids.size == limit
+
+        # Keep space for the exact pending ID after the four evaluated rows.
+        if depth_speculation && limit - ids.size >= 4 && engine.max_seq - engine.position >= 4
+          block, accepted, pending = engine.verify_depth_block4(pending, eos_id: eos_id)
+          blocks += 1
+          accepted_rows += accepted
+          (1...accepted).each { |row| ids << block[row] }
+          next
+        end
 
         if index = history
           index.append(pending)

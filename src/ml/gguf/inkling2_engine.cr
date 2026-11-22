@@ -102,6 +102,8 @@ module ML::GGUF
     DEFAULT_PREFILL_TILE =  32
     MAX_PREFILL_TILE     = 128
 
+    private DEPTH_BLOCK_ROWS = 4
+
     alias LoopTrace = Proc(Int32, Int32, Float32, Nil)
 
     private alias CoreBank = Array(Array(Float32))
@@ -112,6 +114,7 @@ module ML::GGUF
     getter position : Int32 = 0
     getter max_seq : Int32
     getter backfilled_passes : Int64 = 0_i64
+    getter? depth_speculation : Bool
 
     @closed = false
     @failed = false
@@ -126,7 +129,11 @@ module ML::GGUF
 
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
-                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, @greedy_verifier : Bool = false)
+                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, @greedy_verifier : Bool = false,
+                   @depth_speculation : Bool = false)
+      if @greedy_verifier && @depth_speculation
+        raise ArgumentError.new("Inkling 2 cannot combine depth speculation and n-gram verification")
+      end
       if prefill_tile && auto_prefill_tile
         raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
       end
@@ -227,6 +234,68 @@ module ML::GGUF
       {% end %}
     end
 
+    # Force all inputs for parity checks, retaining only the requested prefix.
+    def decode_depth_block4(tokens : StaticArray(Int32, 4), *, commit : Int32 = 4) : StaticArray(Array(Float32), 4)
+      unless commit.in?(1..tokens.size)
+        raise ArgumentError.new("Inkling 2 depth block commit must be between 1 and #{tokens.size}")
+      end
+      evaluate_depth_block(tokens[0], candidates: tokens) { |_, rows| {rows, commit} }
+    end
+
+    # Draft after the exact pending input, then return its accepted block prefix
+    # and the next ID from the ten-pass model. EOS stays pending for the caller.
+    def verify_depth_block4(first_id : Int32, *, eos_id : Int32) : {StaticArray(Int32, 4), Int32, Int32}
+      raise ArgumentError.new("Inkling 2 depth block cannot start at EOS") if first_id == eos_id
+      evaluate_depth_block(first_id, eos_id: eos_id) do |tokens, rows|
+        accepted = 1
+        expected = self.class.greedy_token_id(rows[0])
+        while accepted < tokens.size && expected != eos_id && tokens[accepted] == expected
+          expected = self.class.greedy_token_id(rows[accepted])
+          accepted += 1
+        end
+        { {tokens, accepted, expected}, accepted }
+      end
+    end
+
+    private def evaluate_depth_block(first_id : Int32, *, candidates : StaticArray(Int32, 4)? = nil, eos_id : Int32? = nil,
+                                     & : StaticArray(Int32, 4), StaticArray(Array(Float32), 4) -> Tuple(T, Int32)) : T forall T
+      validate_active!
+      raise ArgumentError.new("Inkling 2 depth speculation was not enabled") unless @depth_speculation
+      if DEPTH_BLOCK_ROWS > @max_seq - @position
+        raise ArgumentError.new("Inkling 2 depth block exceeds the context of #{@max_seq} tokens")
+      end
+      if candidates
+        candidates.each { |token| validate_token!(token) }
+      else
+        validate_token!(first_id)
+      end
+
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        backend = @resident.not_nil!
+        tokens = candidates || StaticArray(Int32, 4).new(first_id)
+        begin
+          backend.begin_depth_block(@position)
+          tokens.size.times do |row|
+            token = tokens[row]
+            needs_candidate = candidates.nil? && row < tokens.size - 1
+            logits = backend.draft_depth_row(token, @position + row, logits: needs_candidate && token != eos_id)
+            # A speculative EOS fills the remaining slots. The target clips the
+            # retained prefix before EOS or at the first unequal candidate.
+            tokens[row + 1] = logits ? self.class.greedy_token_id(logits) : token if needs_candidate
+          end
+          result, accepted = yield tokens, backend.verify_depth_block(@position)
+          backend.finish_depth_block(@position + accepted)
+          @position += accepted
+          result
+        rescue ex
+          @failed = true
+          raise ex
+        end
+      {% else %}
+        raise ArgumentError.new("Inkling 2 depth speculation requires resident Metal")
+      {% end %}
+    end
+
     # Extend this sequence and return only its last prompt row's logits.
     def prefill(tokens : Indexable(Int32)) : Array(Float32)
       validate_active!
@@ -291,6 +360,29 @@ module ML::GGUF
       {key.dup, value.dup, position}
     end
 
+    def draft_layer_visits : Int32
+      @depth_speculation ? config.n_layer - config.core_end : 0
+    end
+
+    def draft_kv_count(visit : Int32) : Int32
+      validate_draft_visit!(visit)
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.not_nil!.draft_kv_count(visit, @position)
+      {% else %}
+        raise ArgumentError.new("Inkling 2 depth speculation requires resident Metal")
+      {% end %}
+    end
+
+    def draft_key_value_at(visit : Int32, index : Int32) : {Array(Float32), Array(Float32), Int32}
+      count = draft_kv_count(visit)
+      raise IndexError.new("Inkling 2 draft cache index out of bounds") unless 0 <= index < count
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.not_nil!.draft_key_value_at(visit, index, @position)
+      {% else %}
+        raise ArgumentError.new("Inkling 2 depth speculation requires resident Metal")
+      {% end %}
+    end
+
     def reset : Nil
       raise "Inkling 2 engine is closed" if @closed
 
@@ -338,11 +430,19 @@ module ML::GGUF
       raise IndexError.new("Inkling 2 layer visit out of bounds") unless 0 <= visit < layer_visits
     end
 
+    private def validate_draft_visit!(visit : Int32) : Nil
+      validate_active!
+      raise IndexError.new("Inkling 2 draft layer visit out of bounds") unless 0 <= visit < draft_layer_visits
+    end
+
     private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?, auto_prefill_tile : Bool)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
       loops = self.class.resolve_passes(config.passes, config.varying?, passes)
+      if @depth_speculation && (!config.varying? || loops != 10)
+        raise ArgumentError.new("Inkling 2 depth speculation requires the variable-loop research checkpoint at 10 passes")
+      end
       if threshold = @stop_delta
         raise ArgumentError.new("Adaptive depth requires TML-d24-varloop-research") unless config.varying?
         raise ArgumentError.new("Adaptive depth requires a cap of at least 3 passes") if loops < 3
@@ -358,11 +458,13 @@ module ML::GGUF
           rows = auto_prefill_tile ? MAX_PREFILL_TILE : (prefill_tile || DEFAULT_PREFILL_TILE)
           append_rows = Inkling2ResidentLinear::MAX_GROUPED_ROWS if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
-            append_prefill_rows: append_rows, rollback_rows: @greedy_verifier ? 4 : 0)
+            append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation) ? DEPTH_BLOCK_ROWS : 0,
+            depth_speculation: @depth_speculation)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
       raise ArgumentError.new("Inkling 2 greedy verification requires fixed-depth resident Metal") if @greedy_verifier
+      raise ArgumentError.new("Inkling 2 depth speculation requires fixed-depth resident Metal") if @depth_speculation
       if prefill_tile || auto_prefill_tile
         raise ArgumentError.new("Setting the Inkling 2 prefill tile requires resident Metal")
       end

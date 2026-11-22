@@ -1,6 +1,7 @@
 require "./spec_helper"
 require "../src/ml/gguf/inkling2_weights"
 require "../src/ml/gguf/inkling2_engine"
+require "../src/ml/gguf/inkling2_greedy_decode"
 
 private alias Inkling2TestValue = String | Int32 | Float32 | Bool | Array(Int32) | Array(Bool)
 private alias Inkling2TestTensor = NamedTuple(name: String, dims: Array(Int64), type_id: UInt32, offset: UInt64, bytes: Int32)
@@ -306,6 +307,35 @@ private def expect_inkling2_kv_parity(reference : ML::GGUF::Inkling2Engine,
   end
 end
 
+private def expect_inkling2_kv_bits(actual : {Array(Float32), Array(Float32), Int32},
+                                    expected : {Array(Float32), Array(Float32), Int32}) : Nil
+  key, value, position = actual
+  expected_key, expected_value, expected_position = expected
+  position.should eq(expected_position)
+  key.map(&.unsafe_as(UInt32)).should eq(expected_key.map(&.unsafe_as(UInt32)))
+  value.map(&.unsafe_as(UInt32)).should eq(expected_value.map(&.unsafe_as(UInt32)))
+end
+
+private def expect_inkling2_depth_kv(block : ML::GGUF::Inkling2Engine, serial : ML::GGUF::Inkling2Engine,
+                                     shallow : ML::GGUF::Inkling2Engine) : Nil
+  block.position.should eq(serial.position)
+  block.position.should eq(shallow.position)
+  serial.layer_visits.times do |visit|
+    block.kv_count(visit).should eq(serial.kv_count(visit))
+    serial.kv_count(visit).times do |index|
+      expect_inkling2_kv_bits(block.key_value_at(visit, index), serial.key_value_at(visit, index))
+    end
+  end
+  block.draft_layer_visits.should eq(6)
+  block.draft_layer_visits.times do |visit|
+    reference = shallow.layer_visits - block.draft_layer_visits + visit
+    block.draft_kv_count(visit).should eq(shallow.kv_count(reference))
+    shallow.kv_count(reference).times do |index|
+      expect_inkling2_kv_bits(block.draft_key_value_at(visit, index), shallow.key_value_at(reference, index))
+    end
+  end
+end
+
 describe ML::GGUF::Inkling2Engine do
   it "rejects invalid prefill before changing the causal sequence" do
     path = File.tempname("inkling2-prefill", ".gguf")
@@ -324,6 +354,12 @@ describe ML::GGUF::Inkling2Engine do
       end
       expect_raises(ArgumentError, /greedy verification requires fixed-depth resident Metal/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, greedy_verifier: true)
+      end
+      expect_raises(ArgumentError, /depth speculation requires.*research/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, depth_speculation: true)
+      end
+      expect_raises(ArgumentError, /cannot combine/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, greedy_verifier: true, depth_speculation: true)
       end
       expect_raises(ArgumentError, /cannot combine/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64, auto_prefill_tile: true)
@@ -434,6 +470,79 @@ describe ML::GGUF::Inkling2Engine do
         ensure
           serial.close
           block.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
+    it "resumes pass four with bitwise parity and rewinds both epilogues across the KV ring" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-depth-block", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 24, n_embd: 2304, expert_dim: 32,
+        core_start: 6, core_end: 18, res_block_size: 6, varying: true, sliding_window: 64,
+        sliding_pattern: Array(Bool).new(24) { |layer| layer % 3 != 1 },
+        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+      begin
+        prefix = Array(Int32).new(66) { |i| (i * 5 + i // 7) % 7 }
+        inputs = StaticArray[2, 4, 1, 6]
+        serial = ML::GGUF::Inkling2Engine.new(path, 80, metal: true, passes: 10, prefill_tile: 64)
+        shallow = ML::GGUF::Inkling2Engine.new(path, 80, metal: true, passes: 3, prefill_tile: 64)
+        block = ML::GGUF::Inkling2Engine.new(path, 80, metal: true, passes: 10, prefill_tile: 64,
+          depth_speculation: true)
+        begin
+          scores = serial.prefill(prefix).map(&.unsafe_as(UInt32))
+          expected = inputs.map { |id| serial.forward(id).not_nil!.map(&.unsafe_as(UInt32)) }
+          serial.reset
+          expect_raises(ArgumentError, /commit/) { block.decode_depth_block4(inputs, commit: 0) }
+          expect_raises(ArgumentError, /vocabulary/) { block.decode_depth_block4(StaticArray[2, 4, 7, 6]) }
+          block.position.should eq(0)
+
+          (1..4).each do |keep|
+            block.prefill(prefix).map(&.unsafe_as(UInt32)).should eq(scores)
+            serial.prefill(prefix)
+            shallow.prefill(prefix)
+            block.decode_depth_block4(inputs, commit: keep).map { |row| row.map(&.unsafe_as(UInt32)) }.should eq(expected)
+            keep.times do |row|
+              serial.forward(inputs[row], logits: false)
+              shallow.forward(inputs[row], logits: false)
+            end
+            expect_inkling2_depth_kv(block, serial, shallow)
+
+            # A scalar correction then another resumed block exercise the
+            # convolution frontier and overwrite the discarded rows.
+            expected_next = serial.forward(3).not_nil!.map(&.unsafe_as(UInt32))
+            block.forward(3).not_nil!.map(&.unsafe_as(UInt32)).should eq(expected_next)
+            shallow.forward(3, logits: false)
+            followup = StaticArray[5, 0, 3, 1]
+            expected_followup = followup.map do |id|
+              shallow.forward(id, logits: false)
+              serial.forward(id).not_nil!.map(&.unsafe_as(UInt32))
+            end
+            block.decode_depth_block4(followup).map { |row| row.map(&.unsafe_as(UInt32)) }.should eq(expected_followup)
+            expect_inkling2_depth_kv(block, serial, shallow)
+
+            serial.reset
+            shallow.reset
+            block.reset
+          end
+
+          # Use the serial next ID as EOS to force a stop within the verifier.
+          first = ML::GGUF::Inkling2Engine.greedy_token_id(serial.prefill(prefix))
+          eos = ML::GGUF::Inkling2Engine.greedy_token_id(serial.forward(first).not_nil!)
+          block.prefill(prefix)
+          first.should_not eq(eos)
+          result = ML::GGUF::Inkling2GreedyDecode.generate(block, prefix, first, 5, eos,
+            ngram: false, depth_speculation: true)
+          result.ids.should eq([first, eos])
+          result.blocks.should eq(1)
+          result.accepted_rows.should eq(1)
+          block.position.should eq(serial.position)
+        ensure
+          block.close
+          shallow.close
+          serial.close
         end
       ensure
         File.delete?(path)
