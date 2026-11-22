@@ -202,6 +202,8 @@ module ML::GGUF
         v_taps : Inkling2View,
         dynamic_k : Inkling2View? = nil,
         dynamic_v : Inkling2View? = nil,
+        *,
+        decode_block : Bool = false,
       ) : Inkling2View
         ensure_open!
         validate_tile!(start, rows)
@@ -242,8 +244,10 @@ module ML::GGUF
         encode_prepare_kv(encoder, key, value, rows)
 
         attended = scratch.take(checked_elements(rows, q_width, "attention output"))
+        # Keep this before the cache commit below: later rows in the block read
+        # earlier block-local K/V from the tile until all queries are done.
         encode_attention(encoder, scratch, q, key, value, q_rel, gate, sink, relative_bias, attended,
-          start, rows, relative_extent)
+          start, rows, relative_extent, decode_block)
         encode_cache_commit(encoder, key, value, start, rows)
         @last_end_position = start + rows
         attended
@@ -404,38 +408,114 @@ module ML::GGUF
         start : Int32,
         rows : Int32,
         relative_extent : Int32,
+        decode_block : Bool,
       ) : Nil
-        key_cache = @k_cache.not_nil!
-        value_cache = @v_cache.not_nil!
         key_count = @sliding ? Math.min(start + 1, @config.sliding_window) : start + 1
-        if rows == 1 && key_count > SPLIT_KEY_THRESHOLD
-          partial_width = checked_elements(SPLIT_KEY_PARTITIONS, @config.head_dim + 2, "split attention partition")
-          partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
-          partial_count = checked_elements(rows, partial_width, "split attention output")
-          partials = scratch.take(partial_count)
-          encoder.set_pipeline(pipeline("inkling2_resident_attention_split"))
-          bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
-            start, rows, relative_extent)
-          encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
-          encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
-          encoder.dispatch({32 * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {32, 1, 1})
-
-          encoder.set_pipeline(pipeline("inkling2_resident_attention_combine"))
-          encoder.set_buffer(partials.buffer, 0, offset: partials.offset)
-          encoder.set_buffer(gate.buffer, 1, offset: gate.offset)
-          encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
-          encoder.set_value(rows.to_u32, 3)
-          encoder.set_value(@config.n_head.to_u32, 4)
-          encoder.set_value(@config.head_dim.to_u32, 5)
-          encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 6)
-          encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
-        else
-          encoder.set_pipeline(pipeline("inkling2_resident_attention"))
-          bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
-            start, rows, relative_extent)
-          encoder.set_buffer(output.buffer, 9, ML::Metal::BufferAccess::Write, offset: output.offset)
-          encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
+        split_begin = if decode_block
+                        first_split_row(start, rows)
+                      elsif rows == 1 && key_count > SPLIT_KEY_THRESHOLD
+                        0
+                      else
+                        rows
+                      end
+        regular_rows = split_begin
+        if regular_rows > 0
+          encode_attention_regular(encoder, q, k, v, q_rel, gate, sink, relative_bias,
+            output, start, regular_rows, relative_extent)
         end
+
+        split_rows = rows - split_begin
+        if split_rows > 0
+          row_offset = split_begin
+          q_width = @config.n_head * @config.head_dim
+          relative_width = @config.n_head * @config.rel_dim
+          split_q = attention_row_view(q, row_offset, q_width)
+          split_q_rel = attention_row_view(q_rel, row_offset, relative_width)
+          split_gate = attention_row_view(gate, row_offset, q_width)
+          split_sink = attention_row_view(sink, row_offset, @config.n_head)
+          split_output = attention_row_view(output, row_offset, q_width)
+          # Preserve the original tile origin for K/V lookup. The query offset
+          # advances the suffix while keeping prior block rows visible in-tile.
+          encode_attention_split(encoder, scratch, split_q, k, v, split_q_rel,
+            split_gate, split_sink, relative_bias, split_output, start, split_rows,
+            row_offset, relative_extent)
+        end
+      end
+
+      # A decode block can straddle the 64-visible-key boundary. Find its
+      # first row that should use split-K; rows before it retain the exact
+      # one-token reduction path used by serial decode.
+      private def first_split_row(start : Int32, rows : Int32) : Int32
+        rows.times do |row|
+          key_count = start + row + 1
+          key_count = Math.min(key_count, @config.sliding_window) if @sliding
+          return row if key_count > SPLIT_KEY_THRESHOLD
+        end
+        rows
+      end
+
+      private def attention_row_view(view : Inkling2View, row : Int32, width : Int32) : Inkling2View
+        view.slice(checked_elements(row, width, "attention row offset"))
+      end
+
+      private def encode_attention_regular(
+        encoder : ML::Metal::ComputeEncoder,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        rows : Int32,
+        relative_extent : Int32,
+      ) : Nil
+        encoder.set_pipeline(pipeline("inkling2_resident_attention"))
+        bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
+          start, rows, relative_extent, 0)
+        encoder.set_buffer(output.buffer, 9, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
+      end
+
+      private def encode_attention_split(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        rows : Int32,
+        query_row_offset : Int32,
+        relative_extent : Int32,
+      ) : Nil
+        partial_width = checked_elements(SPLIT_KEY_PARTITIONS, @config.head_dim + 2, "split attention partition")
+        partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
+        partial_count = checked_elements(rows, partial_width, "split attention output")
+        partials = scratch.take(partial_count)
+        encoder.set_pipeline(pipeline("inkling2_resident_attention_split"))
+        bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
+          start, rows, relative_extent, query_row_offset)
+        encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
+        encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
+        encoder.set_value(query_row_offset.to_u32, 22)
+        encoder.dispatch({32 * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {32, 1, 1})
+
+        encoder.set_pipeline(pipeline("inkling2_resident_attention_combine"))
+        encoder.set_buffer(partials.buffer, 0, offset: partials.offset)
+        encoder.set_buffer(gate.buffer, 1, offset: gate.offset)
+        encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_value(rows.to_u32, 3)
+        encoder.set_value(@config.n_head.to_u32, 4)
+        encoder.set_value(@config.head_dim.to_u32, 5)
+        encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 6)
+        encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
       end
 
       private def bind_attention_inputs(
@@ -450,6 +530,7 @@ module ML::GGUF
         start : Int32,
         rows : Int32,
         relative_extent : Int32,
+        query_row_offset : Int32,
       ) : Nil
         key_cache = @k_cache.not_nil!
         value_cache = @v_cache.not_nil!
@@ -473,6 +554,7 @@ module ML::GGUF
         encoder.set_value(relative_extent.to_u32, 18)
         encoder.set_value(@config.sliding_window.to_u32, 19)
         encoder.set_value(@sliding ? 1_u32 : 0_u32, 20)
+        encoder.set_value(query_row_offset.to_u32, 21)
       end
 
       private def encode_cache_commit(

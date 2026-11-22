@@ -22,6 +22,7 @@ module ML::GGUF
       private MAX_ROWS_PER_GRID = 4_096_i32
       private MAX_LINEAR_ELEMENTS_PER_GRID = 4_194_304_i32
       private BATCH_TILE = 4_i32
+      private MAX_DECODE_BLOCK_ROWS = 4_i32
       {% if flag?(:aarch64) %}
         private Q8_MATRIX_TILE = 32_i32
         private Q8_MATRIX_MIN_ROWS = 16_i32
@@ -29,6 +30,7 @@ module ML::GGUF
       {% end %}
 
       private GROUPED_EXPERT_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe_grouped.metal") }}
+      private DECODE_EXPERT_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe_decode.metal") }}
       private EXPERT_TILE_ROUTES = 16_i32
       private EXPERT_TILE_OUTPUTS = 64_i32
 
@@ -95,11 +97,17 @@ module ML::GGUF
       end
 
       # Encode a row-major F32 activation matrix `[rows, in_dim]` into an
-      # output matrix `[rows, out_dim]`. This method never submits or waits.
+      # output matrix `[rows, out_dim]`. `decode_block` admits one to four rows
+      # and keeps the exact low-row SIMD matvec order while sharing each row's
+      # weights across the block. This method never submits or waits.
       def project(encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
-                  input : Inkling2View, output : Inkling2View, rows : Int32) : Nil
+                  input : Inkling2View, output : Inkling2View, rows : Int32,
+                  *, decode_block : Bool = false) : Nil
         ensure_open!
         raise ArgumentError.new("Inkling 2 resident projection has no rows") unless rows > 0
+        if decode_block && rows > MAX_DECODE_BLOCK_ROWS
+          raise ArgumentError.new("Inkling 2 resident decode projection supports at most four rows")
+        end
         raise ArgumentError.new("Unsupported Inkling 2 resident projection #{weight.type}") unless self.class.projection_supported?(weight)
         ensure_view!(input, checked_bytes(rows, weight.in_dim, "projection input"))
         ensure_view!(output, checked_bytes(rows, weight.out_dim, "projection output"))
@@ -120,9 +128,13 @@ module ML::GGUF
       # live in the caller's resident scratch arena until its rewind.
       def moe(encoder : ML::Metal::ComputeEncoder, scratch : Inkling2ResidentScratch,
               layer : Inkling2LayerWeights, config : Inkling2Config,
-              input : Inkling2View, bias : Inkling2View?, rows : Int32) : Inkling2View
+              input : Inkling2View, bias : Inkling2View?, rows : Int32,
+              *, decode_block : Bool = false) : Inkling2View
         ensure_open!
         raise ArgumentError.new("Inkling 2 resident MoE has no rows") unless rows > 0
+        if decode_block && rows > MAX_DECODE_BLOCK_ROWS
+          raise ArgumentError.new("Inkling 2 resident decode MoE supports at most four rows")
+        end
         raise ArgumentError.new("Unsupported Inkling 2 resident MoE weights or dimensions") unless self.class.moe_supported?(layer, config)
         ensure_view!(input, checked_bytes(rows, config.n_embd, "MoE input"))
         if router_bias = bias
@@ -140,13 +152,22 @@ module ML::GGUF
         down = scratch.take(checked_elements(routed_rows.to_i32, config.n_embd, "expert down"))
         output = scratch.take(checked_elements(rows, config.n_embd, "MoE output"))
 
-        project(encoder, layer.router, input, logits, rows)
+        project(encoder, layer.router, input, logits, rows, decode_block: decode_block)
         encode_route(encoder, logits, bias || logits, bias != nil, ids, routing_weights,
           config.n_expert, config.n_expert_used, rows, config.expert_scale)
-        grouping = if grouped_experts?(rows, config.n_expert)
+        # The router consumes a selected expert before selecting the next
+        # rank, so a four-row block contributes at most four routes per expert.
+        # Keep the bucket kernel's <=256-expert threadgroup bound; wider
+        # routers fall back to the exact ungrouped matvec path.
+        grouping = if (decode_block && config.n_expert <= 256) || grouped_experts?(rows, config.n_expert)
                      group_expert_routes(encoder, scratch, ids, config.n_expert, rows, routed_rows.to_i32)
                    end
-        if grouping
+        if decode_block && grouping
+          gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
+          encode_grouped_experts_decode(encoder, layer.gate_up, input, gate_up, grouping, config.n_expert_used)
+          encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
+            config.situ_beta, config.situ_linear_beta)
+        elsif grouping
           encode_grouped_experts(encoder, layer.gate_up, input, gated, grouping, config.n_expert_used,
             situ: {config.situ_beta, config.situ_linear_beta})
         else
@@ -156,8 +177,12 @@ module ML::GGUF
           encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
             config.situ_beta, config.situ_linear_beta)
         end
-        encode_experts(encoder, layer.down, gated, ids, down,
-          config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: true)
+        if decode_block && grouping
+          encode_grouped_experts_decode(encoder, layer.down, gated, down, grouping, 1_i32)
+        else
+          encode_experts(encoder, layer.down, gated, ids, down,
+            config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: true)
+        end
         encode_combine(encoder, down, routing_weights, output,
           config.n_embd, config.n_expert_used, rows)
         output
@@ -324,6 +349,30 @@ module ML::GGUF
         end
         output_tiles = (weight.out_dim - 1) // EXPERT_TILE_OUTPUTS + 1
         encoder.dispatch_threadgroups({output_tiles, grouping.max_tiles, 1}, {128, 1, 1})
+      end
+
+      # Exact low-row grouped matvec for decode blocks. Each expert's selected
+      # routes stay independent, but share the packed weight/codebook loads;
+      # output scatter uses original flattened route indices to preserve top-k
+      # rank order for the later combine.
+      private def encode_grouped_experts_decode(encoder : ML::Metal::ComputeEncoder,
+                                                weight : Inkling2ExpertWeights,
+                                                input : Inkling2View, output : Inkling2View,
+                                                grouping : ExpertGrouping,
+                                                input_route_divisor : Int32) : Nil
+        name = weight.type.iq4_nl? ? "inkling2_resident_moe_decode_grouped_iq4_nl" : "inkling2_resident_moe_decode_grouped_q8_0"
+        threads = weight.type.iq4_nl? ? 64 : 128
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, DECODE_EXPERT_SOURCE))
+        encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(grouping.routes.buffer, 2, offset: grouping.routes.offset)
+        encoder.set_buffer(grouping.tiles.buffer, 3, offset: grouping.tiles.offset)
+        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_value(weight.in_dim.to_u32, 5)
+        encoder.set_value(weight.out_dim.to_u32, 6)
+        encoder.set_value(weight.expert_bytes.to_u32, 7)
+        encoder.set_value(input_route_divisor.to_u32, 8)
+        encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, grouping.max_tiles, 1}, {threads, 1, 1})
       end
 
       private def encode_situ(encoder : ML::Metal::ComputeEncoder,

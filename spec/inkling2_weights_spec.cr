@@ -343,6 +343,50 @@ describe ML::GGUF::Inkling2Engine do
   end
 
   {% if flag?(:darwin) && !flag?(:cpu_only) %}
+    it "decodes four known tokens with the serial Metal logits and retained KV bits" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-decode-block", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 6, n_embd: 32, expert_dim: 32, core_end: 4,
+        sliding_window: 64, n_expert_used: 2, sliding_pattern: [true, false, true, false, false, true],
+        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+      begin
+        prefix = Array(Int32).new(62) { |i| (i * 5 + i // 7) % 7 }
+        inputs = StaticArray[2, 4, 1, 6]
+        serial = ML::GGUF::Inkling2Engine.new(path, 70, metal: true, prefill_tile: 1)
+        block = ML::GGUF::Inkling2Engine.new(path, 70, metal: true, prefill_tile: 1)
+        begin
+          serial.prefill(prefix)
+          block.prefill(prefix)
+          expect_raises(ArgumentError, /outside the Inkling 2 vocabulary/) do
+            block.decode_block4(StaticArray[2, 4, 7, 6])
+          end
+          block.position.should eq(prefix.size)
+          expected = inputs.map { |id| serial.forward(id).not_nil!.map(&.unsafe_as(UInt32)) }
+          block.decode_block4(inputs).map { |row| row.map(&.unsafe_as(UInt32)) }.should eq(expected)
+          block.position.should eq(serial.position)
+          block.forward(3).not_nil!.map(&.unsafe_as(UInt32)).should eq(serial.forward(3).not_nil!.map(&.unsafe_as(UInt32)))
+          expect_raises(ArgumentError, /context/) { block.decode_block4(inputs) }
+          block.position.should eq(serial.position)
+          block.layer_visits.times do |visit|
+            block.kv_count(visit).should eq(serial.kv_count(visit))
+            block.kv_count(visit).times do |index|
+              keys, values, pos = block.key_value_at(visit, index)
+              expected_keys, expected_values, expected_pos = serial.key_value_at(visit, index)
+              pos.should eq(expected_pos)
+              keys.map(&.unsafe_as(UInt32)).should eq(expected_keys.map(&.unsafe_as(UInt32)))
+              values.map(&.unsafe_as(UInt32)).should eq(expected_values.map(&.unsafe_as(UInt32)))
+            end
+          end
+        ensure
+          serial.close
+          block.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
     it "matches staged logits and KV across a prefill tile that wraps the window" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

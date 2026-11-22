@@ -85,12 +85,52 @@ For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
 partials before applying the output gate.
 
+The fixed-depth resident Metal engine also exposes
+`decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.
+It evaluates all four input IDs in one command, returns the unpadded
+next-token logits after each input, and advances the sequence by four.
+Each row uses the decode reduction order. Tokens routed to the same
+expert share packed weight loads. Compare the returned logits and
+retained F32 KV with four `forward` calls from the same prefix to test
+the block path independently of prefill arithmetic.
+
 The staged backend remains available for adaptive depth, traces, and
 checkpoint layouts outside the resident kernel bounds. Backend selection
 occurs before the sequence starts. Validate resident execution against
 the staged backend with the same forced IDs, including a cache wrap and
 a continuation after prefill. The real-checkpoint gate compares every
 logit and each visit's retained KV with 3 and 10 passes.
+
+## Four-token Metal verification
+
+The verifier takes three-line token fixtures. The header holds
+`prompt_tokens vocab_size decode_steps` in that order. The next line holds
+the prompt IDs, and the last line holds the forced inputs followed by the
+next known token. Use the same prefix and forced inputs for both decode
+paths.
+
+```sh
+make build/inkling2_verify_bench
+./build/inkling2_verify_bench --model /path/to/research-IQ4_NL.gguf \
+  --case /path/to/lookup-3.txt --case /path/to/lookup-10.txt \
+  --mode verify --scenario all
+./build/inkling2_verify_bench --model /path/to/research-IQ4_NL.gguf \
+  --case /path/to/lookup-3.txt --mode bench --pairs 2
+```
+
+The default corpus scenario uses the fixture as supplied. The other two
+scenarios cross the 64-key attention split and the 1,024-token sliding
+window. The verifier compares raw float32 logit bytes at every output row
+and after one follow-up scalar step. It checks the position and raw K/V
+bytes at every layer visit after prefill, the first block, and the final
+block. A differing byte makes the command fail.
+
+Timing uses fixed prefill tiles of up to 128 tokens and resets to the same
+prefix before each lane. Each timed lane copies all logit rows. Warmup and
+prefill are outside the timer. The JSONL reports elapsed time and Metal
+submissions for both lane orders. This timing measures blocks with four
+known inputs. Speculative generation also depends on how many rows it
+can commit per block.
 
 ## Checkpoints used for verification
 

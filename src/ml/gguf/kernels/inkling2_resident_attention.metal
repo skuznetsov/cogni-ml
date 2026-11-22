@@ -241,6 +241,7 @@ kernel void inkling2_resident_attention(
     constant uint& relative_extent      [[buffer(18)]],
     constant uint& sliding_window       [[buffer(19)]],
     constant uint& sliding              [[buffer(20)]],
+    constant uint& query_row_offset     [[buffer(21)]],
     ushort lane [[thread_index_in_simdgroup]],
     uint3 tgpig [[threadgroup_position_in_grid]])
 {
@@ -248,7 +249,7 @@ kernel void inkling2_resident_attention(
     const uint head = tgpig.z;
     if (row >= rows || head >= n_head || head_dim > 256) return;
 
-    const uint position = start + row;
+    const uint position = start + query_row_offset + row;
     const uint kv_head = head / (n_head / n_head_kv);
     const size_t q_base = (size_t)row * (size_t)n_head * (size_t)head_dim + (size_t)head * (size_t)head_dim;
     const size_t relative_base = (size_t)row * (size_t)n_head * (size_t)relative_dim + (size_t)head * (size_t)relative_dim;
@@ -344,6 +345,7 @@ kernel void inkling2_resident_attention_split(
     constant uint& sliding_window       [[buffer(19)]],
     constant uint& sliding              [[buffer(20)]],
     constant uint& partitions           [[buffer(21)]],
+    constant uint& query_row_offset     [[buffer(22)]],
     ushort lane [[thread_index_in_simdgroup]],
     uint3 tgpig [[threadgroup_position_in_grid]])
 {
@@ -352,7 +354,7 @@ kernel void inkling2_resident_attention_split(
     const uint head = tgpig.z;
     if (partition >= partitions || row >= rows || head >= n_head || head_dim > 256) return;
 
-    const uint position = start + row;
+    const uint position = start + query_row_offset + row;
     const uint kv_head = head / (n_head / n_head_kv);
     const size_t q_base = (size_t)row * (size_t)n_head * (size_t)head_dim + (size_t)head * (size_t)head_dim;
     const size_t relative_base = (size_t)row * (size_t)n_head * (size_t)relative_dim + (size_t)head * (size_t)relative_dim;

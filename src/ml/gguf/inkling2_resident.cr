@@ -3,8 +3,8 @@ require "./inkling2_resident_linear"
 require "./inkling2_resident_math"
 
 module ML::GGUF
-  # One command per decode token or causal prefill tile. Only IDs and the
-  # requested final logits cross the CPU/GPU boundary.
+  # One command per decode token, known continuation block, or causal prefill
+  # tile. Only IDs and the requested logits cross the CPU/GPU boundary.
   class Inkling2Resident
     private DEPTH_EPS = 1e-6_f32
     private alias MathOps = Inkling2ResidentMath
@@ -24,12 +24,14 @@ module ML::GGUF
       getter rows : Int32
       getter width : Int32
       getter elements : Int32
+      getter? decode_block : Bool
       getter current : Inkling2View
       getter next_state : Inkling2View
       getter blocks : Inkling2View
       property block_count : Int32 = 0
 
-      def initialize(@encoder, @scratch : Inkling2ResidentScratch, @start, @rows, @width, block_slots : Int32)
+      def initialize(@encoder, @scratch : Inkling2ResidentScratch, @start, @rows, @width, block_slots : Int32,
+                     @decode_block : Bool)
         @elements = @rows * @width
         @current = hidden
         @next_state = hidden
@@ -52,6 +54,7 @@ module ML::GGUF
     @constants : ML::MetalBuffer
     @ids : ML::MetalBuffer
     @logits : ML::MetalBuffer
+    @block_logits : ML::MetalBuffer? = nil
     @scratch = Inkling2ResidentScratch.new
     @visits = [] of Visit
     @float_offsets = {} of UInt64 => Int64
@@ -95,6 +98,20 @@ module ML::GGUF
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
       @ids.contents.as(Int32*).value = token
       evaluate(position, 1, with_logits)
+    end
+
+    def decode_block4(tokens : StaticArray(Int32, 4), position : Int32) : StaticArray(Array(Float32), 4)
+      ids = @ids.contents.as(Int32*)
+      tokens.each_with_index { |token, row| ids[row] = token }
+      vocab = @config.vocab_size
+      logits = @block_logits ||= allocate_shared(tokens.size.to_i64 * vocab * sizeof(Float32))
+      submit_tile(position, tokens.size, logits, decode_block: true)
+      data = logits.contents.as(Float32*)
+      StaticArray(Array(Float32), 4).new do |row|
+        result = Array(Float32).new(vocab, 0_f32)
+        result.to_unsafe.copy_from(data + row * vocab, vocab)
+        result
+      end
     end
 
     def prefill(tokens : Indexable(Int32), position : Int32) : Array(Float32)
@@ -149,7 +166,7 @@ module ML::GGUF
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size),
         )
       end
-      id_rows = @append_prefill_rows || @prefill_rows
+      id_rows = Math.max(4, @append_prefill_rows || @prefill_rows)
       {upload_constants, allocate_shared(id_rows.to_i64 * sizeof(Int32)),
        allocate_shared(@config.vocab_size.to_i64 * sizeof(Float32))}
     rescue ex
@@ -194,12 +211,17 @@ module ML::GGUF
     end
 
     private def evaluate(position : Int32, rows : Int32, with_logits : Bool) : Array(Float32)?
+      submit_tile(position, rows, with_logits ? @logits : nil)
+      @logits.read(@config.vocab_size) if with_logits
+    end
+
+    private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *, decode_block : Bool = false) : Nil
       @scratch.reset
       command = ML::Metal::CommandBuffer.new
       begin
         encoder = ML::Metal::ComputeEncoder.new(command)
         begin
-          encode_tile(encoder, position, rows, with_logits)
+          encode_tile(encoder, position, rows, logits, decode_block)
         ensure
           encoder.end_encoding
         end
@@ -208,11 +230,11 @@ module ML::GGUF
         command.discard unless command.committed?
         @visits.each { |visit| visit.attention.finish }
       end
-      @logits.read(@config.vocab_size) if with_logits
     end
 
-    private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32, with_logits : Bool) : Nil
-      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots)
+    private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32,
+                            logits : ML::MetalBuffer?, decode_block : Bool) : Nil
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
       prelude = tile.hidden if @passes > 1
       banks = StaticArray[@scratch.take(@core_blocks * tile.elements), @scratch.take(@core_blocks * tile.elements)] if @passes > 1
 
@@ -262,14 +284,23 @@ module ML::GGUF
         encode_layer(physical, visit, tile, nil)
         visit += 1
       end
-      if with_logits
-        mixed = mix(tile, tile.current, @weights.output_res_query, 1)
-        last = mixed.slice((rows - 1) * tile.width)
-        normalized = @scratch.take(tile.width)
-        MathOps.rms(encoder, last, normalized, constant(@weights.output_norm), tile.width, 1, @config.rms_eps)
-        logits = @scratch.take(@weights.output.out_dim)
-        @linear.project(encoder, @weights.output, normalized, logits, 1)
-        MathOps.softcap(encoder, logits, Inkling2View.new(@logits), @config.logit_softcap, @config.vocab_size)
+      encode_logits(tile, logits) if logits
+    end
+
+    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer) : Nil
+      encoder = tile.encoder
+      rows = tile.decode_block? ? tile.rows : 1
+      mixed = mix(tile, tile.current, @weights.output_res_query, 1)
+      selected = mixed.slice((tile.rows - rows) * tile.width)
+      normalized = @scratch.take(rows * tile.width)
+      MathOps.rms(encoder, selected, normalized, constant(@weights.output_norm), tile.width, rows, @config.rms_eps)
+      padded_vocab = @weights.output.out_dim
+      vocab = @config.vocab_size
+      logits = @scratch.take(rows * padded_vocab)
+      @linear.project(encoder, @weights.output, normalized, logits, rows, decode_block: tile.decode_block?)
+      output = Inkling2View.new(buffer)
+      rows.times do |row|
+        MathOps.softcap(encoder, logits.slice(row * padded_vocab), output.slice(row * vocab), @config.logit_softcap, vocab)
       end
     end
 
@@ -325,7 +356,7 @@ module ML::GGUF
       end
       ffn_in = normalize(tile, ffn, layer.ffn_norm)
       bias = layer.router_bias.try { |array| constant(array) }
-      routed = @linear.moe(encoder, @scratch, layer, @config, ffn_in, bias, tile.rows)
+      routed = @linear.moe(encoder, @scratch, layer, @config, ffn_in, bias, tile.rows, decode_block: tile.decode_block?)
       convolved = visit.ffn_conv.encode(encoder, @scratch, tile.start, tile.rows, routed, constant(layer.ffn_post_conv))
       MathOps.add(encoder, residual, convolved, tile.next_state, tile.elements)
       tile.swap
@@ -344,7 +375,7 @@ module ML::GGUF
       dynamic_v = weight.v_conv_proj.try { |matrix| project(tile, matrix, v_in) }
       context = visit.attention.encode(tile.encoder, @scratch, tile.start, tile.rows, q, k, v, q_rel, gate, sink,
         constant(weight.q_clip), constant(weight.rel_clip), constant(weight.rel_bias),
-        constant(weight.k_conv), constant(weight.v_conv), dynamic_k, dynamic_v)
+        constant(weight.k_conv), constant(weight.v_conv), dynamic_k, dynamic_v, decode_block: tile.decode_block?)
       projected = project(tile, weight.output, context)
       visit.post_conv.encode(tile.encoder, @scratch, tile.start, tile.rows, projected, constant(weight.post_conv))
     end
@@ -368,7 +399,7 @@ module ML::GGUF
 
     private def project(tile : Tile, weight : QuantWeight, input : Inkling2View) : Inkling2View
       result = @scratch.take(weight.out_dim * tile.rows)
-      @linear.project(tile.encoder, weight, input, result, tile.rows)
+      @linear.project(tile.encoder, weight, input, result, tile.rows, decode_block: tile.decode_block?)
       result
     end
 
