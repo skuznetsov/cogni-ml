@@ -267,7 +267,7 @@ module ML::GGUF
 
       private def grouped_experts?(rows : Int32, n_experts : Int32) : Bool
         {% if flag?(:aarch64) %}
-          16 <= rows <= 32 && n_experts <= 256
+          16 <= rows <= 128 && n_experts <= 256
         {% else %}
           false
         {% end %}

@@ -4,8 +4,8 @@ The native Crystal engine supports the [Inkling 2 Mini IQ4_NL GGUF](https://hugg
 and the [TML-d24-varloop-research IQ4_NL GGUF](https://huggingface.co/ggml-org/TML-d24-varloop-research-GGUF).
 It runs one text sequence at a time. The fixed-depth Metal path reads
 quantized weights from the mapped GGUF and keeps intermediate activations,
-attention, convolutions, loop controllers, and MoE on the device. Prefill
-runs up to 32 prompt tokens together per layer visit. The same engine
+attention, convolutions, loop controllers, and MoE on the device. By default,
+prefill runs up to 32 prompt tokens together per layer visit. The same engine
 reuses its GPU workspace across tiles, generated tokens, and core passes.
 
 ```sh
@@ -60,6 +60,15 @@ bounded tile of consecutive tokens together at every layer visit and reads
 logits for the last token. The same per-visit KV and convolution histories
 continue into decode. Each new query reads old history and the causal part
 of its tile before the tile can overwrite the sliding cache.
+
+Use `--prefill-tile 64` or `--prefill-tile 128` to test wider tiles with the
+same float32 staging as the 32-token default. This option accepts 1 through
+128 rows and requires the resident Metal backend. Tiles from 16 through
+128 rows use grouped expert GEMM on Apple Silicon when at most 256 experts
+are present. The tile height is a runtime dispatch parameter. The Metal
+pipeline cache keys compiled kernels by function name. Default tile promotion
+requires warmed wall time measurements under the same conditions at 3 and
+10 passes.
 
 For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
