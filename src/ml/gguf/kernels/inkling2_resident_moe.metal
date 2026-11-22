@@ -263,6 +263,12 @@ kernel void inkling2_resident_moe_matvec_q8_0(
     if (tiisg == 0) output[(size_t)route * out_dim + row_id] = total;
 }
 
+inline float inkling2_resident_situ(float gate, float up, float beta, float linear_beta) {
+    const float bounded_gate = beta * tanh(gate / beta);
+    const float bounded_up = linear_beta * tanh(up / linear_beta);
+    return bounded_gate * inkling2_resident_sigmoid(gate) * bounded_up;
+}
+
 kernel void inkling2_resident_moe_situ(
     device const float* gate_up [[buffer(0)]],
     device       float* gated   [[buffer(1)]],
@@ -281,9 +287,7 @@ kernel void inkling2_resident_moe_situ(
     const size_t row_base = (size_t)route * (size_t)(2 * width);
     const float gate = gate_up[row_base + column];
     const float up = gate_up[row_base + width + column];
-    const float bounded_gate = beta * tanh(gate / beta);
-    const float bounded_up = linear_beta * tanh(up / linear_beta);
-    gated[element] = bounded_gate * inkling2_resident_sigmoid(gate) * bounded_up;
+    gated[element] = inkling2_resident_situ(gate, up, beta, linear_beta);
 }
 
 kernel void inkling2_resident_moe_combine(

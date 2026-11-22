@@ -5,6 +5,8 @@ require "../src/ml/gguf/inkling2_engine"
   module Inkling2ResidentLinearSpecSupport
     extend self
 
+    EXPERT_WIDTH = 96
+
     record Model, path : String, offsets : Hash(String, Int64)
 
     def f32_bytes(values : Array(Float32)) : Bytes
@@ -37,9 +39,9 @@ require "../src/ml/gguf/inkling2_engine"
       out_dim.times do |row|
         blocks.times do |block|
           offset = (row * blocks + block) * 18
-          # IQ4_NL scale = 1.0. Low/high nibbles encode separate 16-value halves.
+          # IQ4_NL scale = 0.0625. Low/high nibbles encode separate 16-value halves.
           bytes[offset] = 0x00_u8
-          bytes[offset + 1] = 0x3C_u8
+          bytes[offset + 1] = 0x2C_u8
           16.times do |column|
             low = (expert + row * 3 + block * 5 + column) % 16
             high = (expert * 3 + row + block * 7 + column * 5) % 16
@@ -82,28 +84,28 @@ require "../src/ml/gguf/inkling2_engine"
         offsets["router"] = io.pos
         io.write(f32_bytes(router))
 
-        gate_up = Bytes.new(3 * 64 * 34, 0_u8)
+        gate_up = Bytes.new(3 * 2 * EXPERT_WIDTH * 34, 0_u8)
         3.times do |expert|
-          matrix = q8_bytes(64, 32, expert)
+          matrix = q8_bytes(2 * EXPERT_WIDTH, 32, expert)
           gate_up[expert * matrix.size, matrix.size].copy_from(matrix)
         end
         offsets["gate_up"] = io.pos
         io.write(gate_up)
 
-        down = Bytes.new(3 * 32 * 34, 0_u8)
+        down = Bytes.new(3 * EXPERT_WIDTH * 34, 0_u8)
         3.times do |expert|
-          matrix = q8_bytes(32, 32, expert + 3)
+          matrix = q8_bytes(32, EXPERT_WIDTH, expert + 3)
           down[expert * matrix.size, matrix.size].copy_from(matrix)
         end
         offsets["down"] = io.pos
         io.write(down)
 
-        iq4_gate_up = Bytes.new(3 * 64 * 18, 0_u8)
-        iq4_down = Bytes.new(3 * 32 * 18, 0_u8)
+        iq4_gate_up = Bytes.new(3 * 2 * EXPERT_WIDTH * 18, 0_u8)
+        iq4_down = Bytes.new(3 * EXPERT_WIDTH * 18, 0_u8)
         3.times do |expert|
-          matrix = iq4_bytes(64, 32, expert + 1)
+          matrix = iq4_bytes(2 * EXPERT_WIDTH, 32, expert + 1)
           iq4_gate_up[expert * matrix.size, matrix.size].copy_from(matrix)
-          matrix = iq4_bytes(32, 32, expert + 4)
+          matrix = iq4_bytes(32, EXPERT_WIDTH, expert + 4)
           iq4_down[expert * matrix.size, matrix.size].copy_from(matrix)
         end
         offsets["iq4_gate_up"] = io.pos
@@ -205,14 +207,16 @@ require "../src/ml/gguf/inkling2_engine"
           Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["router"], 3 * 32 * sizeof(Float32)),
           ML::GGUF::TensorType::F32, 3_i32, 32_i32,
         )
-        gate_up_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["gate_up"], 3 * 64 * 34)
-        down_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["down"], 3 * 32 * 34)
-        iq4_gate_up_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_gate_up"], 3 * 64 * 18)
-        iq4_down_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_down"], 3 * 32 * 18)
-        gate_up = ML::GGUF::Inkling2ExpertWeights.new(gate_up_raw, ML::GGUF::TensorType::Q8_0, 32_i32, 64_i32, 3_i32)
-        down = ML::GGUF::Inkling2ExpertWeights.new(down_raw, ML::GGUF::TensorType::Q8_0, 32_i32, 32_i32, 3_i32)
-        iq4_gate_up = ML::GGUF::Inkling2ExpertWeights.new(iq4_gate_up_raw, ML::GGUF::TensorType::IQ4_NL, 32_i32, 64_i32, 3_i32)
-        iq4_down = ML::GGUF::Inkling2ExpertWeights.new(iq4_down_raw, ML::GGUF::TensorType::IQ4_NL, 32_i32, 32_i32, 3_i32)
+        # More than one 32-feature gate/up tile, including both halves of each tile.
+        expert_width = Inkling2LinearSpecSupport::EXPERT_WIDTH
+        gate_up_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["gate_up"], 3 * 2 * expert_width * 34)
+        down_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["down"], 3 * expert_width * 34)
+        iq4_gate_up_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_gate_up"], 3 * 2 * expert_width * 18)
+        iq4_down_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_down"], 3 * expert_width * 18)
+        gate_up = ML::GGUF::Inkling2ExpertWeights.new(gate_up_raw, ML::GGUF::TensorType::Q8_0, 32_i32, 2 * expert_width, 3_i32)
+        down = ML::GGUF::Inkling2ExpertWeights.new(down_raw, ML::GGUF::TensorType::Q8_0, expert_width, 32_i32, 3_i32)
+        iq4_gate_up = ML::GGUF::Inkling2ExpertWeights.new(iq4_gate_up_raw, ML::GGUF::TensorType::IQ4_NL, 32_i32, 2 * expert_width, 3_i32)
+        iq4_down = ML::GGUF::Inkling2ExpertWeights.new(iq4_down_raw, ML::GGUF::TensorType::IQ4_NL, expert_width, 32_i32, 3_i32)
         attention = ML::GGUF::Inkling2AttentionWeights.new(
           router, router, router, router, router, router, router,
           [] of Float32, [] of Float32, [] of Float32, [] of Float32, [] of Float32, [] of Float32,
@@ -228,7 +232,7 @@ require "../src/ml/gguf/inkling2_engine"
         )
         config = ML::GGUF::Inkling2Config.new(
           1_i32, 32_i32, 2_i32, 1_i32, 2_i32, 2_i32, 2_i32, 16_i32, 4_i32, 2_i32,
-          1_f32, 1_f32, 1_f32, 1e-5_f32, 3_i32, 2_i32, 32_i32, 1.25_f32, 4_f32,
+          1_f32, 1_f32, 1_f32, 1e-5_f32, 3_i32, 2_i32, expert_width, 1.25_f32, 4_f32,
           25_f32, 1_i32, 8_i32, 8_i32, 32_i32, 0_i32, 1_i32, 3_i32, 2_i32,
           30_f32, false, [true],
         )

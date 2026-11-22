@@ -136,7 +136,6 @@ module ML::GGUF
         logits = scratch.take(checked_elements(rows, config.n_expert, "router logits"))
         ids = scratch.take(checked_elements(rows, config.n_expert_used, "selected experts"))
         routing_weights = scratch.take(checked_elements(rows, config.n_expert_used, "routing weights"))
-        gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
         gated = scratch.take(checked_elements(routed_rows.to_i32, config.expert_dim, "expert activation"))
         down = scratch.take(checked_elements(routed_rows.to_i32, config.n_embd, "expert down"))
         output = scratch.take(checked_elements(rows, config.n_embd, "MoE output"))
@@ -147,10 +146,16 @@ module ML::GGUF
         grouping = if grouped_experts?(rows, config.n_expert)
                      group_expert_routes(encoder, scratch, ids, config.n_expert, rows, routed_rows.to_i32)
                    end
-        encode_experts(encoder, layer.gate_up, input, ids, gate_up,
-          config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: false)
-        encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
-          config.situ_beta, config.situ_linear_beta)
+        if grouping
+          encode_grouped_experts(encoder, layer.gate_up, input, gated, grouping, config.n_expert_used,
+            situ: {config.situ_beta, config.situ_linear_beta})
+        else
+          gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
+          encode_experts(encoder, layer.gate_up, input, ids, gate_up,
+            config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: false)
+          encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
+            config.situ_beta, config.situ_linear_beta)
+        end
         encode_experts(encoder, layer.down, gated, ids, down,
           config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: true)
         encode_combine(encoder, down, routing_weights, output,
@@ -297,8 +302,12 @@ module ML::GGUF
 
       private def encode_grouped_experts(encoder : ML::Metal::ComputeEncoder, weight : Inkling2ExpertWeights,
                                          input : Inkling2View, output : Inkling2View, grouping : ExpertGrouping,
-                                         input_route_divisor : Int32) : Nil
-        name = weight.type.iq4_nl? ? "inkling2_resident_moe_gemm_iq4_nl" : "inkling2_resident_moe_gemm_q8_0"
+                                         input_route_divisor : Int32, *, situ : {Float32, Float32}? = nil) : Nil
+        name = if situ
+                 weight.type.iq4_nl? ? "inkling2_resident_moe_gemm_situ_iq4_nl" : "inkling2_resident_moe_gemm_situ_q8_0"
+               else
+                 weight.type.iq4_nl? ? "inkling2_resident_moe_gemm_iq4_nl" : "inkling2_resident_moe_gemm_q8_0"
+               end
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, GROUPED_EXPERT_SOURCE))
         encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
@@ -309,6 +318,10 @@ module ML::GGUF
         encoder.set_value(weight.out_dim.to_u32, 6)
         encoder.set_value(weight.expert_bytes.to_u32, 7)
         encoder.set_value(input_route_divisor.to_u32, 8)
+        if situ
+          encoder.set_value(situ[0], 9)
+          encoder.set_value(situ[1], 10)
+        end
         output_tiles = (weight.out_dim - 1) // EXPERT_TILE_OUTPUTS + 1
         encoder.dispatch_threadgroups({output_tiles, grouping.max_tiles, 1}, {128, 1, 1})
       end
