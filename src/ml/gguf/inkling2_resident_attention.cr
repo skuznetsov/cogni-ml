@@ -255,7 +255,25 @@ module ML::GGUF
       private SPLIT_SCORE_CACHE_LIMIT = 256_i32
       private SPLIT_PARALLEL_SCORE_LIMIT = 512_i32
       private SPLIT_PARALLEL_THREADS = 128_i32
+      private PREFILL_SCORE_LIMIT = 1024_i32
+      private PREFILL_THREADS = 128_i32
       MAX_HEAD_DIM = 256_i32
+
+      enum PrefillMode
+        Regular
+        Scores
+        SharedKV
+
+        def self.from_env : self
+          case ENV["INKLING2_PREFILL_ATTENTION"]?
+          when nil, "regular" then Regular
+          when "scores"       then Scores
+          when "shared_kv"    then SharedKV
+          else
+            raise ArgumentError.new("INKLING2_PREFILL_ATTENTION must be regular, scores, or shared_kv")
+          end
+        end
+      end
 
       getter sliding : Bool
       getter max_seq : Int32
@@ -276,7 +294,8 @@ module ML::GGUF
       @speculation_start_position : Int32? = nil
       @closed = false
 
-      def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32, *, @rollback_rows : Int32 = 0)
+      def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32, *,
+                     @rollback_rows : Int32 = 0, @prefill_mode : PrefillMode = PrefillMode::Regular)
         raise ArgumentError.new("Inkling 2 resident max_seq must be positive") unless @max_seq > 0
         raise ArgumentError.new("Inkling 2 resident attention rollback rows must be non-negative") if @rollback_rows < 0
         @kv_width = @config.n_head_kv * @config.head_dim
@@ -580,7 +599,7 @@ module ML::GGUF
         regular_rows = split_begin
         if regular_rows > 0
           encode_attention_regular(encoder, q, k, v, q_rel, gate, sink, relative_bias,
-            output, start, regular_rows, relative_extent)
+            output, start, regular_rows, relative_extent, prefill: !decode_block && rows > 1)
         end
 
         split_rows = rows - split_begin
@@ -630,12 +649,41 @@ module ML::GGUF
         start : Int32,
         rows : Int32,
         relative_extent : Int32,
+        *,
+        prefill : Bool,
       ) : Nil
-        encoder.set_pipeline(pipeline("inkling2_resident_attention"))
+        name = "inkling2_resident_attention"
+        threads = 32_i32
+        row_groups = rows
+        head_groups = @config.n_head
+        shared_floats = 0_i32
+        score_slots = 0_i32
+        if prefill && !@prefill_mode.regular? && @config.head_dim == 128 && @config.rel_dim == 16
+          score_slots = start + rows
+          score_slots = Math.min(score_slots, @config.sliding_window) if @sliding
+          if score_slots <= PREFILL_SCORE_LIMIT
+            if @prefill_mode.scores?
+              name = "inkling2_resident_attention_prefill_scores"
+              shared_floats = score_slots + 1
+            elsif @config.n_head == 3 * @config.n_head_kv
+              name = "inkling2_resident_attention_prefill_shared_kv"
+              row_groups = (rows + 1) // 2
+              head_groups = @config.n_head_kv
+              shared_floats = 6 * (score_slots + 1)
+            end
+          end
+        end
+
+        encoder.set_pipeline(pipeline(name))
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
           start, rows, relative_extent, 0)
         encoder.set_buffer(output.buffer, 9, ML::Metal::BufferAccess::Write, offset: output.offset)
-        encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
+        if shared_floats > 0
+          threads = PREFILL_THREADS
+          encoder.set_value(score_slots.to_u32, 22)
+          encoder.set_threadgroup_memory(((shared_floats + 3) // 4) * 16, 0)
+        end
+        encoder.dispatch({threads, row_groups, head_groups}, {threads, 1, 1})
       end
 
       private def encode_attention_split(

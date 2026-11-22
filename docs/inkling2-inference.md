@@ -85,6 +85,22 @@ For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
 partials before applying the output gate.
 
+Set `INKLING2_PREFILL_ATTENTION=scores` to cache FP32 scores during
+multirow resident prefill. Set it to `shared_kv` to share each K/V load
+across two adjacent query rows and their three query heads per KV head.
+The default `regular` mode is the reference for bitwise comparisons.
+The experimental kernels require 128 head channels, 16 relative channels,
+and at most 1,024 visible keys in every query row of the tile. The shared
+kernel also requires three query heads per KV head. Other shapes and
+decode use the existing attention dispatch.
+
+The prefill kernels keep the zero-logit sink and the reference FP32
+accumulation order. Each mode adds one pipeline and sizes its threadgroup
+score storage at dispatch. On M2 Max with the research IQ4_NL GGUF and
+128-row tiles, `scores` had the best measured 1,022-token prefill.
+`shared_kv` uses more threadgroup storage and had the best measured
+188-token prefill. Both results use three loop passes.
+
 The fixed-depth resident Metal engine also exposes
 `decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.
 It evaluates all four input IDs in one command, returns the unpadded

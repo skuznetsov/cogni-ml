@@ -136,8 +136,9 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 depth speculation requires four rollback rows") unless rollback_rows == 4
         raise ArgumentError.new("Inkling 2 depth speculation requires at least one core block") unless @core_blocks > 0
       end
+      prefill_mode = Inkling2ResidentAttention::PrefillMode.from_env
       @linear = Inkling2ResidentLinear.new(@weights.gguf)
-      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows)
+      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
     end
 
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
@@ -295,11 +296,12 @@ module ML::GGUF
       @linear.close
     end
 
-    private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32, rollback_rows : Int32)
+    private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32, rollback_rows : Int32,
+                                prefill_mode : Inkling2ResidentAttention::PrefillMode)
       physical_visits.each do |physical|
         sliding = @config.sliding?(physical)
         @visits << Visit.new(
-          Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows),
+          Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode),
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
         )
@@ -308,7 +310,7 @@ module ML::GGUF
         (@config.core_end...@config.n_layer).each do |physical|
           sliding = @config.sliding?(physical)
           @draft_epilogue_visits << Visit.new(
-            Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows),
+            Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode),
             Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
             Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
           )

@@ -7,6 +7,15 @@ require "../src/ml/gguf/inkling2_resident_attention"
 require "../src/ml/gguf/inkling2_resident_math"
 
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
+  # Keep dispatch assertions local to this GPU spec. PipelineCache has no
+  # production-facing key lookup API; checking the fresh cache proves which
+  # named pipeline the just-completed encode requested.
+  class ML::Metal::PipelineCache
+    def self.resident_spec_contains?(name : String) : Bool
+      @@cache.has_key?(name)
+    end
+  end
+
   private record ResidentProjectedRow,
     q : Array(Float32),
     k : Array(Float32),
@@ -16,6 +25,10 @@ require "../src/ml/gguf/inkling2_resident_math"
     sink : Array(Float32),
     dynamic_k : Array(Float32)?,
     dynamic_v : Array(Float32)?
+
+  private record ResidentAttentionRun,
+    output : Array(Float32),
+    snapshots : Array(Tuple(Array(Float32), Array(Float32), Int32))
 
   private def resident_test_config(
     *,
@@ -219,6 +232,50 @@ require "../src/ml/gguf/inkling2_resident_math"
     end
   end
 
+  private def resident_run_prefill_mode(
+    config : ML::GGUF::Inkling2Config,
+    weights : ML::GGUF::Inkling2AttentionWeights,
+    projected : Array(ResidentProjectedRow),
+    tiles : Array(Tuple(Int32, Int32)),
+    *,
+    sliding : Bool,
+    max_seq : Int32,
+    expected_pipeline : String,
+    rollback_rows : Int32 = 0,
+    prefill_mode : ML::GGUF::Inkling2ResidentAttention::PrefillMode? = nil,
+    snapshot_positions : Array(Int32) = [] of Int32,
+    expect_regular_fallback : Bool = false,
+  ) : ResidentAttentionRun
+    ML::Metal::PipelineCache.clear
+    attention = if mode = prefill_mode
+                  ML::GGUF::Inkling2ResidentAttention.new(config, sliding, max_seq,
+                    rollback_rows: rollback_rows, prefill_mode: mode)
+                else
+                  ML::GGUF::Inkling2ResidentAttention.new(config, sliding, max_seq,
+                    rollback_rows: rollback_rows)
+                end
+    begin
+      output = [] of Float32
+      tiles.each do |start, rows|
+        output.concat(resident_run_tile(attention, start, projected[start, rows], weights, config))
+      end
+      ML::Metal::PipelineCache.resident_spec_contains?(expected_pipeline).should be_true
+      if expect_regular_fallback
+        ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention").should be_true
+      end
+      snapshots = snapshot_positions.map do |position|
+        attention.key_value_at(position, max_seq)
+      end
+      ResidentAttentionRun.new(output, snapshots)
+    ensure
+      attention.close
+    end
+  end
+
+  private def resident_bits(values : Array(Float32)) : Array(UInt32)
+    values.map(&.unsafe_as(UInt32))
+  end
+
   private def resident_encode_convolution_tile(
     convolution : ML::GGUF::Inkling2ResidentConvolution,
     start : Int32,
@@ -276,6 +333,88 @@ require "../src/ml/gguf/inkling2_resident_math"
 
   if ML::Metal::Device.init!
     describe ML::GGUF::Inkling2ResidentAttention do
+      it "keeps 128-channel full-prefill results bitwise across regular, scores, and shared-KV modes" do
+        config = resident_test_config(sliding: false, n_head: 3_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 4_i32, max_seq: 7_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 7_i32))
+        # Three-row prefill tiles exercise odd row/head counts; the final
+        # one-row tail must remain on the regular path.
+        tiles = [{0_i32, 3_i32}, {3_i32, 3_i32}, {6_i32, 1_i32}]
+
+        default_regular = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 7_i32, expected_pipeline: "inkling2_resident_attention",
+          expect_regular_fallback: true)
+        explicit_regular = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 7_i32, prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Regular,
+          expected_pipeline: "inkling2_resident_attention", expect_regular_fallback: true)
+        scores = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 7_i32, prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Scores,
+          expected_pipeline: "inkling2_resident_attention_prefill_scores", expect_regular_fallback: true)
+        shared_kv = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 7_i32, prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::SharedKV,
+          expected_pipeline: "inkling2_resident_attention_prefill_shared_kv", expect_regular_fallback: true)
+
+        resident_bits(default_regular.output).should eq(resident_bits(explicit_regular.output))
+        resident_bits(scores.output).should eq(resident_bits(explicit_regular.output))
+        resident_bits(shared_kv.output).should eq(resident_bits(explicit_regular.output))
+      end
+
+      it "keeps 128-channel sliding-prefill results bitwise through reserved-ring wrap" do
+        config = resident_test_config(sliding: true, n_head: 3_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 3_i32, max_seq: 9_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        inputs = resident_inputs(config, 9_i32)
+        projected = resident_projected_rows(weights, matmul, inputs)
+        tiles = [{0_i32, 3_i32}, {3_i32, 3_i32}, {6_i32, 2_i32}, {8_i32, 1_i32}]
+        retained_positions = [6_i32, 7_i32, 8_i32]
+
+        expected = [] of Float32
+        cpu = ML::GGUF::Inkling2AttentionState.new(config, true, 9_i32)
+        inputs.each_with_index do |(q_in, k_in, v_in), position|
+          output = ML::GGUF::Inkling2Attention.forward(weights, config, cpu, matmul,
+            q_in, k_in, v_in, position.to_i32)
+          output.each { |value| expected << value * Math.sqrt(config.conv_size + 1).to_f32 }
+        end
+        expected_snapshots = [0_i32, 1_i32, 2_i32].map { |index| cpu.key_value_at(index) }
+
+        regular = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: true, max_seq: 9_i32, rollback_rows: 2_i32,
+          expected_pipeline: "inkling2_resident_attention", snapshot_positions: retained_positions)
+        scores = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: true, max_seq: 9_i32, rollback_rows: 2_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Scores,
+          expected_pipeline: "inkling2_resident_attention_prefill_scores",
+          snapshot_positions: retained_positions, expect_regular_fallback: true)
+        shared_kv = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: true, max_seq: 9_i32, rollback_rows: 2_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::SharedKV,
+          expected_pipeline: "inkling2_resident_attention_prefill_shared_kv",
+          snapshot_positions: retained_positions, expect_regular_fallback: true)
+
+        # The logical window is three rows and the reserve grows the physical
+        # modulo ring to five slots, so positions 5..8 cross its head.
+        resident_bits(scores.output).should eq(resident_bits(regular.output))
+        resident_bits(shared_kv.output).should eq(resident_bits(regular.output))
+        expected.size.times { |index| (regular.output[index] - expected[index]).abs.should be < 4e-4_f32 }
+        {scores, shared_kv}.each do |candidate|
+          candidate.snapshots.size.should eq(3)
+          candidate.snapshots.each_with_index do |(key, value, position), index|
+            regular_key, regular_value, regular_position = regular.snapshots[index]
+            position.should eq(retained_positions[index])
+            position.should eq(regular_position)
+            resident_bits(key).should eq(resident_bits(regular_key))
+            resident_bits(value).should eq(resident_bits(regular_value))
+            expected_key, expected_value, expected_position = expected_snapshots[index]
+            position.should eq(expected_position)
+            key.size.times { |channel| (key[channel] - expected_key[channel]).abs.should be < 3e-4_f32 }
+            value.size.times { |channel| (value[channel] - expected_value[channel]).abs.should be < 3e-4_f32 }
+          end
+        end
+      end
+
       it "matches sliding attention across tile boundaries, ring wrap, oversized batches, reset, and KV snapshots" do
         config = resident_test_config(sliding: true, n_head: 4_i32, n_head_kv: 2_i32,
           head_dim: 3_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 16_i32)
