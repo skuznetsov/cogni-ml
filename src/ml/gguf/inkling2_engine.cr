@@ -171,6 +171,28 @@ module ML::GGUF
       end
     end
 
+    # Evaluate four known continuation tokens with the serial decode numerics.
+    # Commits all four to the sequence and returns the next-token logits after each.
+    def decode_block4(tokens : StaticArray(Int32, 4)) : StaticArray(Array(Float32), 4)
+      validate_active!
+      raise ArgumentError.new("Inkling 2 decode block exceeds the context of #{@max_seq} tokens") if tokens.size > @max_seq - @position
+      tokens.each { |token| validate_token!(token) }
+
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        backend = @resident || raise ArgumentError.new("Inkling 2 block decode requires fixed-depth resident Metal")
+        begin
+          result = backend.decode_block4(tokens, @position)
+          @position += tokens.size
+          result
+        rescue ex
+          @failed = true
+          raise ex
+        end
+      {% else %}
+        raise ArgumentError.new("Inkling 2 block decode requires fixed-depth resident Metal")
+      {% end %}
+    end
+
     # Extend this sequence and return only its last prompt row's logits.
     def prefill(tokens : Indexable(Int32)) : Array(Float32)
       validate_active!

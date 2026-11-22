@@ -170,6 +170,8 @@ require "../src/ml/gguf/inkling2_resident_math"
     projected : Array(ResidentProjectedRow),
     weights : ML::GGUF::Inkling2AttentionWeights,
     config : ML::GGUF::Inkling2Config,
+    *,
+    decode_block : Bool = false,
   ) : Array(Float32)
     rows = projected.size.to_i32
     q_width = config.n_head * config.head_dim
@@ -201,7 +203,8 @@ require "../src/ml/gguf/inkling2_resident_math"
       attended = nil.as(ML::GGUF::Inkling2View?)
       begin
         attended = attention.encode(encoder, scratch, start, rows, q, k, v, q_rel, gate, sink,
-          q_clip, rel_clip, relative_bias, k_taps, v_taps, dynamic_k, dynamic_v)
+          q_clip, rel_clip, relative_bias, k_taps, v_taps, dynamic_k, dynamic_v,
+          decode_block: decode_block)
         ML::GGUF::Inkling2ResidentMath.copy(encoder, attended.not_nil!, ML::GGUF::Inkling2View.new(output), output_count)
       ensure
         encoder.end_encoding
@@ -326,6 +329,72 @@ require "../src/ml/gguf/inkling2_resident_math"
         expect_raises(IndexError) { gpu.key_value_at(9_i32, 10_i32) }
       ensure
         gpu.try(&.close)
+      end
+
+      it "matches serial attention across the 64-key split threshold in a four-row decode block" do
+        config = resident_test_config(sliding: false, n_head: 2_i32, n_head_kv: 1_i32,
+          head_dim: 2_i32, rel_dim: 2_i32, window: 70_i32, max_seq: 70_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        inputs = resident_inputs(config, 66_i32)
+        projected = resident_projected_rows(weights, matmul, inputs)
+        blocked = ML::GGUF::Inkling2ResidentAttention.new(config, false, 70_i32)
+        serial = ML::GGUF::Inkling2ResidentAttention.new(config, false, 70_i32)
+        begin
+          # Both paths share a 62-row prefix. The following four rows expose
+          # 63, 64, 65, and 66 keys, so the block crosses the >64 split-K gate.
+          resident_run_tile(blocked, 0_i32, projected[0, 62], weights, config)
+          resident_run_tile(serial, 0_i32, projected[0, 62], weights, config)
+
+          expected = [] of Float32
+          4.times do |row|
+            expected.concat(resident_run_tile(serial, 62 + row, [projected[62 + row]], weights, config))
+          end
+          actual = resident_run_tile(blocked, 62_i32, projected[62, 4], weights, config, decode_block: true)
+          actual.size.times { |index| (actual[index] - expected[index]).abs.should be < 2e-6_f32 }
+
+          {62_i32, 63_i32, 64_i32, 65_i32}.each do |position|
+            block_key, block_value, _block_position = blocked.key_value_at(position, 66_i32)
+            serial_key, serial_value, _serial_position = serial.key_value_at(position, 66_i32)
+            block_key.size.times { |channel| (block_key[channel] - serial_key[channel]).abs.should be < 2e-6_f32 }
+            block_value.size.times { |channel| (block_value[channel] - serial_value[channel]).abs.should be < 2e-6_f32 }
+          end
+        ensure
+          blocked.close
+          serial.close
+        end
+      end
+
+      it "matches serial attention when a four-row decode block crosses the 1024-slot KV ring" do
+        config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 1_i32, rel_dim: 1_i32, window: 1024_i32, max_seq: 1026_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        inputs = resident_inputs(config, 1026_i32)
+        projected = resident_projected_rows(weights, matmul, inputs)
+        blocked = ML::GGUF::Inkling2ResidentAttention.new(config, true, 1026_i32)
+        serial = ML::GGUF::Inkling2ResidentAttention.new(config, true, 1026_i32)
+        begin
+          resident_run_tile(blocked, 0_i32, projected[0, 1022], weights, config)
+          resident_run_tile(serial, 0_i32, projected[0, 1022], weights, config)
+
+          expected = [] of Float32
+          4.times do |row|
+            expected.concat(resident_run_tile(serial, 1022 + row, [projected[1022 + row]], weights, config))
+          end
+          actual = resident_run_tile(blocked, 1022_i32, projected[1022, 4], weights, config, decode_block: true)
+          actual.size.times { |index| (actual[index] - expected[index]).abs.should be < 3e-6_f32 }
+
+          {2_i32, 1023_i32, 1024_i32, 1025_i32}.each do |position|
+            block_key, block_value, _block_position = blocked.key_value_at(position, 1026_i32)
+            serial_key, serial_value, _serial_position = serial.key_value_at(position, 1026_i32)
+            (block_key[0] - serial_key[0]).abs.should be < 2e-6_f32
+            (block_value[0] - serial_value[0]).abs.should be < 2e-6_f32
+          end
+        ensure
+          blocked.close
+          serial.close
+        end
       end
     end
   end

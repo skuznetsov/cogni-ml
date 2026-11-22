@@ -129,6 +129,10 @@ require "../src/ml/gguf/inkling2_engine"
       view.buffer.read(offset + elements)[offset, elements].to_a
     end
 
+    def float_bits(values : Array(Float32)) : Array(UInt32)
+      values.map(&.unsafe_as(UInt32))
+    end
+
     def float_view(values : Array(Float32), buffers : Array(ML::MetalBuffer)) : ML::GGUF::Inkling2View
       buffer = ML::MetalBuffer.from_array(values)
       buffers << buffer
@@ -260,6 +264,30 @@ require "../src/ml/gguf/inkling2_engine"
         q8_tiled_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(35 * 39, 0_f32), buffers)
         linear.project(encoder, q8_tiled_projection, q8_tiled_view, q8_tiled_output, 35_i32)
 
+        # The decode projection tile must produce the same bits as four
+        # independent one-row GEMVs, including a two-block Q8_0 weight row.
+        f32_decode_input = Array(Float32).new(4 * 3) do |index|
+          ((index % 7) - 3).to_f32 * 0.0625_f32
+        end
+        f32_decode_view = Inkling2LinearSpecSupport.float_view(f32_decode_input, buffers)
+        f32_decode_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 5, 0_f32), buffers)
+        f32_rowwise_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 5, 0_f32), buffers)
+        linear.project(encoder, f32_projection, f32_decode_view, f32_decode_output, 4_i32, decode_block: true)
+        4.times do |row|
+          linear.project(encoder, f32_projection, f32_decode_view.slice(row * 3), f32_rowwise_output.slice(row * 5), 1_i32)
+        end
+
+        q8_decode_input = Array(Float32).new(4 * 64) do |index|
+          ((index % 29) - 14).to_f32 * 0.00625_f32
+        end
+        q8_decode_view = Inkling2LinearSpecSupport.float_view(q8_decode_input, buffers)
+        q8_decode_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 39, 0_f32), buffers)
+        q8_rowwise_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 39, 0_f32), buffers)
+        linear.project(encoder, q8_tiled_projection, q8_decode_view, q8_decode_output, 4_i32, decode_block: true)
+        4.times do |row|
+          linear.project(encoder, q8_tiled_projection, q8_decode_view.slice(row * 64), q8_rowwise_output.slice(row * 39), 1_i32)
+        end
+
         moe_input = Array(Float32).new(3 * 32) { |index| ((index % 13) - 6).to_f32 * 0.015_f32 }
         moe_input_view = Inkling2LinearSpecSupport.float_view(moe_input, buffers)
         bias_view = Inkling2LinearSpecSupport.float_view([0_f32, 0_f32, -1_f32], buffers)
@@ -270,6 +298,35 @@ require "../src/ml/gguf/inkling2_engine"
         iq4_output = linear.moe(encoder, scratch, iq4_layer, config, moe_input_view, iq4_bias_view, 3_i32)
         iq4_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(3 * 32, 0_f32), buffers)
         ML::GGUF::Inkling2ResidentMath.copy(encoder, iq4_output, iq4_readback, 3 * 32)
+
+        # All four rows select experts 0 and 1, so each grouped exact matvec
+        # reuses the expert weights across routes. The rowwise baseline also
+        # exercises route-rank scatter before ordered top-k combine.
+        decode_moe_input = Array(Float32).new(4 * 32) do |index|
+          row, column = index.divmod(32)
+          case column
+          when 0 then 0.25_f32
+          when 1 then 0_f32
+          else        ((row * 7 + column) % 13 - 6).to_f32 * 0.01_f32
+          end
+        end
+        decode_moe_view = Inkling2LinearSpecSupport.float_view(decode_moe_input, buffers)
+        decode_moe_cases = {layer, iq4_layer}.zip({bias_view, iq4_bias_view}).map do |weights, bias|
+          rowwise = linear.moe(encoder, scratch, weights, config, decode_moe_view, bias, 4_i32)
+          rowwise_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
+          ML::GGUF::Inkling2ResidentMath.copy(encoder, rowwise, rowwise_readback, 4 * 32)
+          grouped = linear.moe(encoder, scratch, weights, config, decode_moe_view, bias, 4_i32, decode_block: true)
+          grouped_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
+          ML::GGUF::Inkling2ResidentMath.copy(encoder, grouped, grouped_readback, 4 * 32)
+          {rowwise_readback, grouped_readback}
+        end
+
+        expect_raises(ArgumentError) do
+          linear.project(encoder, f32_projection, f32_view, f32_output, 5_i32, decode_block: true)
+        end
+        expect_raises(ArgumentError) do
+          linear.moe(encoder, scratch, layer, config, moe_input_view, bias_view, 5_i32, decode_block: true)
+        end
 
         # Alternate the rank of experts 0 and 1. Expert 2 stays empty
         # for Q8_0 and receives only the last token for IQ4_NL.
@@ -307,6 +364,10 @@ require "../src/ml/gguf/inkling2_engine"
         Inkling2LinearSpecSupport.read(q8_tiled_output, 35 * 39).zip(q8_tiled_expected).each do |actual, expected|
           actual.should be_close(expected, 2e-5_f32)
         end
+        Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(f32_decode_output, 20_i32)).should eq(
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(f32_rowwise_output, 20_i32)))
+        Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_decode_output, 4 * 39)).should eq(
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_rowwise_output, 4 * 39)))
         expected_moe = Inkling2LinearSpecSupport.moe_expected(layer, config, moe_input, 3_i32)
         Inkling2LinearSpecSupport.read(moe_readback, 96_i32).zip(expected_moe).each do |actual, expected|
           actual.should be_close(expected, 2e-3_f32)
@@ -314,6 +375,10 @@ require "../src/ml/gguf/inkling2_engine"
         expected_iq4 = Inkling2LinearSpecSupport.moe_expected(iq4_layer, config, moe_input, 3_i32)
         Inkling2LinearSpecSupport.read(iq4_readback, 96_i32).zip(expected_iq4).each do |actual, expected|
           actual.should be_close(expected, 2e-2_f32)
+        end
+        decode_moe_cases.each do |rowwise_readback, grouped_readback|
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(grouped_readback, 4 * 32)).should eq(
+            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(rowwise_readback, 4 * 32)))
         end
         grouped_cases.each do |weights, readback|
           expected = Inkling2LinearSpecSupport.moe_expected(weights, config, grouped_input, grouped_rows)
