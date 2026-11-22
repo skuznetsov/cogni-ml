@@ -319,6 +319,12 @@ describe ML::GGUF::Inkling2Engine do
       expect_raises(ArgumentError, /requires resident Metal/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64)
       end
+      expect_raises(ArgumentError, /requires resident Metal/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, auto_prefill_tile: true)
+      end
+      expect_raises(ArgumentError, /cannot combine/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64, auto_prefill_tile: true)
+      end
       engine = ML::GGUF::Inkling2Engine.new(path, 3, metal: false)
       begin
         expect_raises(ArgumentError, /empty/) { engine.prefill([] of Int32) }
@@ -374,6 +380,38 @@ describe ML::GGUF::Inkling2Engine do
           traced.forward(5).not_nil!.size.should eq(7)
         ensure
           traced.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
+    it "preserves logits and per-visit KV after a wide automatic append and a one-token tail" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-auto-prefill", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 6, n_embd: 32, expert_dim: 32, core_end: 4,
+        sliding_pattern: [true, false, true, false, false, true], include_all_tensors: true,
+        patterned_weights: true, quantized_experts: true)
+      begin
+        reference = ML::GGUF::Inkling2Engine.new(path, 528, metal: true, prefill_tile: 128)
+        automatic = ML::GGUF::Inkling2Engine.new(path, 528, metal: true, auto_prefill_tile: true)
+        begin
+          prefix = [5, 1, 3]
+          suffix = Array(Int32).new(513) { |index| (index * 5 + index // 7) % 7 }
+          reference.prefill(prefix)
+          automatic.prefill(prefix)
+          expected = reference.prefill(suffix)
+          actual = automatic.prefill(suffix)
+          expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
+          expect_inkling2_kv_parity(reference, automatic)
+          expected = reference.forward(2).not_nil!
+          actual = automatic.forward(2).not_nil!
+          expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
+          expect_inkling2_kv_parity(reference, automatic)
+        ensure
+          automatic.close
+          reference.close
         end
       ensure
         File.delete?(path)

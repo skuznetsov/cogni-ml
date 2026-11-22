@@ -45,6 +45,7 @@ print_ids = false
 trace_loops = false
 passes = nil.as(Int32?)
 prefill_tile = nil.as(Int32?)
+auto_prefill_tile = false
 stop_delta = nil.as(Float32?)
 help = false
 
@@ -59,8 +60,9 @@ parser.on("--cpu", "Force CPU inference; Metal is the default on Darwin unless b
 parser.on("--staged-metal", "Use the staged Metal backend with token-by-token prefill") { staged_metal = true }
 parser.on("--raw", "Use --prompt as a raw completion, without the chat template") { raw_prompt = true }
 parser.on("--passes N", "Pass override for variable-loop checkpoints; defaults to checkpoint depth") { |value| passes = parse_cli_integer(value, "--passes") }
-parser.on("--prefill-tile N", "Resident Metal prefill tile (1–#{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE}, default: #{ML::GGUF::Inkling2Engine::DEFAULT_PREFILL_TILE})") do |value|
-  prefill_tile = parse_cli_integer(value, "--prefill-tile")
+parser.on("--prefill-tile SIZE", "Resident Metal tile: auto or 1–#{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE} (default: #{ML::GGUF::Inkling2Engine::DEFAULT_PREFILL_TILE})") do |value|
+  auto_prefill_tile = value == "auto"
+  prefill_tile = auto_prefill_tile ? nil : parse_cli_integer(value, "--prefill-tile")
 end
 parser.on("--stop-delta DELTA", "Research only: stop after two successive loop deltas at or below DELTA") do |value|
   stop_delta = value.to_f32? || raise ArgumentError.new("--stop-delta expects a number, got #{value.inspect}")
@@ -111,7 +113,8 @@ begin
             end
 
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
-      passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile)
+      passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
+      auto_prefill_tile: auto_prefill_tile)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids

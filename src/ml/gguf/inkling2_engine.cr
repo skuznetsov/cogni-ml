@@ -125,12 +125,16 @@ module ML::GGUF
     @pending_core = {} of Int32 => PendingCore
 
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
-                   @trace : LoopTrace? = nil, @stop_delta : Float32? = nil, prefill_tile : Int32? = nil)
+                   @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
+                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false)
+      if prefill_tile && auto_prefill_tile
+        raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
+      end
       if prefill_tile && !prefill_tile.in?(1..MAX_PREFILL_TILE)
         raise ArgumentError.new("Inkling 2 prefill tile must be between 1 and #{MAX_PREFILL_TILE} tokens")
       end
       @weights = Inkling2Weights.new(path)
-      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile)
+      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile, auto_prefill_tile)
       @core_prefix = Array(Int32).new(@passes, 0) if @stop_delta
     end
 
@@ -278,7 +282,7 @@ module ML::GGUF
       raise IndexError.new("Inkling 2 layer visit out of bounds") unless 0 <= visit < layer_visits
     end
 
-    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?)
+    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?, auto_prefill_tile : Bool)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
@@ -295,11 +299,15 @@ module ML::GGUF
       visits.concat((config.core_end...config.n_layer).to_a)
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
-          @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, prefill_tile || DEFAULT_PREFILL_TILE)
+          rows = auto_prefill_tile ? MAX_PREFILL_TILE : (prefill_tile || DEFAULT_PREFILL_TILE)
+          append_rows = Inkling2ResidentLinear::MAX_GROUPED_ROWS if auto_prefill_tile
+          @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows, append_prefill_rows: append_rows)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
-      raise ArgumentError.new("Setting the Inkling 2 prefill tile requires resident Metal") if prefill_tile
+      if prefill_tile || auto_prefill_tile
+        raise ArgumentError.new("Setting the Inkling 2 prefill tile requires resident Metal")
+      end
       attention = visits.map { |layer| Inkling2AttentionState.new(config, config.sliding?(layer), @max_seq) }
       convolutions = visits.map { Inkling2Convolution.new(config.n_embd, config.conv_size) }
       {loops, attention, convolutions, make_matmul(metal)}

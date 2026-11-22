@@ -62,13 +62,24 @@ continue into decode. Each new query reads old history and the causal part
 of its tile before the tile can overwrite the sliding cache.
 
 Use `--prefill-tile 64` or `--prefill-tile 128` to test wider tiles with the
-same float32 staging as the 32-token default. This option accepts 1 through
-128 rows and requires the resident Metal backend. Tiles from 16 through
-128 rows use grouped expert GEMM on Apple Silicon when at most 256 experts
-are present. The tile height is a runtime dispatch parameter. The Metal
-pipeline cache keys compiled kernels by function name. Default tile promotion
-requires warmed wall time measurements under the same conditions at 3 and
-10 passes.
+same float32 staging as the 32-token default. Explicit tile sizes from 1
+through 128 require the resident Metal backend.
+
+Select `--prefill-tile auto` or pass `auto_prefill_tile: true` to
+`Inkling2Engine.new` to use up to 128 rows on a fresh sequence. The same
+cap applies to short appends. When the engine already has a live prefix and
+one `prefill` call appends at least 512 tokens, that call uses tiles of up to
+512 rows. The CLI prefills one fresh sequence. Use consecutive `prefill`
+calls on the same engine to exercise the wider KV append path. Automatic
+sizing requires resident Metal and is mutually exclusive with an explicit
+tile in the engine constructor.
+
+Tiles from 16 through 512 rows use grouped expert GEMM on Apple Silicon
+when at most 256 experts are present. The tile height is a runtime dispatch
+parameter. The Metal pipeline cache keys compiled kernels by function name.
+Wider tiles grow the reusable scratch buffers on first use. Default tile
+promotion requires warmed wall time measurements under the same conditions
+at 3 and 10 passes.
 
 For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
