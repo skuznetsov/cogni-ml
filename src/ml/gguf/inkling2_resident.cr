@@ -779,6 +779,12 @@ module ML::GGUF
       true
     end
 
+    # Override this predicate in a same-binary probe to compare batched
+    # prefill controller evaluation with the reference projection path.
+    private def prefill_fused_control? : Bool
+      true
+    end
+
     private def control_attention(tile : Tile, controller : Inkling2LoopWeights,
                                   inputs : {Inkling2View, Inkling2View, Inkling2View},
                                   messages : Inkling2View) : {Inkling2View, Inkling2View, Inkling2View}
@@ -827,10 +833,13 @@ module ML::GGUF
     private def apply_control(tile : Tile, controller : Inkling2LoopWeights, index : Int32,
                               input : Inkling2View, message : Inkling2View,
                               rank : Inkling2View, result : Inkling2View) : Nil
-      if tile.rows == 1 && !tile.decode_block? && decode_fused_control? &&
-         @linear.project_f32_control_pair(tile.encoder, {controller.gain[index], controller.forget[index]},
-           rank, input, message, result, tile.elements)
-        return
+      unless tile.decode_block?
+        fused_control = tile.rows == 1 ? decode_fused_control? : prefill_fused_control?
+        if fused_control &&
+           @linear.project_f32_control_pair(tile.encoder, {controller.gain[index], controller.forget[index]},
+             rank, input, message, result, tile.width, rows: tile.rows)
+          return
+        end
       end
 
       gain = project(tile, controller.gain[index], rank)
