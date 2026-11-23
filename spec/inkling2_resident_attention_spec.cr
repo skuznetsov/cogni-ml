@@ -377,7 +377,7 @@ require "../src/ml/gguf/inkling2_resident_math"
         ordered = resident_run_prefill_mode(config, weights, projected, tiles,
           sliding: true, max_seq: 193_i32, snapshot_positions: retained_positions,
           prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Ordered,
-          expected_pipeline: "inkling2_prefill_ordered_pv")
+          expected_pipeline: "inkling2_prefill_ordered_softmax_pv")
 
         ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_prefill_scores").should be_true
         resident_bits(ordered.output).should eq(resident_bits(scores.output))
