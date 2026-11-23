@@ -3,6 +3,7 @@ using namespace metal;
 
 constant uint ordered_query_rows = 4;
 constant uint ordered_key_tile = 64;
+constant uint ordered_qk_simdgroups = 4; // 128 threads per QK threadgroup.
 constant uint ordered_channels = 128;
 
 struct Inkling2PrefillOrderedParams {
@@ -38,6 +39,21 @@ kernel void inkling2_prefill_ordered_pack(
     packed_v[dst] = (in_tile ? v : v_cache)[source + tid.x];
 }
 
+static inline float ordered_qk_dot(float4 q, float4 k) {
+    float partial = 0.0f;
+    partial += q.x * k.x;
+    partial += q.y * k.y;
+    partial += q.z * k.z;
+    partial += q.w * k.w;
+    return simd_sum(partial) * rsqrt((float)ordered_channels);
+}
+
+static inline float ordered_qk_relative(float q, device const float* bias, ushort lane) {
+    float partial = 0.0f;
+    if (lane < 16) partial += q * bias[lane];
+    return simd_sum(partial);
+}
+
 kernel void inkling2_prefill_ordered_qk(
     device const float* q                [[buffer(0)]],
     device const float* q_rel            [[buffer(1)]],
@@ -70,27 +86,49 @@ kernel void inkling2_prefill_ordered_qk(
         sinks[i] = sink[src];
     }
 
+    const uint first_position = p.start + row;
+    if (p.rows - row >= ordered_query_rows &&
+        begin + ordered_key_tile - 1 <= first_position &&
+        first_position + ordered_query_rows - 1 - begin < p.relative_extent) {
+        // The full key tile is visible and has relative bias for all four
+        // queries. Overlap two key loads and keep each FP32 reduction independent.
+        for (uint offset = 0; offset < ordered_key_tile; offset += 2 * ordered_qk_simdgroups) {
+            const uint key0 = begin + offset + simd;
+            const uint key1 = key0 + ordered_qk_simdgroups;
+            device const float4* key_lane = packed_k + (kv_head * keys + key0) * 32 + lane;
+            const float4 k0 = key_lane[0];
+            const float4 k1 = key_lane[ordered_qk_simdgroups * 32];
+            const uint distance0 = first_position - key0;
+            const uint distance1 = first_position - key1;
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < ordered_query_rows; ++i) {
+                float score0 = ordered_qk_dot(query[i], k0);
+                float score1 = ordered_qk_dot(query[i], k1);
+                score0 += ordered_qk_relative(relative[i], relative_bias + (distance0 + i) * 16, lane);
+                score1 += ordered_qk_relative(relative[i], relative_bias + (distance1 + i) * 16, lane);
+                if (lane == 0) {
+                    device float* line = scores + (head * p.rows + row + i) * keys;
+                    line[key0] = score0 - sinks[i];
+                    line[key1] = score1 - sinks[i];
+                }
+            }
+        }
+        return;
+    }
+
     // Each SIMD group scores a key for several adjacent queries with one K
     // load. Each dot uses the four lane-local additions and SIMD reduction
     // from inkling2_resident_score in exactly the same order.
-    for (uint key = begin + simd; key < end; key += 4) {
+    for (uint key = begin + simd; key < end; key += ordered_qk_simdgroups) {
         const float4 k = packed_k[(kv_head * keys + key) * 32 + lane];
         #pragma clang loop unroll(full)
         for (uint i = 0; i < ordered_query_rows; ++i) {
             const uint position = p.start + row + i;
             if (row + i >= p.rows || key > position) continue;
-            const float4 q_values = query[i];
-            float partial = 0.0f;
-            partial += q_values.x * k.x;
-            partial += q_values.y * k.y;
-            partial += q_values.z * k.z;
-            partial += q_values.w * k.w;
-            float score = simd_sum(partial) * rsqrt((float)ordered_channels);
+            float score = ordered_qk_dot(query[i], k);
             const uint distance = position - key;
             if (distance < p.relative_extent) {
-                float rel_partial = 0.0f;
-                if (lane < 16) rel_partial += relative[i] * relative_bias[distance * 16 + lane];
-                score += simd_sum(rel_partial);
+                score += ordered_qk_relative(relative[i], relative_bias + distance * 16, lane);
             }
             if (lane == 0) {
                 scores[(head * p.rows + row + i) * keys + key] = score - sinks[i];
