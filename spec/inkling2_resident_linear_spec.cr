@@ -217,12 +217,15 @@ require "../src/ml/gguf/inkling2_engine"
       fixture = Inkling2LinearSpecSupport.write_model
       gguf = ML::GGUF::GGUFFile.new(fixture.path)
       linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      linear_indirect = ML::GGUF::Inkling2ResidentLinear.new(gguf, prefill_indirect_dispatch: true)
       linear_m32 = ML::GGUF::Inkling2ResidentLinear.new(gguf, prefill_expert_tile_routes: 32_i32)
       scratch = ML::GGUF::Inkling2ResidentScratch.new
+      scratch_indirect = ML::GGUF::Inkling2ResidentScratch.new
       scratch_m32 = ML::GGUF::Inkling2ResidentScratch.new
       buffers = [] of ML::MetalBuffer
       command = ML::Metal::CommandBuffer.new
       encoder = ML::Metal::ComputeEncoder.new(command)
+      encoding_ended = false
 
       begin
         f32_projection = ML::GGUF::QuantWeight.new(
@@ -351,7 +354,10 @@ require "../src/ml/gguf/inkling2_engine"
           grouped_m32 = linear_m32.moe(encoder, scratch_m32, weights, config, decode_moe_view, bias, 4_i32, decode_block: true)
           grouped_m32_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
           ML::GGUF::Inkling2ResidentMath.copy(encoder, grouped_m32, grouped_m32_readback, 4 * 32)
-          {rowwise_readback, grouped_readback, grouped_m32_readback}
+          grouped_indirect = linear_indirect.moe(encoder, scratch_indirect, weights, config, decode_moe_view, bias, 4_i32, decode_block: true)
+          grouped_indirect_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
+          ML::GGUF::Inkling2ResidentMath.copy(encoder, grouped_indirect, grouped_indirect_readback, 4 * 32)
+          {rowwise_readback, grouped_readback, grouped_m32_readback, grouped_indirect_readback}
         end
 
         expect_raises(ArgumentError) do
@@ -381,8 +387,9 @@ require "../src/ml/gguf/inkling2_engine"
         end
 
         {% if flag?(:aarch64) %}
-          # Four-row decode stays on its shared decode kernels even when the
-          # linear instance opts into M32 prefill tiles.
+          # Four-row decode stays on its shared decode kernels in all
+          # prefill modes.
+          ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_group_routes_indirect").should be_false
           m32_pipelines.each do |pipeline|
             ML::Metal::PipelineCache.resident_linear_spec_contains?(pipeline).should be_false
           end
@@ -412,10 +419,10 @@ require "../src/ml/gguf/inkling2_engine"
           ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_group_routes_split").should be_true
         {% end %}
 
-        # Each size gives expert 0 a dense group ending just past an M16 tile,
-        # an M24 boundary, or an M32 tile. Expert 2 stays empty for Q8_0 and
-        # receives only the final row for IQ4_NL.
-        m32_grouped_cases = {17_i32, 25_i32, 33_i32}.flat_map do |rows|
+        # Expert 0 fills one M16 tile, spills into a short or wide tail, or
+        # exceeds an M32 tile. Expert 2 stays empty for Q8_0 and receives only
+        # the final row for IQ4_NL.
+        prefill_moe_cases = {16_i32, 17_i32, 25_i32, 33_i32}.flat_map do |rows|
           input = Array(Float32).new(rows * 32) do |index|
             row, column = index.divmod(32)
             case column
@@ -431,14 +438,18 @@ require "../src/ml/gguf/inkling2_engine"
             m16 = linear.moe(encoder, scratch, weights, config, input_view, bias, rows)
             m16_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 32, 0_f32), buffers)
             ML::GGUF::Inkling2ResidentMath.copy(encoder, m16, m16_readback, rows * 32)
+            indirect = linear_indirect.moe(encoder, scratch_indirect, weights, config, input_view, bias, rows)
+            indirect_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 32, 0_f32), buffers)
+            ML::GGUF::Inkling2ResidentMath.copy(encoder, indirect, indirect_readback, rows * 32)
             m32 = linear_m32.moe(encoder, scratch_m32, weights, config, input_view, bias, rows)
             m32_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 32, 0_f32), buffers)
             ML::GGUF::Inkling2ResidentMath.copy(encoder, m32, m32_readback, rows * 32)
-            {rows, m16_readback, m32_readback}
+            {rows, m16_readback, indirect_readback, m32_readback}
           end
         end
 
         encoder.end_encoding
+        encoding_ended = true
         command.commit_and_wait
 
         Inkling2LinearSpecSupport.read(f32_output, 10_i32).zip(Inkling2LinearSpecSupport.projection_expected(f32_projection, f32_input, 2_i32)).each do |actual, expected|
@@ -467,11 +478,11 @@ require "../src/ml/gguf/inkling2_engine"
         Inkling2LinearSpecSupport.read(iq4_readback, 96_i32).zip(expected_iq4).each do |actual, expected|
           actual.should be_close(expected, 2e-2_f32)
         end
-        decode_moe_cases.each do |rowwise_readback, grouped_readback, grouped_m32_readback|
-          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(grouped_readback, 4 * 32)).should eq(
-            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(rowwise_readback, 4 * 32)))
-          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(grouped_m32_readback, 4 * 32)).should eq(
-            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(grouped_readback, 4 * 32)))
+        decode_moe_cases.each do |rowwise_readback, grouped_readback, grouped_m32_readback, grouped_indirect_readback|
+          expected = Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(rowwise_readback, 4 * 32))
+          {grouped_readback, grouped_m32_readback, grouped_indirect_readback}.each do |readback|
+            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(readback, 4 * 32)).should eq(expected)
+          end
         end
         grouped_cases.each do |weights, readback|
           expected = Inkling2LinearSpecSupport.moe_expected(weights, config, grouped_input, grouped_rows)
@@ -480,23 +491,28 @@ require "../src/ml/gguf/inkling2_engine"
             actual.should be_close(reference, tolerance)
           end
         end
-        m32_grouped_cases.each do |rows, m16_readback, m32_readback|
-          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(m32_readback, rows * 32)).should eq(
-            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(m16_readback, rows * 32)))
+        prefill_moe_cases.each do |rows, m16_readback, indirect_readback, m32_readback|
+          expected = Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(m16_readback, rows * 32))
+          {indirect_readback, m32_readback}.each do |readback|
+            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(readback, rows * 32)).should eq(expected)
+          end
         end
         Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(empty_wide_m32_readback, empty_wide_rows * 32)).should eq(
           Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(empty_wide_m16_readback, empty_wide_rows * 32)))
         {% if flag?(:aarch64) %}
+          ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_group_routes_indirect").should be_true
           m32_pipelines.each do |pipeline|
             ML::Metal::PipelineCache.resident_linear_spec_contains?(pipeline).should be_true
           end
         {% end %}
       ensure
-        encoder.end_encoding
+        encoder.end_encoding unless encoding_ended
         buffers.each(&.release)
         scratch.close
+        scratch_indirect.close
         scratch_m32.close
         linear.close
+        linear_indirect.close
         linear_m32.close
         gguf.close
         File.delete(fixture.path) if File.exists?(fixture.path)

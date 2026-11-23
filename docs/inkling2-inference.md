@@ -91,6 +91,11 @@ On an M2 Max with the research IQ4_NL GGUF at three passes, appending a
 tokens/s in two quiet A/B pairs. Logits and KV matched bitwise.
 `INKLING2_MOE_PREFILL_ROUTES=16` is the default.
 
+Set `INKLING2_MOE_PREFILL_ROUTES=16_indirect` to launch the M16 gate/up
+and down GEMMs using the actual tile count. The routing kernel writes both
+Metal dispatch grids into GPU scratch and reuses the existing FP32 M16
+GEMMs. Warming this mode after direct M16 adds one routing pipeline.
+
 For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
 partials before applying the output gate.

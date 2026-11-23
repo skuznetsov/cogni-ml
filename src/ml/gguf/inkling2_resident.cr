@@ -137,13 +137,15 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 depth speculation requires at least one core block") unless @core_blocks > 0
       end
       prefill_mode = Inkling2ResidentAttention::PrefillMode.from_env
-      prefill_expert_tile_routes = case ENV["INKLING2_MOE_PREFILL_ROUTES"]?
-                                   when nil, "16" then 16
-                                   when "32"      then 32
-                                   else
-                                     raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16 or 32")
-                                   end
-      @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: prefill_expert_tile_routes)
+      tile_routes, indirect_dispatch = case ENV["INKLING2_MOE_PREFILL_ROUTES"]?
+                                       when nil, "16"     then {16, false}
+                                       when "16_indirect" then {16, true}
+                                       when "32"          then {32, false}
+                                       else
+                                         raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, or 32")
+                                       end
+      @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: tile_routes,
+        prefill_indirect_dispatch: indirect_dispatch)
       @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
     end
 

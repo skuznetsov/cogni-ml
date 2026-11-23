@@ -11,19 +11,16 @@ struct Inkling2ExpertTile {
 // Bucket each flattened (token, rank) route by expert. The router selects an
 // expert at most once per token, so each bucket has room for all of its hits.
 // Keep the original route index for the gather and scatter in both GEMMs.
-kernel void inkling2_resident_moe_group_routes(
-    device const uint* ids           [[buffer(0)]],
-    device       uint* routes        [[buffer(1)]],
-    device       uint* tile_map      [[buffer(2)]],
-    constant     uint& rows          [[buffer(3)]],
-    constant     uint& routed_rows   [[buffer(4)]],
-    constant     uint& n_experts     [[buffer(5)]],
-    threadgroup  atomic_uint* counts [[threadgroup(0)]],
-    ushort tid [[thread_index_in_threadgroup]],
-    uint threads [[threads_per_threadgroup]])
+inline uint inkling2_group_routes_m16(
+    device const uint* ids,
+    device uint* routes,
+    device uint* tile_map,
+    uint rows, uint routed_rows, uint n_experts,
+    threadgroup atomic_uint* counts,
+    threadgroup atomic_uint* next_tile,
+    ushort tid, uint threads)
 {
-    threadgroup atomic_uint next_tile;
-    if (tid == 0) atomic_store_explicit(&next_tile, 0, memory_order_relaxed);
+    if (tid == 0) atomic_store_explicit(next_tile, 0, memory_order_relaxed);
     if (tid < n_experts) atomic_store_explicit(counts + tid, 0, memory_order_relaxed);
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -38,7 +35,7 @@ kernel void inkling2_resident_moe_group_routes(
         const uint count = atomic_load_explicit(counts + tid, memory_order_relaxed);
         if (count != 0) {
             const uint tiles = (count + INKLING2_EXPERT_TILE_ROUTES - 1) / INKLING2_EXPERT_TILE_ROUTES;
-            const uint base = atomic_fetch_add_explicit(&next_tile, tiles, memory_order_relaxed);
+            const uint base = atomic_fetch_add_explicit(next_tile, tiles, memory_order_relaxed);
             device Inkling2ExpertTile* descs = (device Inkling2ExpertTile*)(tile_map + 1);
             for (uint i = 0; i < tiles; ++i) {
                 const uint start = i * INKLING2_EXPERT_TILE_ROUTES;
@@ -47,7 +44,62 @@ kernel void inkling2_resident_moe_group_routes(
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid == 0) tile_map[0] = atomic_load_explicit(&next_tile, memory_order_relaxed);
+    if (tid == 0) {
+        const uint count = atomic_load_explicit(next_tile, memory_order_relaxed);
+        tile_map[0] = count;
+        return count;
+    }
+    return 0;
+}
+
+kernel void inkling2_resident_moe_group_routes(
+    device const uint* ids           [[buffer(0)]],
+    device       uint* routes        [[buffer(1)]],
+    device       uint* tile_map      [[buffer(2)]],
+    constant     uint& rows          [[buffer(3)]],
+    constant     uint& routed_rows   [[buffer(4)]],
+    constant     uint& n_experts     [[buffer(5)]],
+    threadgroup  atomic_uint* counts [[threadgroup(0)]],
+    ushort tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]])
+{
+    threadgroup atomic_uint next_tile;
+    inkling2_group_routes_m16(ids, routes, tile_map, rows, routed_rows, n_experts, counts, &next_tile, tid, threads);
+}
+
+inline void inkling2_write_expert_grids(
+    device uint* dispatch_args,
+    uint fused_up_x_groups, uint down_x_groups, uint count)
+{
+    const uint y = max(1u, count);
+    dispatch_args[0] = fused_up_x_groups;
+    dispatch_args[1] = y;
+    dispatch_args[2] = 1;
+    dispatch_args[3] = down_x_groups;
+    dispatch_args[4] = y;
+    dispatch_args[5] = 1;
+}
+
+kernel void inkling2_resident_moe_group_routes_indirect(
+    device const uint* ids                [[buffer(0)]],
+    device       uint* routes             [[buffer(1)]],
+    device       uint* tile_map           [[buffer(2)]],
+    constant     uint& rows               [[buffer(3)]],
+    constant     uint& routed_rows        [[buffer(4)]],
+    constant     uint& n_experts          [[buffer(5)]],
+    device       uint* dispatch_args     [[buffer(7)]],
+    constant     uint& fused_up_x_groups [[buffer(8)]],
+    constant     uint& down_x_groups     [[buffer(9)]],
+    threadgroup  atomic_uint* counts      [[threadgroup(0)]],
+    ushort tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]])
+{
+    threadgroup atomic_uint next_tile;
+    const uint count = inkling2_group_routes_m16(
+        ids, routes, tile_map, rows, routed_rows, n_experts, counts, &next_tile, tid, threads);
+    if (tid == 0) {
+        inkling2_write_expert_grids(dispatch_args, fused_up_x_groups, down_x_groups, count);
+    }
 }
 
 // Build M16 and M32 maps together. Full wide chunks and tails above M16 go
@@ -125,24 +177,11 @@ kernel void inkling2_resident_moe_group_routes_split(
     if (tid == 0) {
         const uint narrow_count = atomic_load_explicit(&next_narrow_tile, memory_order_relaxed);
         const uint wide_count = atomic_load_explicit(&next_wide_tile, memory_order_relaxed);
-        const uint narrow_y = max(1u, narrow_count);
-        const uint wide_y = max(1u, wide_count);
-
         tile_map[0] = narrow_count;
         wide_tile_map[0] = wide_count;
 
-        dispatch_args[0] = fused_up_x_groups;
-        dispatch_args[1] = narrow_y;
-        dispatch_args[2] = 1;
-        dispatch_args[3] = down_x_groups;
-        dispatch_args[4] = narrow_y;
-        dispatch_args[5] = 1;
-        dispatch_args[6] = fused_up_x_groups;
-        dispatch_args[7] = wide_y;
-        dispatch_args[8] = 1;
-        dispatch_args[9] = down_x_groups;
-        dispatch_args[10] = wide_y;
-        dispatch_args[11] = 1;
+        inkling2_write_expert_grids(dispatch_args, fused_up_x_groups, down_x_groups, narrow_count);
+        inkling2_write_expert_grids(dispatch_args + 6, fused_up_x_groups, down_x_groups, wide_count);
     }
 }
 

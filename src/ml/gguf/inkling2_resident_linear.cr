@@ -35,15 +35,16 @@ module ML::GGUF
       private WIDE_EXPERT_TILE_ROUTES = 32_i32
       private EXPERT_TILE_OUTPUTS = 64_i32
 
-      private record WideExpertTiles, tiles : Inkling2View, grids : Inkling2View
-      private record ExpertGrouping, routes : Inkling2View, tiles : Inkling2View, max_tiles : Int32, wide : WideExpertTiles? = nil
+      private record ExpertGrouping, routes : Inkling2View, tiles : Inkling2View, max_tiles : Int32,
+        grids : Inkling2View? = nil, wide_tiles : Inkling2View? = nil
 
       @base : UInt64
       @file_size : UInt64
       @model : ML::MetalBuffer
       @closed : Bool = false
 
-      def initialize(gguf : GGUFFile, *, @prefill_expert_tile_routes : Int32 = EXPERT_TILE_ROUTES)
+      def initialize(gguf : GGUFFile, *, @prefill_expert_tile_routes : Int32 = EXPERT_TILE_ROUTES,
+                     @prefill_indirect_dispatch : Bool = false)
         unless {EXPERT_TILE_ROUTES, WIDE_EXPERT_TILE_ROUTES}.includes?(@prefill_expert_tile_routes)
           raise ArgumentError.new("Inkling 2 prefill expert tile must have 16 or 32 routes")
         end
@@ -167,7 +168,8 @@ module ML::GGUF
         grouping = if (decode_block && config.n_expert <= 256) || grouped_experts?(rows, config.n_expert)
                      tile_routes = rows > EXPERT_TILE_ROUTES ? @prefill_expert_tile_routes : EXPERT_TILE_ROUTES
                      group_expert_routes(encoder, scratch, ids, config.n_expert, rows, routed_rows.to_i32,
-                       tile_routes, expert_output_tiles(layer.gate_up), expert_output_tiles(layer.down))
+                       tile_routes, expert_output_tiles(layer.gate_up), expert_output_tiles(layer.down),
+                       indirect: @prefill_indirect_dispatch && !decode_block)
                    end
         if decode_block && grouping
           gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
@@ -258,7 +260,7 @@ module ML::GGUF
         encoder.set_value(scale, 6)
         encoder.set_value(has_bias ? 1_u32 : 0_u32, 7)
         encoder.set_value(rows.to_u32, 8)
-        encoder.set_threadgroup_memory(scratch_bytes.to_i32, 0)
+        encoder.set_threadgroup_memory(((scratch_bytes + 15) // 16 * 16).to_i32, 0)
 
         row_base = 0_i32
         while row_base < rows
@@ -314,16 +316,23 @@ module ML::GGUF
       private def group_expert_routes(encoder : ML::Metal::ComputeEncoder, scratch : Inkling2ResidentScratch,
                                       ids : Inkling2View, n_experts : Int32, rows : Int32,
                                       routed_rows : Int32, tile_routes : Int32,
-                                      gate_tiles : Int32, down_tiles : Int32) : ExpertGrouping
+                                      gate_tiles : Int32, down_tiles : Int32, *, indirect : Bool) : ExpertGrouping
         routes = scratch.take(n_experts * rows)
         # At most one partial tile per expert; every other tile is full.
         max_tiles = Math.min(routed_rows, n_experts + (routed_rows - 1) // tile_routes)
         split = tile_routes == WIDE_EXPERT_TILE_ROUTES
         # With split maps, only the tail of each expert can be a narrow tile.
         tiles = scratch.take(1 + 3 * (split ? n_experts : max_tiles))
-        wide = WideExpertTiles.new(scratch.take(1 + 3 * max_tiles), scratch.take(4 * 3)) if split
+        wide_tiles = scratch.take(1 + 3 * max_tiles) if split
+        grids = scratch.take(split ? 12 : 6) if split || indirect
 
-        name = split ? "inkling2_resident_moe_group_routes_split" : "inkling2_resident_moe_group_routes"
+        name = if split
+                 "inkling2_resident_moe_group_routes_split"
+               elsif indirect
+                 "inkling2_resident_moe_group_routes_indirect"
+               else
+                 "inkling2_resident_moe_group_routes"
+               end
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, GROUPED_EXPERT_SOURCE))
         encoder.set_buffer(ids.buffer, 0, offset: ids.offset)
         encoder.set_buffer(routes.buffer, 1, ML::Metal::BufferAccess::Write, offset: routes.offset)
@@ -331,30 +340,30 @@ module ML::GGUF
         encoder.set_value(rows.to_u32, 3)
         encoder.set_value(routed_rows.to_u32, 4)
         encoder.set_value(n_experts.to_u32, 5)
-        if wide
-          encoder.set_buffer(wide.tiles.buffer, 6, ML::Metal::BufferAccess::Write, offset: wide.tiles.offset)
-          encoder.set_buffer(wide.grids.buffer, 7, ML::Metal::BufferAccess::Write, offset: wide.grids.offset)
+        if wide_tiles
+          encoder.set_buffer(wide_tiles.buffer, 6, ML::Metal::BufferAccess::Write, offset: wide_tiles.offset)
+        end
+        if grids
+          encoder.set_buffer(grids.buffer, 7, ML::Metal::BufferAccess::Write, offset: grids.offset)
           encoder.set_value(gate_tiles.to_u32, 8)
           encoder.set_value(down_tiles.to_u32, 9)
         end
-        encoder.set_threadgroup_memory(n_experts * sizeof(UInt32), 0)
+        encoder.set_threadgroup_memory(((n_experts + 3) // 4) * 16, 0)
         encoder.dispatch_threadgroups({1, 1, 1}, {((n_experts + 31) // 32) * 32, 1, 1})
-        ExpertGrouping.new(routes, tiles, max_tiles, wide)
+        ExpertGrouping.new(routes, tiles, max_tiles, grids, wide_tiles)
       end
 
       private def encode_grouped_experts(encoder : ML::Metal::ComputeEncoder, weight : Inkling2ExpertWeights,
                                          input : Inkling2View, output : Inkling2View, grouping : ExpertGrouping,
                                          input_route_divisor : Int32, *, situ : {Float32, Float32}? = nil) : Nil
-        if wide = grouping.wide
-          # The router writes the up/down triples for the narrow map first.
-          grid = situ ? 0 : 3
-          encode_expert_tiles(encoder, weight, input, output, grouping, grouping.tiles, input_route_divisor,
-            situ, wide: false, indirect_grid: wide.grids.slice(grid))
-          encode_expert_tiles(encoder, weight, input, output, grouping, wide.tiles, input_route_divisor,
-            situ, wide: true, indirect_grid: wide.grids.slice(grid + 6))
-        else
-          encode_expert_tiles(encoder, weight, input, output, grouping, grouping.tiles, input_route_divisor,
-            situ, wide: false)
+        # The router writes the gate/up and down triples for the narrow map first.
+        grid = situ ? 0 : 3
+        grids = grouping.grids
+        encode_expert_tiles(encoder, weight, input, output, grouping, grouping.tiles, input_route_divisor,
+          situ, wide: false, indirect_grid: grids.try(&.slice(grid)))
+        if wide_tiles = grouping.wide_tiles
+          encode_expert_tiles(encoder, weight, input, output, grouping, wide_tiles, input_route_divisor,
+            situ, wide: true, indirect_grid: grids.not_nil!.slice(grid + 6))
         end
       end
 
