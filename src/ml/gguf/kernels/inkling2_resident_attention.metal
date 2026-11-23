@@ -770,6 +770,20 @@ kernel void inkling2_resident_attention_split(
     }
 }
 
+struct Inkling2SplitKVSpan {
+    uint end;
+    uint row;
+    bool from_tile;
+};
+
+static inline Inkling2SplitKVSpan inkling2_split_kv_span(
+    uint i, uint count, uint cache_end, uint first_end, uint first_slot, uint first_tile_row)
+{
+    if (i >= cache_end) return {count, first_tile_row + i - cache_end, true};
+    if (i >= first_end) return {cache_end, i - first_end, false};
+    return {first_end, first_slot + i, false};
+}
+
 // Split-K specialization for 128 value channels and 16 relative channels.
 // The host guarantees all scores fit in threadgroup memory. The partition
 // boundaries and FP32 reductions match the single-SIMD split path.
@@ -826,20 +840,27 @@ kernel void inkling2_resident_attention_split_parallel(
     device const float* query = q + query_head * channels;
     device const float* query_relative = q_relative + query_head * rel_channels;
     const float head_sink = sink[query_head];
-    const bool wrap_mask = sliding != 0 && (capacity & (capacity - 1)) == 0;
+    const size_t head_offset = (size_t)kv_head * channels;
+    const size_t key_stride = (size_t)kv_width * groups;
 
-    // Each SIMD group computes whole scores with the original lane reduction.
-    for (uint i = group; i < count; i += groups) {
-        const uint key_position = key_begin + i;
-        const bool in_tile = key_position >= start;
-        const uint slot = sliding == 0 ? key_position
-            : wrap_mask ? key_position & (capacity - 1) : key_position % capacity;
-        const uint kv_row = in_tile ? key_position - start : slot;
-        device const float* key = (in_tile ? k_tile : k_cache) + (size_t)kv_row * kv_width + kv_head * channels;
-        const uint distance = position - key_position;
-        const float score = inkling2_resident_score(query, key, query_relative, relative_bias,
-            head_sink, channels, rel_channels, distance, relative_extent, lane);
-        if (lane == 0) cached_scores[i] = score;
+    // Each live sliding window fits in the physical ring, so the cached
+    // prefix has at most two spans. The uncommitted tile follows both.
+    const uint cache_end = min(count, start - min(start, key_begin));
+    const uint first_slot = sliding != 0 && key_begin >= capacity ? key_begin % capacity : key_begin;
+    const uint first_end = sliding != 0 ? min(cache_end, capacity - first_slot) : cache_end;
+    const uint first_tile_row = max(start, key_begin) - start;
+
+    // Keep the group's original stride across span boundaries.
+    for (uint i = group; i < count;) {
+        const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
+        device const float* keys = span.from_tile ? k_tile : k_cache;
+        size_t offset = (size_t)span.row * kv_width + head_offset;
+        for (; i < span.end; i += groups, offset += key_stride) {
+            const uint distance = position - (key_begin + i);
+            const float score = inkling2_resident_score(query, keys + offset, query_relative, relative_bias,
+                head_sink, channels, rel_channels, distance, relative_extent, lane);
+            if (lane == 0) cached_scores[i] = score;
+        }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -861,16 +882,15 @@ kernel void inkling2_resident_attention_split_parallel(
     // One lane per output channel, still accumulating in ascending key order.
     float context = 0.0f;
     float denominator = 0.0f;
-    for (uint i = 0; i < count; ++i) {
-        const uint key_position = key_begin + i;
-        const bool in_tile = key_position >= start;
-        const uint slot = sliding == 0 ? key_position
-            : wrap_mask ? key_position & (capacity - 1) : key_position % capacity;
-        const uint kv_row = in_tile ? key_position - start : slot;
-        device const float* value = (in_tile ? v_tile : v_cache) + (size_t)kv_row * kv_width + kv_head * channels;
-        const float weight = cached_scores[i];
-        if (group == 0) denominator += weight;
-        context += weight * value[channel];
+    for (uint i = 0; i < count;) {
+        const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
+        device const float* values = span.from_tile ? v_tile : v_cache;
+        size_t offset = (size_t)span.row * kv_width + head_offset + channel;
+        for (; i < span.end; ++i, offset += kv_width) {
+            const float weight = cached_scores[i];
+            if (group == 0) denominator += weight;
+            context += weight * values[offset];
+        }
     }
     const size_t partial_base = (query_head * partitions + partition) * (channels + 2);
     if (channel == 0) {

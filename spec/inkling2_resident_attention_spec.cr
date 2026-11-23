@@ -652,6 +652,51 @@ require "../src/ml/gguf/inkling2_resident_math"
         end
       end
 
+      it "preserves split-K attention output and KV after rewinding across a physical ring wrap" do
+        config = resident_test_config(sliding: true, n_head: 2_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 70_i32, max_seq: 153_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
+        projected = Array(ResidentProjectedRow).new(151) { |row| pattern[row % pattern.size] }
+        blocked = ML::GGUF::Inkling2ResidentAttention.new(config, true, 153_i32, rollback_rows: 4_i32)
+        serial = ML::GGUF::Inkling2ResidentAttention.new(config, true, 153_i32, rollback_rows: 4_i32)
+        begin
+          ML::Metal::PipelineCache.clear
+          # The 74-slot physical ring wraps at 148 during the four-row
+          # append. Keep rows 147 and 148, then replace the rejected suffix.
+          resident_run_tile(blocked, 0_i32, projected[0, 147], weights, config)
+          resident_run_tile(serial, 0_i32, projected[0, 147], weights, config)
+          block = resident_run_tile(blocked, 147_i32, projected[147, 4], weights, config, decode_block: true)
+          kept = resident_run_tile(serial, 147_i32, [projected[147]], weights, config)
+          kept.concat(resident_run_tile(serial, 148_i32, [projected[148]], weights, config))
+          resident_bits(block[0, kept.size]).should eq(resident_bits(kept))
+          blocked.rewind(149_i32)
+
+          # Replay starts just after the wrap, so the last partition spans
+          # both cache ranges and the new tile.
+          replay = pattern.first(4)
+          actual = resident_run_tile(blocked, 149_i32, replay, weights, config, decode_block: true)
+          expected = [] of Float32
+          replay.each_with_index do |row, offset|
+            expected.concat(resident_run_tile(serial, 149 + offset, [row], weights, config))
+          end
+          resident_bits(actual).should eq(resident_bits(expected))
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel").should be_true
+
+          {83_i32, 147_i32, 148_i32, 149_i32, 152_i32}.each do |position|
+            block_key, block_value, block_position = blocked.key_value_at(position, 153_i32)
+            serial_key, serial_value, serial_position = serial.key_value_at(position, 153_i32)
+            block_position.should eq(serial_position)
+            resident_bits(block_key).should eq(resident_bits(serial_key))
+            resident_bits(block_value).should eq(resident_bits(serial_value))
+          end
+        ensure
+          blocked.close
+          serial.close
+        end
+      end
+
       it "rewinds a speculative sliding block without losing the accepted branch across cache wrap" do
         config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
           head_dim: 1_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 23_i32)
