@@ -227,6 +227,15 @@ module ML::GGUF
     end
 
     private lib LibInkling2Attention
+      # Matches Inkling2PrefillOrderedParams in inkling2_prefill_ordered.metal.
+      struct PrefillOrderedParams
+        start : UInt32
+        rows : UInt32
+        query_heads : UInt32
+        kv_heads : UInt32
+        relative_extent : UInt32
+      end
+
       # Matches Inkling2PrepareQKVRParams in inkling2_resident_attention.metal.
       struct PrepareQKVRParams
         n_head : UInt32
@@ -248,6 +257,7 @@ module ML::GGUF
     # tiles. The caller owns submission, synchronization, and scratch lifetime.
     class Inkling2ResidentAttention
       SOURCE = Inkling2ResidentConvolution::SOURCE
+      private ORDERED_PREFILL_SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_prefill_ordered.metal") }}
       private MAX_GRID_ELEMENTS = 16_777_216_i32
       private INITIAL_CACHE_ROWS = 256_i32
       private SPLIT_KEY_THRESHOLD = 64_i32
@@ -263,14 +273,16 @@ module ML::GGUF
         Regular
         Scores
         SharedKV
+        Ordered
 
         def self.from_env : self
           case ENV["INKLING2_PREFILL_ATTENTION"]?
           when nil, "regular" then Regular
           when "scores"       then Scores
           when "shared_kv"    then SharedKV
+          when "ordered"      then Ordered
           else
-            raise ArgumentError.new("INKLING2_PREFILL_ATTENTION must be regular, scores, or shared_kv")
+            raise ArgumentError.new("INKLING2_PREFILL_ATTENTION must be regular, scores, shared_kv, or ordered")
           end
         end
       end
@@ -588,6 +600,16 @@ module ML::GGUF
         relative_extent : Int32,
         decode_block : Bool,
       ) : Nil
+        # Bound scratch to the research model's panel sizes. The packed
+        # kernel reads the unwrapped cache prefix and a vector-aligned gate.
+        if @prefill_mode.ordered? && !decode_block && (64..128).includes?(rows) &&
+           start + rows <= PREFILL_SCORE_LIMIT && (!@sliding || start + rows <= @config.sliding_window) &&
+           @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head <= 24 && @config.n_head_kv <= 8 &&
+           gate.offset % (4 * sizeof(Float32)) == 0
+          encode_prefill_ordered(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output, start, rows, relative_extent)
+          return
+        end
+
         key_count = @sliding ? Math.min(start + 1, @config.sliding_window) : start + 1
         split_begin = if decode_block
                         first_split_row(start, rows)
@@ -618,6 +640,84 @@ module ML::GGUF
             split_gate, split_sink, relative_bias, split_output, start, split_rows,
             row_offset, relative_extent)
         end
+      end
+
+      private def encode_prefill_ordered(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        rows : Int32,
+        relative_extent : Int32,
+      ) : Nil
+        mark = scratch.mark
+        keys = start + rows
+        heads = @config.n_head
+        kv_heads = @config.n_head_kv
+        kv_size = checked_elements(keys, @kv_width, "ordered prefill KV")
+        query_count = checked_elements(rows, heads, "ordered prefill queries")
+        packed_k = scratch.take(kv_size)
+        packed_v = scratch.take(kv_size)
+        weights = scratch.take(checked_elements(query_count, keys, "ordered prefill weights"))
+        sink_weights = scratch.take(query_count)
+
+        params = LibInkling2Attention::PrefillOrderedParams.new(
+          start: start.to_u32,
+          rows: rows.to_u32,
+          query_heads: heads.to_u32,
+          kv_heads: kv_heads.to_u32,
+          relative_extent: relative_extent.to_u32,
+        )
+        params_bytes = pointerof(params).as(Void*)
+        params_size = sizeof(LibInkling2Attention::PrefillOrderedParams)
+        query_groups = (rows + 3) // 4
+
+        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_pack"))
+        key_cache = Inkling2View.new(@k_cache.not_nil!)
+        value_cache = Inkling2View.new(@v_cache.not_nil!)
+        {k, v, key_cache, value_cache}.each_with_index do |view, index|
+          encoder.set_buffer(view.buffer, index, offset: view.offset)
+        end
+        encoder.set_buffer(packed_k.buffer, 4, ML::Metal::BufferAccess::Write, offset: packed_k.offset)
+        encoder.set_buffer(packed_v.buffer, 5, ML::Metal::BufferAccess::Write, offset: packed_v.offset)
+        encoder.set_bytes(params_bytes, params_size, 6)
+        encoder.dispatch_threadgroups({1, (keys + 3) // 4, kv_heads}, {32, 4, 1})
+
+        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_qk"))
+        {q, q_rel, relative_bias, sink, packed_k}.each_with_index do |view, index|
+          encoder.set_buffer(view.buffer, index, offset: view.offset)
+        end
+        encoder.set_buffer(weights.buffer, 5, ML::Metal::BufferAccess::Write, offset: weights.offset)
+        encoder.set_bytes(params_bytes, params_size, 6)
+        encoder.dispatch_threadgroups({(keys + 63) // 64, query_groups, heads}, {128, 1, 1})
+
+        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_weights"))
+        encoder.set_buffer(weights.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: weights.offset)
+        encoder.set_buffer(sink_weights.buffer, 1, ML::Metal::BufferAccess::Write, offset: sink_weights.offset)
+        encoder.set_bytes(params_bytes, params_size, 2)
+        encoder.set_threadgroup_memory(((keys + 4) // 4) * 16, 0)
+        encoder.dispatch({128, rows, heads}, {128, 1, 1})
+
+        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_pv"))
+        {packed_v, weights, sink_weights, gate}.each_with_index do |view, index|
+          encoder.set_buffer(view.buffer, index, offset: view.offset)
+        end
+        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(params_bytes, params_size, 5)
+        encoder.dispatch({32, query_groups, heads}, {32, 1, 1})
+      ensure
+        scratch.rewind(mark) if mark
+      end
+
+      private def ordered_prefill_pipeline(name : String) : ML::Metal::ComputePipeline
+        ML::Metal::PipelineCache.get_or_compile(name, ORDERED_PREFILL_SOURCE)
       end
 
       # A decode block can straddle the 64-visible-key boundary. Find its
@@ -662,7 +762,7 @@ module ML::GGUF
           score_slots = start + rows
           score_slots = Math.min(score_slots, @config.sliding_window) if @sliding
           if score_slots <= PREFILL_SCORE_LIMIT
-            if @prefill_mode.scores?
+            if @prefill_mode.scores? || @prefill_mode.ordered?
               name = "inkling2_resident_attention_prefill_scores"
               shared_floats = score_slots + 1
             elsif @config.n_head == 3 * @config.n_head_kv

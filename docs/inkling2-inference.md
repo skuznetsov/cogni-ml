@@ -110,11 +110,19 @@ kernel also requires three query heads per KV head. Other shapes and
 decode use the existing attention dispatch.
 
 The prefill kernels keep the zero-logit sink and the reference FP32
-accumulation order. Each mode adds one pipeline and sizes its threadgroup
-score storage at dispatch. On M2 Max with the research IQ4_NL GGUF and
-128-row tiles, `scores` had the best measured 1,022-token prefill.
-`shared_kv` uses more threadgroup storage and had the best measured
-188-token prefill. Both results use three loop passes.
+accumulation order. Both modes size their threadgroup score storage at
+dispatch. In the original M2 Max comparison with the research IQ4_NL
+GGUF, 128-row tiles and three loop passes, `scores` led at 1,022 tokens
+and `shared_kv` led at 188 tokens.
+
+Set `INKLING2_PREFILL_ATTENTION=ordered` to batch four adjacent queries
+per head with packed FP32 K and V. QK uses the same lane-local additions
+and SIMD reduction as `scores`. Softmax starts with the zero-logit sink
+and PV visits keys in ascending order for each query. The four compiled
+pipelines reuse GPU scratch across visits. This path handles tiles of
+64–128 rows in the first 1,024 positions with an unwrapped cache,
+a vector-aligned gate and up to 24 query heads and eight KV heads.
+When the batch is ineligible, the selector follows the `scores` path.
 
 The fixed-depth resident Metal engine also exposes
 `decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.
