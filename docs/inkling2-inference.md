@@ -81,6 +81,16 @@ Wider tiles grow the reusable scratch buffers on first use. Default tile
 promotion requires warmed wall time measurements under the same conditions
 at 3 and 10 passes.
 
+Set `INKLING2_MOE_PREFILL_ROUTES=32` to try two expert tile widths in the
+grouped path. The GPU router sends tiles with up to 16 routes to the M16
+GEMMs and denser tiles to the M32 GEMMs. It writes the dispatch sizes from
+the map counts. Both widths keep FP32 staging and accumulation. The mode
+adds one routing pipeline and four GEMM pipelines to the warmed cache.
+On an M2 Max with the research IQ4_NL GGUF at three passes, appending a
+512-token tile after a 510-token prefix improved from 225.0 to 232.5
+tokens/s in two quiet A/B pairs. Logits and KV matched bitwise.
+`INKLING2_MOE_PREFILL_ROUTES=16` is the default.
+
 For a single query with more than 64 visible keys, attention splits the
 history across four SIMD groups per head and combines their softmax
 partials before applying the output gate.
