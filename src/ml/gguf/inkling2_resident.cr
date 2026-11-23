@@ -700,9 +700,7 @@ module ML::GGUF
       k = distinct_inputs ? mixed.slice(tile.elements) : mixed
       v = distinct_inputs ? mixed.slice(2 * tile.elements) : mixed
       if controller && messages
-        q = control(tile, controller, 0, q, messages)
-        k = control(tile, controller, 1, k, messages.slice(tile.elements))
-        v = control(tile, controller, 2, v, messages.slice(2 * tile.elements))
+        q, k, v = control_attention(tile, controller, {q, k, v}, messages)
       end
       q_in = normalize(tile, q, layer.q_norm)
       if sliding && !messages
@@ -775,6 +773,39 @@ module ML::GGUF
       result
     end
 
+    private def control_attention(tile : Tile, controller : Inkling2LoopWeights,
+                                  inputs : {Inkling2View, Inkling2View, Inkling2View},
+                                  messages : Inkling2View) : {Inkling2View, Inkling2View, Inkling2View}
+      downs = {controller.down[0], controller.down[1], controller.down[2]}
+      unless tile.rows == 1 && Inkling2ResidentLinear.f32_triplet_supported?(downs)
+        return {
+          control(tile, controller, 0, inputs[0], messages),
+          control(tile, controller, 1, inputs[1], messages.slice(tile.elements)),
+          control(tile, controller, 2, inputs[2], messages.slice(2 * tile.elements)),
+        }
+      end
+
+      results = {tile.hidden, tile.hidden, tile.hidden}
+      mark = @scratch.mark
+      feature_dim = 2 * tile.elements
+      rank_dim = downs[0].out_dim
+      features = @scratch.take(3 * feature_dim)
+      ranks = @scratch.take(3 * rank_dim)
+      inputs.each_with_index do |input, index|
+        MathOps.rms_concat(tile.encoder, input, messages.slice(index * tile.elements),
+          features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
+      end
+      @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
+      apply_mark = @scratch.mark
+      inputs.each_with_index do |input, index|
+        apply_control(tile, controller, index, input, messages.slice(index * tile.elements),
+          ranks.slice(index * rank_dim), results[index])
+        @scratch.rewind(apply_mark)
+      end
+      @scratch.rewind(mark)
+      results
+    end
+
     private def control(tile : Tile, controller : Inkling2LoopWeights, index : Int32,
                         input : Inkling2View, message : Inkling2View) : Inkling2View
       result = tile.hidden
@@ -782,11 +813,17 @@ module ML::GGUF
       features = @scratch.take(2 * tile.elements)
       MathOps.rms_concat(tile.encoder, input, message, features, tile.width, tile.rows, DEPTH_EPS)
       rank = project(tile, controller.down[index], features)
+      apply_control(tile, controller, index, input, message, rank, result)
+      @scratch.rewind(mark)
+      result
+    end
+
+    private def apply_control(tile : Tile, controller : Inkling2LoopWeights, index : Int32,
+                              input : Inkling2View, message : Inkling2View,
+                              rank : Inkling2View, result : Inkling2View) : Nil
       gain = project(tile, controller.gain[index], rank)
       forget = project(tile, controller.forget[index], rank)
       MathOps.controls(tile.encoder, input, message, gain, forget, result, tile.elements)
-      @scratch.rewind(mark)
-      result
     end
   end
 end

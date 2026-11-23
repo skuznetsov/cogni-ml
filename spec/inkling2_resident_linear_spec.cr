@@ -69,6 +69,14 @@ require "../src/ml/gguf/inkling2_engine"
         offsets["f32_projection"] = io.pos
         io.write(f32_bytes(f32_projection))
 
+        3.times do |matrix|
+          offsets["f32_triplet_#{matrix}"] = io.pos
+          values = Array(Float32).new(37 * 7) do |index|
+            ((index * 13 + matrix * 19) % 41 - 20).to_f32 * 0.017_f32
+          end
+          io.write(f32_bytes(values))
+        end
+
         q8_projection = q8_bytes(7, 32)
         offsets["q8_projection"] = io.pos
         io.write(q8_projection)
@@ -203,6 +211,49 @@ require "../src/ml/gguf/inkling2_engine"
   end
 
   describe ML::GGUF::Inkling2ResidentLinear do
+    it "shares a dispatch across three independent F32 projections" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      buffers = [] of ML::MetalBuffer
+      begin
+        in_dim = 37
+        out_dim = 7
+        weights = {0, 1, 2}.map do |index|
+          raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["f32_triplet_#{index}"],
+            in_dim * out_dim * sizeof(Float32))
+          ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::F32, out_dim, in_dim)
+        end
+        # Distinct inputs and nonzero buffer offsets catch cross-talk and writes
+        # outside a projection. Thirty-seven columns span two lane iterations.
+        values = Array(Float32).new(3 * in_dim) { |index| ((index * 7) % 31 - 15).to_f32 * 0.019_f32 }
+        input = Inkling2LinearSpecSupport.float_view([123_f32] + values, buffers).slice(1)
+        reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(3 * out_dim, 0_f32), buffers)
+        guarded = Inkling2LinearSpecSupport.float_view(Array(Float32).new(3 * out_dim + 2, 123_f32), buffers)
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        weights.each_with_index do |weight, index|
+          linear.project(encoder, weight, input.slice(index * in_dim), reference.slice(index * out_dim), 1)
+        end
+        linear.project_f32_triplet(encoder, weights, input, guarded.slice(1))
+        encoder.end_encoding
+        command.commit_and_wait
+
+        data = Inkling2LinearSpecSupport.read(guarded, 3 * out_dim + 2)
+        data.first.should eq(123_f32)
+        data.last.should eq(123_f32)
+        bits = Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(reference, 3 * out_dim))
+        Inkling2LinearSpecSupport.float_bits(data[1, 3 * out_dim]).should eq(bits)
+      ensure
+        buffers.each(&.release)
+        linear.close
+        gguf.close
+        File.delete?(fixture.path)
+      end
+    end
+
     it "encodes F32 and Q8_0 single-row and batched projections with batched MoE in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 
