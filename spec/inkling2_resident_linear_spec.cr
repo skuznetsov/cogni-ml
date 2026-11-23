@@ -210,6 +210,12 @@ require "../src/ml/gguf/inkling2_engine"
     end
   end
 
+  class Inkling2UnfusedResidentLinearSpec < ML::GGUF::Inkling2ResidentLinear
+    private def decode_fused_iq4_gate_up?(_decode_block : Bool) : Bool
+      false
+    end
+  end
+
   describe ML::GGUF::Inkling2ResidentLinear do
     it "shares a dispatch across three independent F32 projections" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
@@ -610,6 +616,110 @@ require "../src/ml/gguf/inkling2_engine"
         linear.close
         linear_indirect.close
         linear_m32.close
+        gguf.close
+        File.delete(fixture.path) if File.exists?(fixture.path)
+      end
+    end
+
+    it "keeps fused IQ4 SiTU MoE bit-identical to the unfused scalar and decode paths" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      ML::Metal::PipelineCache.clear
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      fused = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      unfused = Inkling2UnfusedResidentLinearSpec.new(gguf)
+      fused_scratch = ML::GGUF::Inkling2ResidentScratch.new
+      unfused_scratch = ML::GGUF::Inkling2ResidentScratch.new
+      buffers = [] of ML::MetalBuffer
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      encoding_ended = false
+
+      begin
+        expert_width = Inkling2LinearSpecSupport::EXPERT_WIDTH
+        router = ML::GGUF::QuantWeight.new(
+          Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["router"], 3 * 32 * sizeof(Float32)),
+          ML::GGUF::TensorType::F32, 3_i32, 32_i32,
+        )
+        gate_up = ML::GGUF::Inkling2ExpertWeights.new(
+          Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_gate_up"], 3 * 2 * expert_width * 18),
+          ML::GGUF::TensorType::IQ4_NL, 32_i32, 2 * expert_width, 3_i32,
+        )
+        down = ML::GGUF::Inkling2ExpertWeights.new(
+          Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["iq4_down"], 3 * expert_width * 18),
+          ML::GGUF::TensorType::IQ4_NL, expert_width, 32_i32, 3_i32,
+        )
+        attention = ML::GGUF::Inkling2AttentionWeights.new(
+          router, router, router, router, router, router, router,
+          [] of Float32, [] of Float32, [] of Float32, [] of Float32, [] of Float32, [] of Float32,
+          nil, nil,
+        )
+        iq4_layer = ML::GGUF::Inkling2LayerWeights.new(
+          attention, [] of Float32, [] of Float32, [] of Float32, nil, [] of Float32, [] of Float32,
+          [] of Float32, router, [0_f32, 0_f32, -0.125_f32], gate_up, down, nil,
+        )
+        config = ML::GGUF::Inkling2Config.new(
+          1_i32, 32_i32, 2_i32, 1_i32, 2_i32, 2_i32, 2_i32, 16_i32, 4_i32, 2_i32,
+          1_f32, 1_f32, 1_f32, 1e-5_f32, 3_i32, 2_i32, expert_width, 1.25_f32, 4_f32,
+          25_f32, 1_i32, 8_i32, 8_i32, 32_i32, 0_i32, 1_i32, 3_i32, 2_i32,
+          30_f32, false, [true],
+        )
+        bias = Inkling2LinearSpecSupport.float_view(iq4_layer.router_bias.not_nil!, buffers)
+
+        # These rows cover repeated expert use and different expert pairs in
+        # the same block, including both route ranks for the grouped kernel.
+        decode_input = Array(Float32).new(4 * 32) do |index|
+          row, column = index.divmod(32)
+          case column
+          when 0 then row.even? ? 0.25_f32 : -0.25_f32
+          when 1 then row < 2 ? 0_f32 : -0.25_f32
+          else        ((row * 7 + column) % 13 - 6).to_f32 * 0.01_f32
+          end
+        end
+        Inkling2LinearSpecSupport.moe_route_counts(iq4_layer, config, decode_input, 4_i32).should eq([3, 3, 2])
+
+        scalar_input = Inkling2LinearSpecSupport.float_view(decode_input[0, 32].to_a, buffers)
+        scalar_unfused = unfused.moe(encoder, unfused_scratch, iq4_layer, config, scalar_input, bias, 1_i32)
+        scalar_unfused_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(32, 0_f32), buffers)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, scalar_unfused, scalar_unfused_readback, 32)
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_matvec_iq4_nl").should be_true
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_matvec_situ_iq4_nl").should be_false
+
+        scalar_fused = fused.moe(encoder, fused_scratch, iq4_layer, config, scalar_input, bias, 1_i32)
+        scalar_fused_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(32, 0_f32), buffers)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, scalar_fused, scalar_fused_readback, 32)
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_matvec_situ_iq4_nl").should be_true
+
+        decode_view = Inkling2LinearSpecSupport.float_view(decode_input, buffers)
+        decode_unfused = unfused.moe(encoder, unfused_scratch, iq4_layer, config, decode_view, bias, 4_i32,
+          decode_block: true)
+        decode_unfused_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, decode_unfused, decode_unfused_readback, 4 * 32)
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_decode_grouped_iq4_nl").should be_true
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_decode_grouped_situ_iq4_nl").should be_false
+
+        decode_fused = fused.moe(encoder, fused_scratch, iq4_layer, config, decode_view, bias, 4_i32,
+          decode_block: true)
+        decode_fused_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 32, 0_f32), buffers)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, decode_fused, decode_fused_readback, 4 * 32)
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_decode_grouped_situ_iq4_nl").should be_true
+
+        encoder.end_encoding
+        encoding_ended = true
+        command.commit_and_wait
+
+        Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(scalar_fused_readback, 32)).should eq(
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(scalar_unfused_readback, 32)))
+        Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(decode_fused_readback, 4 * 32)).should eq(
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(decode_unfused_readback, 4 * 32)))
+      ensure
+        encoder.end_encoding unless encoding_ended
+        buffers.each(&.release)
+        fused_scratch.close
+        unfused_scratch.close
+        fused.close
+        unfused.close
         gguf.close
         File.delete(fixture.path) if File.exists?(fixture.path)
       end

@@ -296,18 +296,25 @@ module ML::GGUF
                        tile_routes, expert_output_tiles(layer.gate_up), expert_output_tiles(layer.down),
                        indirect: @prefill_indirect_dispatch && !decode_block)
                    end
-        if decode_block && grouping
-          gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
-          encode_grouped_experts_decode(encoder, layer.gate_up, input, gate_up, grouping, config.n_expert_used)
-          encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
-            config.situ_beta, config.situ_linear_beta)
-        elsif grouping
+        if grouping && !decode_block
           encode_grouped_experts(encoder, layer.gate_up, input, gated, grouping, config.n_expert_used,
             situ: {config.situ_beta, config.situ_linear_beta})
+        elsif (rows == 1 || decode_block) && layer.gate_up.type.iq4_nl? && decode_fused_iq4_gate_up?(decode_block)
+          situ = {config.situ_beta, config.situ_linear_beta}
+          if grouping
+            encode_grouped_experts_decode(encoder, layer.gate_up, input, gated, grouping, config.n_expert_used, situ: situ)
+          else
+            encode_experts_decode_situ(encoder, layer.gate_up, input, ids, gated,
+              config.n_expert_used, routed_rows.to_i32, situ)
+          end
         else
           gate_up = scratch.take(checked_elements(routed_rows.to_i32, layer.gate_up.out_dim, "expert gate/up"))
-          encode_experts(encoder, layer.gate_up, input, ids, gate_up,
-            config.n_expert_used, routed_rows.to_i32, grouping, input_is_routed: false)
+          if grouping
+            encode_grouped_experts_decode(encoder, layer.gate_up, input, gate_up, grouping, config.n_expert_used)
+          else
+            encode_experts(encoder, layer.gate_up, input, ids, gate_up,
+              config.n_expert_used, routed_rows.to_i32, nil, input_is_routed: false)
+          end
           encode_situ(encoder, gate_up, gated, config.expert_dim, routed_rows.to_i32,
             config.situ_beta, config.situ_linear_beta)
         end
@@ -430,6 +437,38 @@ module ML::GGUF
         end
       end
 
+      private def decode_fused_iq4_gate_up?(_decode_block : Bool) : Bool
+        true
+      end
+
+      private def encode_experts_decode_situ(encoder : ML::Metal::ComputeEncoder,
+                                             weight : Inkling2ExpertWeights,
+                                             input : Inkling2View, ids : Inkling2View,
+                                             output : Inkling2View, top_k : Int32,
+                                             routed_rows : Int32, situ : {Float32, Float32}) : Nil
+        width = weight.out_dim // 2
+        name = "inkling2_resident_moe_matvec_situ_iq4_nl"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, DECODE_EXPERT_SOURCE))
+        encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(ids.buffer, 2, offset: ids.offset)
+        encoder.set_buffer(output.buffer, 3, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_value(weight.in_dim.to_u32, 4)
+        encoder.set_value(width.to_u32, 5)
+        encoder.set_value(weight.expert_bytes.to_u32, 6)
+        encoder.set_value(top_k.to_u32, 7)
+        encoder.set_value(situ[0], 9)
+        encoder.set_value(situ[1], 10)
+
+        routed_base = 0_i32
+        while routed_base < routed_rows
+          count = Math.min(MAX_ROWS_PER_GRID, routed_rows - routed_base)
+          encoder.set_value(routed_base.to_u32, 8)
+          encoder.dispatch_threadgroups({(width - 1) // 2 + 1, count, 1}, {64, 1, 1})
+          routed_base += count
+        end
+      end
+
       private def grouped_experts?(rows : Int32, n_experts : Int32) : Bool
         {% if flag?(:aarch64) %}
           MIN_GROUPED_ROWS <= rows <= MAX_GROUPED_ROWS && n_experts <= 256
@@ -539,9 +578,16 @@ module ML::GGUF
                                                 weight : Inkling2ExpertWeights,
                                                 input : Inkling2View, output : Inkling2View,
                                                 grouping : ExpertGrouping,
-                                                input_route_divisor : Int32) : Nil
-        name = weight.type.iq4_nl? ? "inkling2_resident_moe_decode_grouped_iq4_nl" : "inkling2_resident_moe_decode_grouped_q8_0"
-        threads = weight.type.iq4_nl? ? 64 : 128
+                                                input_route_divisor : Int32,
+                                                *, situ : {Float32, Float32}? = nil) : Nil
+        name, threads, output_tile = if situ
+                                       {"inkling2_resident_moe_decode_grouped_situ_iq4_nl", 64, 2}
+                                     elsif weight.type.iq4_nl?
+                                       {"inkling2_resident_moe_decode_grouped_iq4_nl", 64, 4}
+                                     else
+                                       {"inkling2_resident_moe_decode_grouped_q8_0", 128, 4}
+                                     end
+        output_dim = situ ? weight.out_dim // 2 : weight.out_dim
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, DECODE_EXPERT_SOURCE))
         encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
@@ -549,10 +595,14 @@ module ML::GGUF
         encoder.set_buffer(grouping.tiles.buffer, 3, offset: grouping.tiles.offset)
         encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
         encoder.set_value(weight.in_dim.to_u32, 5)
-        encoder.set_value(weight.out_dim.to_u32, 6)
+        encoder.set_value(output_dim.to_u32, 6)
         encoder.set_value(weight.expert_bytes.to_u32, 7)
         encoder.set_value(input_route_divisor.to_u32, 8)
-        encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, grouping.max_tiles, 1}, {threads, 1, 1})
+        if situ
+          encoder.set_value(situ[0], 9)
+          encoder.set_value(situ[1], 10)
+        end
+        encoder.dispatch_threadgroups({(output_dim - 1) // output_tile + 1, grouping.max_tiles, 1}, {threads, 1, 1})
       end
 
       private def encode_situ(encoder : ML::Metal::ComputeEncoder,
