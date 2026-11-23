@@ -221,9 +221,49 @@ struct inkling2_q8_projection {
     ulong end_group;
 };
 
+inline inkling2_q8_projection inkling2_q8_group_descriptor(
+    constant inkling2_q8_projection* projections, uint group, thread uint& first_group)
+{
+    first_group = 0;
+    uint projection = 0;
+    while (group >= projections[projection].end_group) {
+        first_group = uint(projections[projection].end_group);
+        ++projection;
+    }
+    return projections[projection];
+}
+
 // Each threadgroup owns four output channels of one independent projection.
-// Scalar and batch accumulators follow the matching Q8_0 kernels above.
 kernel void inkling2_resident_q8_projection_group(
+    device const uchar* model                          [[buffer(0)]],
+    device const float* input                          [[buffer(1)]],
+    device       float* output                         [[buffer(2)]],
+    constant inkling2_q8_projection* projections       [[buffer(3)]],
+    constant uint& in_dim                              [[buffer(4)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    uint first_group;
+    const inkling2_q8_projection descriptor = inkling2_q8_group_descriptor(projections, group.x, first_group);
+    const uint row = (group.x - first_group) * INKLING2_RESIDENT_TILE + simd;
+    const uint nb = in_dim / Q8_0_QK;
+    device const block_q8_0_56* weights = (device const block_q8_0_56*)(model + descriptor.weight_offset)
+        + (size_t)row * nb;
+    device const float* x = input + descriptor.input_offset;
+    device float* y = output + descriptor.output_offset;
+    float sum = 0.0f;
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float value = x[ib * Q8_0_QK + lane];
+        sum += (float)weights[ib].d * value * (float)weights[ib].qs[lane];
+    }
+    const float total = simd_sum(sum);
+    if (lane == 0) y[row] = total;
+}
+
+// Two simdgroups each compute a pair of output channels for up to four tokens.
+// The pair shares activation loads and retains a separate reduction per channel.
+kernel void inkling2_resident_q8_projection_group_batch(
     device const uchar* model                          [[buffer(0)]],
     device const float* input                          [[buffer(1)]],
     device       float* output                         [[buffer(2)]],
@@ -234,45 +274,41 @@ kernel void inkling2_resident_q8_projection_group(
     ushort lane [[thread_index_in_simdgroup]],
     ushort simd [[simdgroup_index_in_threadgroup]])
 {
-    uint first_group = 0;
-    uint projection = 0;
-    while (group.x >= projections[projection].end_group) {
-        first_group = uint(projections[projection].end_group);
-        ++projection;
-    }
-    const inkling2_q8_projection descriptor = projections[projection];
+    uint first_group;
+    const inkling2_q8_projection descriptor = inkling2_q8_group_descriptor(projections, group.x, first_group);
     const uint out_dim = (uint(descriptor.end_group) - first_group) * INKLING2_RESIDENT_TILE;
-    const uint row = (group.x - first_group) * INKLING2_RESIDENT_TILE + simd;
+    const uint row = (group.x - first_group) * INKLING2_RESIDENT_TILE + 2 * (uint)simd;
     const uint nb = in_dim / Q8_0_QK;
-    device const block_q8_0_56* weights = (device const block_q8_0_56*)(model + descriptor.weight_offset)
+    device const block_q8_0_56* weights0 = (device const block_q8_0_56*)(model + descriptor.weight_offset)
         + (size_t)row * nb;
+    device const block_q8_0_56* weights1 = weights0 + nb;
     device const float* x = input + descriptor.input_offset;
     device float* y = output + descriptor.output_offset;
-    if (rows == 1) {
-        float sum = 0.0f;
-        for (uint ib = 0; ib < nb; ++ib) {
-            const float value = x[ib * Q8_0_QK + lane];
-            sum += (float)weights[ib].d * value * (float)weights[ib].qs[lane];
-        }
-        const float total = simd_sum(sum);
-        if (lane == 0) y[row] = total;
-    } else {
-        float4 sums = float4(0.0f);
-        for (uint ib = 0; ib < nb; ++ib) {
-            const float scale = (float)weights[ib].d;
-            const float quant = (float)weights[ib].qs[lane];
-            for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-                if (b < rows) {
-                    const float value = x[(size_t)b * in_dim + ib * Q8_0_QK + lane];
-                    sums[b] += scale * value * quant;
-                }
+    float4 sums0 = float4(0.0f);
+    float4 sums1 = float4(0.0f);
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float scale0 = (float)weights0[ib].d;
+        const float scale1 = (float)weights1[ib].d;
+        const float quant0 = (float)weights0[ib].qs[lane];
+        const float quant1 = (float)weights1[ib].qs[lane];
+        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
+            if (b < rows) {
+                const float value = x[(size_t)b * in_dim + ib * Q8_0_QK + lane];
+                sums0[b] += scale0 * value * quant0;
+                sums1[b] += scale1 * value * quant1;
             }
         }
-        const float4 totals = float4(simd_sum(sums.x), simd_sum(sums.y),
-                                     simd_sum(sums.z), simd_sum(sums.w));
-        if (lane == 0) {
-            for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-                if (b < rows) y[(size_t)b * out_dim + row] = totals[b];
+    }
+    const float4 totals0 = float4(simd_sum(sums0.x), simd_sum(sums0.y),
+                                  simd_sum(sums0.z), simd_sum(sums0.w));
+    const float4 totals1 = float4(simd_sum(sums1.x), simd_sum(sums1.y),
+                                  simd_sum(sums1.z), simd_sum(sums1.w));
+    if (lane == 0) {
+        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
+            if (b < rows) {
+                const size_t index = (size_t)b * out_dim + row;
+                y[index] = totals0[b];
+                y[index + 1] = totals1[b];
             }
         }
     }

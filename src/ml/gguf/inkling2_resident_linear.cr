@@ -174,15 +174,16 @@ module ML::GGUF
         end
         return false if groups > Int32::MAX
 
-        name = "inkling2_resident_q8_projection_group"
+        batched = rows > 1
+        name = batched ? "inkling2_resident_q8_projection_group_batch" : "inkling2_resident_q8_projection_group"
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
         encoder.set_buffer(@model, 0)
         encoder.set_buffer(input_buffer, 1)
         encoder.set_buffer(output_buffer, 2, ML::Metal::BufferAccess::Write)
         encoder.set_bytes(descriptors.to_unsafe.as(Void*), count * sizeof(StaticArray(UInt64, 4)), 3)
         encoder.set_value(first.in_dim.to_u32, 4)
-        encoder.set_value(rows.to_u32, 5)
-        encoder.dispatch_threadgroups({groups.to_i32, 1, 1}, {128, 1, 1})
+        encoder.set_value(rows.to_u32, 5) if batched
+        encoder.dispatch_threadgroups({groups.to_i32, 1, 1}, {batched ? 64 : 128, 1, 1})
         true
       end
 

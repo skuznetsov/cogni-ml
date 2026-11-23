@@ -274,7 +274,7 @@ require "../src/ml/gguf/inkling2_engine"
         second = ML::GGUF::QuantWeight.new(second_raw, ML::GGUF::TensorType::Q8_0, 8, 32)
         unaligned = ML::GGUF::QuantWeight.new(first_raw, ML::GGUF::TensorType::Q8_0, 7, 32)
 
-        {1, 4}.each do |rows|
+        {1, 2, 3, 4}.each do |rows|
           values = Array(Float32).new(2 * rows * 32 + 1) { |index| ((index * 7) % 31 - 15).to_f32 * 0.019_f32 }
           input = Inkling2LinearSpecSupport.float_view(values, buffers)
           inputs = {input.slice(1), input, input.slice(1 + rows * 32)}
