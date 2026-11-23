@@ -689,13 +689,19 @@ module ML::GGUF
         encoder.set_bytes(params_bytes, params_size, 6)
         encoder.dispatch_threadgroups({1, (keys + 3) // 4, kv_heads}, {32, 4, 1})
 
-        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_qk"))
+        grouped_qk = heads == 3 * kv_heads
+        qk_pipeline = grouped_qk ? "inkling2_prefill_ordered_qk_gqa3" : "inkling2_prefill_ordered_qk"
+        encoder.set_pipeline(ordered_prefill_pipeline(qk_pipeline))
         {q, q_rel, relative_bias, sink, packed_k}.each_with_index do |view, index|
           encoder.set_buffer(view.buffer, index, offset: view.offset)
         end
         encoder.set_buffer(scores.buffer, 5, ML::Metal::BufferAccess::Write, offset: scores.offset)
         encoder.set_bytes(params_bytes, params_size, 6)
-        encoder.dispatch_threadgroups({(keys + 63) // 64, query_groups, heads}, {128, 1, 1})
+        if grouped_qk
+          encoder.dispatch_threadgroups({(keys + 31) // 32, (rows + 1) // 2, kv_heads}, {64, 1, 1})
+        else
+          encoder.dispatch_threadgroups({(keys + 63) // 64, query_groups, heads}, {128, 1, 1})
+        end
 
         encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_softmax_pv"))
         {packed_v, scores, gate}.each_with_index do |view, index|

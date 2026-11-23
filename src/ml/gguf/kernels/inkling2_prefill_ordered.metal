@@ -6,6 +6,10 @@ constant uint ordered_key_tile = 64;
 constant uint ordered_qk_simdgroups = 4; // 128 threads per QK threadgroup.
 constant uint ordered_channels = 128;
 constant uint ordered_pv_stripe = 64;
+constant uint gqa_heads = 3;
+constant uint gqa_rows = 2;
+constant uint gqa_key_tile = 32;
+constant uint gqa_simdgroups = 2;
 
 struct Inkling2PrefillOrderedParams {
     uint start;
@@ -133,6 +137,105 @@ kernel void inkling2_prefill_ordered_qk(
             }
             if (lane == 0) {
                 scores[(head * p.rows + row + i) * keys + key] = score - sinks[i];
+            }
+        }
+    }
+}
+
+static inline float ordered_qk_broadcast_relative(float q, float bias, ushort lane) {
+    float partial = 0.0f;
+    if (lane < 16) partial += q * bias;
+    return simd_sum(partial);
+}
+
+kernel void inkling2_prefill_ordered_qk_gqa3(
+    device const float* q                [[buffer(0)]],
+    device const float* q_rel            [[buffer(1)]],
+    device const float* relative_bias    [[buffer(2)]],
+    device const float* sink             [[buffer(3)]],
+    device const float4* packed_k        [[buffer(4)]],
+    device       float* scores           [[buffer(5)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(6)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort simd [[simdgroup_index_in_threadgroup]],
+    ushort lane [[thread_index_in_simdgroup]])
+{
+    const uint keys = p.start + p.rows;
+    const uint row = group.y * gqa_rows;
+    const uint kv_head = group.z;
+    const uint first_head = kv_head * gqa_heads;
+    const uint begin = group.x * gqa_key_tile;
+    const uint end = min(begin + gqa_key_tile, p.start + min(p.rows, row + gqa_rows));
+    if (begin >= end) return;
+
+    // A SIMD group loads K once and scores two rows for all three Q heads
+    // in the KV group. Reuse the lane's relative-bias value across heads too.
+    float4 query[gqa_rows][gqa_heads];
+    float relative[gqa_rows][gqa_heads];
+    float sinks[gqa_rows][gqa_heads];
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < gqa_rows; ++i) {
+        #pragma clang loop unroll(full)
+        for (uint h = 0; h < gqa_heads; ++h) {
+            const uint src = min(row + i, p.rows - 1) * p.query_heads + first_head + h;
+            device const float* q_lane = q + src * ordered_channels + lane;
+            query[i][h] = float4(q_lane[0], q_lane[32], q_lane[64], q_lane[96]);
+            relative[i][h] = lane < 16 ? q_rel[src * 16 + lane] : 0.0f;
+            sinks[i][h] = sink[src];
+        }
+    }
+
+    const uint first_position = p.start + row;
+    // Full causal tiles overlap two independent K loads. The edge path
+    // below only writes visible scores and preserves the conditional bias.
+    if (p.rows - row >= gqa_rows &&
+        begin + gqa_key_tile - 1 <= first_position &&
+        first_position + gqa_rows - 1 - begin < p.relative_extent) {
+        for (uint offset = 0; offset < gqa_key_tile; offset += 2 * gqa_simdgroups) {
+            const uint key0 = begin + offset + simd;
+            device const float4* key_lane = packed_k + (kv_head * keys + key0) * 32 + lane;
+            const float4 k0 = key_lane[0];
+            const uint distance0 = first_position - key0;
+            const uint key1 = key0 + gqa_simdgroups;
+            const float4 k1 = key_lane[gqa_simdgroups * 32];
+            const uint distance1 = distance0 - gqa_simdgroups;
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < gqa_rows; ++i) {
+                const float bias0 = lane < 16 ? relative_bias[(distance0 + i) * 16 + lane] : 0.0f;
+                const float bias1 = lane < 16 ? relative_bias[(distance1 + i) * 16 + lane] : 0.0f;
+                #pragma clang loop unroll(full)
+                for (uint h = 0; h < gqa_heads; ++h) {
+                    float score0 = ordered_qk_dot(query[i][h], k0);
+                    float score1 = ordered_qk_dot(query[i][h], k1);
+                    score0 += ordered_qk_broadcast_relative(relative[i][h], bias0, lane);
+                    score1 += ordered_qk_broadcast_relative(relative[i][h], bias1, lane);
+                    if (lane == 0) {
+                        device float* line = scores + ((first_head + h) * p.rows + row + i) * keys;
+                        line[key0] = score0 - sinks[i][h];
+                        line[key1] = score1 - sinks[i][h];
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    for (uint key = begin + simd; key < end; key += gqa_simdgroups) {
+        const float4 k = packed_k[(kv_head * keys + key) * 32 + lane];
+        #pragma clang loop unroll(full)
+        for (uint i = 0; i < gqa_rows; ++i) {
+            const uint position = first_position + i;
+            if (row + i >= p.rows || key > position) continue;
+            const uint distance = position - key;
+            const bool has_bias = distance < p.relative_extent;
+            const float bias = has_bias && lane < 16 ? relative_bias[distance * 16 + lane] : 0.0f;
+            #pragma clang loop unroll(full)
+            for (uint h = 0; h < gqa_heads; ++h) {
+                float score = ordered_qk_dot(query[i][h], k);
+                if (has_bias) score += ordered_qk_broadcast_relative(relative[i][h], bias, lane);
+                if (lane == 0) {
+                    scores[((first_head + h) * p.rows + row + i) * keys + key] = score - sinks[i][h];
+                }
             }
         }
     }
