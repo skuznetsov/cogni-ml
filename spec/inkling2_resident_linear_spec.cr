@@ -254,6 +254,51 @@ require "../src/ml/gguf/inkling2_engine"
       end
     end
 
+    it "keeps separate Q8_0 reductions and output ranges in a projection group" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      buffers = [] of ML::MetalBuffer
+      begin
+        first_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_projection"], 7 * 34)
+        second_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["gate_up"], 8 * 34)
+        first = ML::GGUF::QuantWeight.new(first_raw[0, 4 * 34], ML::GGUF::TensorType::Q8_0, 4, 32)
+        second = ML::GGUF::QuantWeight.new(second_raw, ML::GGUF::TensorType::Q8_0, 8, 32)
+        unaligned = ML::GGUF::QuantWeight.new(first_raw, ML::GGUF::TensorType::Q8_0, 7, 32)
+
+        {1, 4}.each do |rows|
+          values = Array(Float32).new(2 * rows * 32 + 1) { |index| ((index * 7) % 31 - 15).to_f32 * 0.019_f32 }
+          input = Inkling2LinearSpecSupport.float_view(values, buffers)
+          inputs = {input.slice(1), input, input.slice(1 + rows * 32)}
+          reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(12 * rows, 0_f32), buffers)
+          guarded = Inkling2LinearSpecSupport.float_view(Array(Float32).new(12 * rows + 3, 123_f32), buffers)
+          outputs = {guarded.slice(1), nil, guarded.slice(2 + 4 * rows)}
+
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          linear.project(encoder, first, inputs[0], reference, rows)
+          linear.project(encoder, second, inputs[2], reference.slice(4 * rows), rows)
+          linear.project_q8_group(encoder, {unaligned, nil, second}, inputs, outputs, rows).should be_false
+          linear.project_q8_group(encoder, {first, nil, second}, inputs, outputs, rows).should be_true
+          encoder.end_encoding
+          command.commit_and_wait
+
+          data = Inkling2LinearSpecSupport.read(guarded, 12 * rows + 3)
+          {data.first, data[1 + 4 * rows], data.last}.should eq({123_f32, 123_f32, 123_f32})
+          actual = data[1, 4 * rows] + data[2 + 4 * rows, 8 * rows]
+          expected = Inkling2LinearSpecSupport.read(reference, 12 * rows)
+          Inkling2LinearSpecSupport.float_bits(actual).should eq(Inkling2LinearSpecSupport.float_bits(expected))
+        end
+      ensure
+        buffers.each(&.release)
+        linear.close
+        gguf.close
+        File.delete?(fixture.path)
+      end
+    end
+
     it "encodes F32 and Q8_0 single-row and batched projections with batched MoE in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

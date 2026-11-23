@@ -735,19 +735,30 @@ module ML::GGUF
 
     private def attend(tile : Tile, weight : Inkling2AttentionWeights, visit : Visit,
                        q_in : Inkling2View, k_in : Inkling2View, v_in : Inkling2View) : Inkling2View
-      q = project(tile, weight.q, q_in)
-      k = project(tile, weight.k, k_in)
-      v = project(tile, weight.v, v_in)
-      q_rel = project(tile, weight.rel_proj, q_in)
-      gate = project(tile, weight.gate, q_in)
-      sink = project(tile, weight.sink, q_in)
-      dynamic_k = weight.k_conv_proj.try { |matrix| project(tile, matrix, k_in) }
-      dynamic_v = weight.v_conv_proj.try { |matrix| project(tile, matrix, v_in) }
-      context = visit.attention.encode(tile.encoder, @scratch, tile.start, tile.rows, q, k, v, q_rel, gate, sink,
+      matrices = {weight.q, weight.k, weight.v, weight.rel_proj, weight.gate, weight.sink, weight.k_conv_proj, weight.v_conv_proj}
+      inputs = {q_in, k_in, v_in, q_in, q_in, q_in, k_in, v_in}
+      outputs = matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
+      unless (tile.rows == 1 || tile.decode_block?) && decode_grouped_attention_projections? &&
+             @linear.project_q8_group(tile.encoder, matrices, inputs, outputs, tile.rows)
+        matrices.each_with_index do |matrix, index|
+          if matrix
+            @linear.project(tile.encoder, matrix, inputs[index], outputs[index].not_nil!, tile.rows,
+              decode_block: tile.decode_block?)
+          end
+        end
+      end
+      q, k, v, q_rel, gate, sink, dynamic_k, dynamic_v = outputs
+      context = visit.attention.encode(tile.encoder, @scratch, tile.start, tile.rows,
+        q.not_nil!, k.not_nil!, v.not_nil!, q_rel.not_nil!, gate.not_nil!, sink.not_nil!,
         constant(weight.q_clip), constant(weight.rel_clip), constant(weight.rel_bias),
         constant(weight.k_conv), constant(weight.v_conv), dynamic_k, dynamic_v, decode_block: tile.decode_block?)
       projected = project(tile, weight.output, context)
       visit.post_conv.encode(tile.encoder, @scratch, tile.start, tile.rows, projected, constant(weight.post_conv))
+    end
+
+    # Override in a same-binary comparison with individual projection dispatches.
+    private def decode_grouped_attention_projections? : Bool
+      true
     end
 
     private def mix(tile : Tile, input : Inkling2View, queries : Array(Float32), count : Int32) : Inkling2View

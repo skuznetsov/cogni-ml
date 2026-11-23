@@ -146,6 +146,46 @@ module ML::GGUF
         end
       end
 
+      # Submit independent Q8_0 projections sharing input and output arenas in
+      # one dispatch. The caller allocates a disjoint output for each matrix.
+      def project_q8_group(encoder : ML::Metal::ComputeEncoder, weights : Tuple,
+                           inputs : Tuple, outputs : Tuple, rows : Int32) : Bool
+        ensure_open!
+        return false unless rows.in?(1..MAX_DECODE_BLOCK_ROWS) && weights.size <= 8
+        first = weights[0].not_nil!
+        input_buffer = inputs[0].buffer
+        output_buffer = outputs[0].not_nil!.buffer
+        descriptors = StaticArray(StaticArray(UInt64, 4), 8).new(StaticArray[0_u64, 0_u64, 0_u64, 0_u64])
+        groups = 0_i64
+        count = 0
+        weights.each_with_index do |weight, index|
+          next unless weight
+          return false unless weight.type.q8_0? && weight.in_dim == first.in_dim &&
+                              weight.out_dim % BATCH_TILE == 0 && self.class.projection_supported?(weight)
+          input = inputs[index]
+          output = outputs[index].not_nil!
+          return false unless input.buffer == input_buffer && output.buffer == output_buffer &&
+                              view_fits?(input, rows.to_i64 * weight.in_dim) &&
+                              view_fits?(output, rows.to_i64 * weight.out_dim)
+          groups += weight.out_dim // BATCH_TILE
+          descriptors[count] = StaticArray[model_offset(weight.raw).to_u64,
+            (input.offset // sizeof(Float32)).to_u64, (output.offset // sizeof(Float32)).to_u64, groups.to_u64]
+          count += 1
+        end
+        return false if groups > Int32::MAX
+
+        name = "inkling2_resident_q8_projection_group"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        encoder.set_buffer(@model, 0)
+        encoder.set_buffer(input_buffer, 1)
+        encoder.set_buffer(output_buffer, 2, ML::Metal::BufferAccess::Write)
+        encoder.set_bytes(descriptors.to_unsafe.as(Void*), count * sizeof(StaticArray(UInt64, 4)), 3)
+        encoder.set_value(first.in_dim.to_u32, 4)
+        encoder.set_value(rows.to_u32, 5)
+        encoder.dispatch_threadgroups({groups.to_i32, 1, 1}, {128, 1, 1})
+        true
+      end
+
       # Three independent single-row F32 matvecs. Inputs and outputs are
       # consecutive vectors in their respective scratch views.
       def project_f32_triplet(encoder : ML::Metal::ComputeEncoder,
