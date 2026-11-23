@@ -361,6 +361,33 @@ require "../src/ml/gguf/inkling2_resident_math"
         resident_bits(shared_kv.output).should eq(resident_bits(explicit_regular.output))
       end
 
+      it "matches scores with ordered batches, a partial query group, and sliding fallback" do
+        config = resident_test_config(sliding: true, n_head: 3_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 129_i32, max_seq: 193_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 193_i32))
+        tiles = [{0_i32, 64_i32}, {64_i32, 65_i32}, {129_i32, 64_i32}]
+        retained_positions = [64_i32, 128_i32, 129_i32, 192_i32]
+
+        scores = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: true, max_seq: 193_i32, snapshot_positions: retained_positions,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Scores,
+          expected_pipeline: "inkling2_resident_attention_prefill_scores")
+        ordered = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: true, max_seq: 193_i32, snapshot_positions: retained_positions,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Ordered,
+          expected_pipeline: "inkling2_prefill_ordered_pv")
+
+        ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_prefill_scores").should be_true
+        resident_bits(ordered.output).should eq(resident_bits(scores.output))
+        ordered.snapshots.zip(scores.snapshots).each do |actual, expected|
+          actual[2].should eq(expected[2])
+          resident_bits(actual[0]).should eq(resident_bits(expected[0]))
+          resident_bits(actual[1]).should eq(resident_bits(expected[1]))
+        end
+      end
+
       it "keeps 128-channel sliding-prefill results bitwise through reserved-ring wrap" do
         config = resident_test_config(sliding: true, n_head: 3_i32, n_head_kv: 1_i32,
           head_dim: 128_i32, rel_dim: 16_i32, window: 3_i32, max_seq: 9_i32)
