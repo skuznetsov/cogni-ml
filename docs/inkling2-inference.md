@@ -61,9 +61,10 @@ logits for the last token. The same per-visit KV and convolution histories
 continue into decode. Each new query reads old history and the causal part
 of its tile before the tile can overwrite the sliding cache.
 
-Use `--prefill-tile 64` or `--prefill-tile 128` to test wider tiles with the
-same float32 staging as the 32-token default. Explicit tile sizes from 1
-through 128 require the resident Metal backend.
+The resident Metal backend accepts explicit tile sizes from 1 through 128
+and the wider sizes 256 and 512. The default is 32. All sizes use float32
+staging by default. The explicit 256- and 512-row modes keep final tiles
+of fewer than 16 rows at the same boundary as the 128-row mode.
 
 Select `--prefill-tile auto` or pass `auto_prefill_tile: true` to
 `Inkling2Engine.new` to use up to 128 rows on a fresh sequence. The same
@@ -120,7 +121,7 @@ per head with packed FP32 K and V. QK uses the same lane-local additions
 and SIMD reduction as `scores`. Softmax starts with the zero-logit sink
 and PV visits keys in ascending order for each query. The four compiled
 pipelines reuse GPU scratch across visits. This path handles tiles of
-64–128 rows in the first 1,024 positions with an unwrapped cache,
+64–512 rows in the first 1,024 positions with an unwrapped cache,
 a vector-aligned gate and up to 24 query heads and eight KV heads.
 When the batch is ineligible, the selector follows the `scores` path.
 
