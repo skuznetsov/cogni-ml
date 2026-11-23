@@ -840,6 +840,9 @@ kernel void inkling2_resident_attention_split_parallel(
     device const float* query = q + query_head * channels;
     device const float* query_relative = q_relative + query_head * rel_channels;
     const float head_sink = sink[query_head];
+    // Reuse the query components across this SIMD group's keys.
+    const float4 query_lane = {query[lane], query[lane + 32], query[lane + 64], query[lane + 96]};
+    const float relative_lane = lane < rel_channels ? query_relative[lane] : 0.f;
     const size_t head_offset = (size_t)kv_head * channels;
     const size_t key_stride = (size_t)kv_width * groups;
 
@@ -855,11 +858,25 @@ kernel void inkling2_resident_attention_split_parallel(
         const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
         device const float* keys = span.from_tile ? k_tile : k_cache;
         size_t offset = (size_t)span.row * kv_width + head_offset;
+        #pragma clang loop unroll_count(2)
         for (; i < span.end; i += groups, offset += key_stride) {
+            const device float* key = keys + offset + lane;
+            // The four additions retain inkling2_resident_score's lane order.
+            float qk_partial = 0.f;
+            qk_partial += query_lane[0] * key[0];
+            qk_partial += query_lane[1] * key[32];
+            qk_partial += query_lane[2] * key[64];
+            qk_partial += query_lane[3] * key[96];
+            float score = simd_sum(qk_partial) * rsqrt((float)channels);
             const uint distance = position - (key_begin + i);
-            const float score = inkling2_resident_score(query, keys + offset, query_relative, relative_bias,
-                head_sink, channels, rel_channels, distance, relative_extent, lane);
-            if (lane == 0) cached_scores[i] = score;
+            if (distance < relative_extent) {
+                float relative_partial = 0.f;
+                if (lane < rel_channels) {
+                    relative_partial += relative_lane * relative_bias[(size_t)distance * rel_channels + lane];
+                }
+                score += simd_sum(relative_partial);
+            }
+            if (lane == 0) cached_scores[i] = score - head_sink;
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -886,6 +903,7 @@ kernel void inkling2_resident_attention_split_parallel(
         const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
         device const float* values = span.from_tile ? v_tile : v_cache;
         size_t offset = (size_t)span.row * kv_width + head_offset + channel;
+        #pragma clang loop unroll_count(8)
         for (; i < span.end; ++i, offset += kv_width) {
             const float weight = cached_scores[i];
             if (group == 0) denominator += weight;
