@@ -665,8 +665,7 @@ module ML::GGUF
         query_count = checked_elements(rows, heads, "ordered prefill queries")
         packed_k = scratch.take(kv_size)
         packed_v = scratch.take(kv_size)
-        weights = scratch.take(checked_elements(query_count, keys, "ordered prefill weights"))
-        sink_weights = scratch.take(query_count)
+        scores = scratch.take(checked_elements(query_count, keys, "ordered prefill scores"))
 
         params = LibInkling2Attention::PrefillOrderedParams.new(
           start: start.to_u32,
@@ -694,24 +693,17 @@ module ML::GGUF
         {q, q_rel, relative_bias, sink, packed_k}.each_with_index do |view, index|
           encoder.set_buffer(view.buffer, index, offset: view.offset)
         end
-        encoder.set_buffer(weights.buffer, 5, ML::Metal::BufferAccess::Write, offset: weights.offset)
+        encoder.set_buffer(scores.buffer, 5, ML::Metal::BufferAccess::Write, offset: scores.offset)
         encoder.set_bytes(params_bytes, params_size, 6)
         encoder.dispatch_threadgroups({(keys + 63) // 64, query_groups, heads}, {128, 1, 1})
 
-        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_weights"))
-        encoder.set_buffer(weights.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: weights.offset)
-        encoder.set_buffer(sink_weights.buffer, 1, ML::Metal::BufferAccess::Write, offset: sink_weights.offset)
-        encoder.set_bytes(params_bytes, params_size, 2)
-        encoder.set_threadgroup_memory(((keys + 4) // 4) * 16, 0)
-        encoder.dispatch({128, rows, heads}, {128, 1, 1})
-
-        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_pv"))
-        {packed_v, weights, sink_weights, gate}.each_with_index do |view, index|
+        encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_softmax_pv"))
+        {packed_v, scores, gate}.each_with_index do |view, index|
           encoder.set_buffer(view.buffer, index, offset: view.offset)
         end
-        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
-        encoder.set_bytes(params_bytes, params_size, 5)
-        encoder.dispatch({32, query_groups, heads}, {32, 1, 1})
+        encoder.set_buffer(output.buffer, 3, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(params_bytes, params_size, 4)
+        encoder.dispatch_threadgroups({1, query_groups, heads}, {32, 1, 1})
       ensure
         scratch.rewind(mark) if mark
       end

@@ -5,6 +5,7 @@ constant uint ordered_query_rows = 4;
 constant uint ordered_key_tile = 64;
 constant uint ordered_qk_simdgroups = 4; // 128 threads per QK threadgroup.
 constant uint ordered_channels = 128;
+constant uint ordered_pv_stripe = 64;
 
 struct Inkling2PrefillOrderedParams {
     uint start;
@@ -137,41 +138,12 @@ kernel void inkling2_prefill_ordered_qk(
     }
 }
 
-kernel void inkling2_prefill_ordered_weights(
-    device       float* scores           [[buffer(0)]],
-    device       float* sink_weights     [[buffer(1)]],
-    constant Inkling2PrefillOrderedParams& p [[buffer(2)]],
-    threadgroup float* cached_scores     [[threadgroup(0)]],
-    uint3 group [[threadgroup_position_in_grid]],
-    ushort tid [[thread_index_in_threadgroup]])
-{
-    const uint row = group.y;
-    const uint keys = p.start + p.rows;
-    const uint count = p.start + row + 1;
-    const uint line_index = group.z * p.rows + row;
-    device float* line = scores + line_index * keys;
-    for (uint key = tid; key < count; key += 128) cached_scores[key] = line[key];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    if (tid == 0) {
-        float max_score = 0.0f;
-        for (uint key = 0; key < count; ++key) max_score = max(max_score, cached_scores[key]);
-        cached_scores[keys] = max_score;
-        sink_weights[line_index] = exp(-max_score);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    const float max_score = cached_scores[keys];
-    for (uint key = tid; key < count; key += 128) line[key] = exp(cached_scores[key] - max_score);
-}
-
-kernel void inkling2_prefill_ordered_pv(
+kernel void inkling2_prefill_ordered_softmax_pv(
     device const float4* packed_v        [[buffer(0)]],
-    device const float* weights          [[buffer(1)]],
-    device const float* sink_weights     [[buffer(2)]],
-    device const float4* gate            [[buffer(3)]],
-    device       float4* output          [[buffer(4)]],
-    constant Inkling2PrefillOrderedParams& p [[buffer(5)]],
+    device const float*  scores           [[buffer(1)]],
+    device const float4* gate            [[buffer(2)]],
+    device       float4* output          [[buffer(3)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(4)]],
     uint3 group [[threadgroup_position_in_grid]],
     ushort lane [[thread_index_in_simdgroup]])
 {
@@ -182,37 +154,69 @@ kernel void inkling2_prefill_ordered_pv(
     const uint common = p.start + row + 1;
     const uint active_rows = min(ordered_query_rows, p.rows - row);
     device const float4* values = packed_v + kv_head * keys * 32 + lane;
-    device const float* streams[ordered_query_rows];
-    float4 context[ordered_query_rows];
+    device const float* lines[ordered_query_rows];
+    float maxima[ordered_query_rows];
     float denominator[ordered_query_rows];
-
+    float4 context[ordered_query_rows];
+    uint counts[ordered_query_rows];
     #pragma clang loop unroll(full)
     for (uint i = 0; i < ordered_query_rows; ++i) {
-        const uint line_index = head * p.rows + row + min(i, active_rows - 1);
-        streams[i] = weights + line_index * keys;
+        const uint active = min(i, active_rows - 1);
+        lines[i] = scores + (head * p.rows + row + active) * keys;
+        counts[i] = common + active;
+        maxima[i] = 0.0f;
         context[i] = float4(0.0f);
-        denominator[i] = sink_weights[line_index];
     }
-
-    // Reuse each V tuple for the independent query accumulators. Every
-    // accumulator still visits keys one at a time in ascending order.
-    for (uint key = 0; key < common; ++key) {
-        const float4 value = values[key * 32];
+    // The sink contributes a score of zero. Reduce only the maximum in
+    // parallel and leave both FP32 sums in chronological order.
+    const uint max_count = common + active_rows - 1;
+    for (uint key = lane; key < max_count; key += 32) {
         #pragma clang loop unroll(full)
         for (uint i = 0; i < ordered_query_rows; ++i) {
-            const float weight = streams[i][key];
-            denominator[i] += weight;
-            context[i] += weight * value;
+            if (key < counts[i]) maxima[i] = max(maxima[i], lines[i][key]);
         }
     }
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < ordered_query_rows; ++i) {
+        maxima[i] = simd_max(maxima[i]);
+        denominator[i] = exp(-maxima[i]);
+    }
 
+    // One SIMD group stages a fixed stripe of weights for all four queries
+    // and reuses each V tuple before overwriting the stripe.
+    constexpr uint stripe = ordered_pv_stripe;
+    threadgroup float cached_weights[ordered_query_rows * stripe];
+    for (uint block = 0; block < common; block += stripe) {
+        const uint count = min(stripe, common - block);
+        for (uint offset = lane; offset < count; offset += 32) {
+            const uint key = block + offset;
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < ordered_query_rows; ++i) {
+                cached_weights[i * stripe + offset] = exp(lines[i][key] - maxima[i]);
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        #pragma clang loop unroll_count(2)
+        for (uint offset = 0; offset < count; ++offset) {
+            const float4 value = values[(block + offset) * 32];
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < ordered_query_rows; ++i) {
+                const float weight = cached_weights[i * stripe + offset];
+                denominator[i] += weight;
+                context[i] += weight * value;
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Finish the extra causal keys for the later queries in the group.
     #pragma clang loop unroll(full)
     for (uint i = 0; i < ordered_query_rows; ++i) {
         if (i >= active_rows) continue;
         #pragma clang loop unroll(full)
         for (uint tail = 0; tail < i; ++tail) {
             const uint key = common + tail;
-            const float weight = streams[i][key];
+            const float weight = exp(lines[i][key] - maxima[i]);
             denominator[i] += weight;
             context[i] += weight * values[key * 32];
         }
