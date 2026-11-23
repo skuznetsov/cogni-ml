@@ -50,6 +50,102 @@ kernel void inkling2_resident_moe_group_routes(
     if (tid == 0) tile_map[0] = atomic_load_explicit(&next_tile, memory_order_relaxed);
 }
 
+// Build M16 and M32 maps together. Full wide chunks and tails above M16 go
+// to wide_tile_map; each expert can contribute at most one narrow tail.
+kernel void inkling2_resident_moe_group_routes_split(
+    device const uint* ids                [[buffer(0)]],
+    device       uint* routes             [[buffer(1)]],
+    device       uint* tile_map           [[buffer(2)]],
+    constant     uint& rows               [[buffer(3)]],
+    constant     uint& routed_rows        [[buffer(4)]],
+    constant     uint& n_experts          [[buffer(5)]],
+    device       uint* wide_tile_map      [[buffer(6)]],
+    device       uint* dispatch_args     [[buffer(7)]],
+    constant     uint& fused_up_x_groups [[buffer(8)]],
+    constant     uint& down_x_groups     [[buffer(9)]],
+    threadgroup  atomic_uint* counts      [[threadgroup(0)]],
+    ushort tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]])
+{
+    constexpr uint WIDE_ROUTES = 32;
+    constexpr uint NARROW_ROUTES = 16;
+
+    threadgroup atomic_uint next_narrow_tile;
+    threadgroup atomic_uint next_wide_tile;
+    if (tid == 0) {
+        atomic_store_explicit(&next_narrow_tile, 0, memory_order_relaxed);
+        atomic_store_explicit(&next_wide_tile, 0, memory_order_relaxed);
+    }
+    if (tid < n_experts) atomic_store_explicit(counts + tid, 0, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint route = tid; route < routed_rows; route += threads) {
+        const uint expert = ids[route];
+        const uint slot = atomic_fetch_add_explicit(counts + expert, 1, memory_order_relaxed);
+        routes[expert * rows + slot] = route;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid < n_experts) {
+        const uint count = atomic_load_explicit(counts + tid, memory_order_relaxed);
+        if (count != 0) {
+            // Wide tiles hold 32 routes; only tails up to 16 stay narrow.
+            const uint full_wide_tiles = count >> 5;
+            const uint tail = count & (WIDE_ROUTES - 1);
+            const bool tail_is_wide = tail > NARROW_ROUTES;
+            const bool has_narrow_tail = tail != 0 && !tail_is_wide;
+            const uint expert_wide_tiles = full_wide_tiles + (tail_is_wide ? 1 : 0);
+
+            uint narrow_base = 0;
+            if (has_narrow_tail) {
+                narrow_base = atomic_fetch_add_explicit(&next_narrow_tile, 1, memory_order_relaxed);
+            }
+            uint wide_base = 0;
+            if (expert_wide_tiles != 0) {
+                wide_base = atomic_fetch_add_explicit(&next_wide_tile, expert_wide_tiles, memory_order_relaxed);
+            }
+
+            device Inkling2ExpertTile* narrow_descs = (device Inkling2ExpertTile*)(tile_map + 1);
+            device Inkling2ExpertTile* wide_descs = (device Inkling2ExpertTile*)(wide_tile_map + 1);
+            for (uint i = 0; i < full_wide_tiles; ++i) {
+                const uint start = i * WIDE_ROUTES;
+                wide_descs[wide_base + i] = {tid, tid * rows + start, WIDE_ROUTES};
+            }
+            if (tail_is_wide) {
+                const uint start = full_wide_tiles * WIDE_ROUTES;
+                wide_descs[wide_base + full_wide_tiles] = {tid, tid * rows + start, tail};
+            } else if (has_narrow_tail) {
+                const uint start = full_wide_tiles * WIDE_ROUTES;
+                narrow_descs[narrow_base] = {tid, tid * rows + start, tail};
+            }
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        const uint narrow_count = atomic_load_explicit(&next_narrow_tile, memory_order_relaxed);
+        const uint wide_count = atomic_load_explicit(&next_wide_tile, memory_order_relaxed);
+        const uint narrow_y = max(1u, narrow_count);
+        const uint wide_y = max(1u, wide_count);
+
+        tile_map[0] = narrow_count;
+        wide_tile_map[0] = wide_count;
+
+        dispatch_args[0] = fused_up_x_groups;
+        dispatch_args[1] = narrow_y;
+        dispatch_args[2] = 1;
+        dispatch_args[3] = down_x_groups;
+        dispatch_args[4] = narrow_y;
+        dispatch_args[5] = 1;
+        dispatch_args[6] = fused_up_x_groups;
+        dispatch_args[7] = wide_y;
+        dispatch_args[8] = 1;
+        dispatch_args[9] = down_x_groups;
+        dispatch_args[10] = wide_y;
+        dispatch_args[11] = 1;
+    }
+}
+
 inline float inkling2_expert_quant(device const block_q8_0_56& block, uint column) {
     return (float)block.qs[column];
 }
@@ -61,9 +157,9 @@ inline float inkling2_expert_quant(device const block_iq4_nl_56& block, uint col
 }
 
 // Four SIMD groups each own 16 adjacent output columns. Stage each block of
-// quantized weights once per tile, including when there are more than eight
-// routes. The second group of eight input rows is skipped for sparse tiles.
-template <typename Block, bool FuseSiTU, bool BlockedWeights = false>
+// quantized weights once per tile. The M32 specialization adds its third and
+// fourth input fragments only when those route rows are populated.
+template <typename Block, bool FuseSiTU, bool BlockedWeights = false, uint RouteRows = 16>
 kernel void inkling2_resident_moe_gemm(
     device const uint8_t* weights             [[buffer(0)]],
     device const float*   x                   [[buffer(1)]],
@@ -112,10 +208,17 @@ kernel void inkling2_resident_moe_gemm(
     const bool valid_route = route_row < tile.count;
     const uint input_row = valid_route ? routes[route_row] / input_route_divisor : 0;
     device const float* x_row = x + (size_t)input_row * in_dim + input_col;
+    const uint second_route_row = route_row + INKLING2_EXPERT_TILE_ROUTES;
+    const bool valid_second_route = RouteRows > INKLING2_EXPERT_TILE_ROUTES && second_route_row < tile.count;
+    const uint second_input_row = valid_second_route
+        ? routes[second_route_row] / input_route_divisor : 0;
+    device const float* second_x_row = x + (size_t)second_input_row * in_dim + input_col;
     const bool has_upper = tile.count > 8;
+    const bool has_third = RouteRows > INKLING2_EXPERT_TILE_ROUTES && tile.count > 16;
+    const bool has_fourth = RouteRows > INKLING2_EXPERT_TILE_ROUTES && tile.count > 24;
 
     threadgroup float weight_tile[OUT * K];
-    threadgroup float4 input_vectors[INKLING2_EXPERT_TILE_ROUTES * K / 4];
+    threadgroup float4 input_vectors[RouteRows * K / 4];
     const threadgroup float* input_tile = (const threadgroup float*)input_vectors;
     // IQ4_NL unpack writes the transposed 8x8 fragments directly. The MMA
     // loads each fragment at stride eight without gathering strided rows.
@@ -128,6 +231,10 @@ kernel void inkling2_resident_moe_gemm(
     simdgroup_float8x8 low1 = make_filled_simdgroup_matrix<float, 8>(0.0f);
     simdgroup_float8x8 high0 = make_filled_simdgroup_matrix<float, 8>(0.0f);
     simdgroup_float8x8 high1 = make_filled_simdgroup_matrix<float, 8>(0.0f);
+    simdgroup_float8x8 third0 = make_filled_simdgroup_matrix<float, 8>(0.0f);
+    simdgroup_float8x8 third1 = make_filled_simdgroup_matrix<float, 8>(0.0f);
+    simdgroup_float8x8 fourth0 = make_filled_simdgroup_matrix<float, 8>(0.0f);
+    simdgroup_float8x8 fourth1 = make_filled_simdgroup_matrix<float, 8>(0.0f);
 
     const uint first_simd_out = simd * 16;
     for (uint block = 0; block < k_blocks; ++block) {
@@ -140,6 +247,10 @@ kernel void inkling2_resident_moe_gemm(
         }
         input_vectors[tid] = valid_route
             ? float4(*(device const packed_float4*)(x_row + block * K)) : float4(0.0f);
+        if (has_third) {
+            input_vectors[tid + INKLING2_EXPERT_TILE_ROUTES * K / 4] = valid_second_route
+                ? float4(*(device const packed_float4*)(second_x_row + block * K)) : float4(0.0f);
+        }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         #pragma unroll
@@ -162,6 +273,16 @@ kernel void inkling2_resident_moe_gemm(
                 simdgroup_multiply_accumulate(high0, a, b0, high0);
                 simdgroup_multiply_accumulate(high1, a, b1, high1);
             }
+            if (has_third) {
+                simdgroup_load(a, input_tile + 16 * K + k, K);
+                simdgroup_multiply_accumulate(third0, a, b0, third0);
+                simdgroup_multiply_accumulate(third1, a, b1, third1);
+                if (has_fourth) {
+                    simdgroup_load(a, input_tile + 24 * K + k, K);
+                    simdgroup_multiply_accumulate(fourth0, a, b0, fourth0);
+                    simdgroup_multiply_accumulate(fourth1, a, b1, fourth1);
+                }
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
@@ -172,6 +293,14 @@ kernel void inkling2_resident_moe_gemm(
     if (has_upper) {
         simdgroup_store(high0, weight_tile + 8 * OUT + first_simd_out, OUT);
         simdgroup_store(high1, weight_tile + 8 * OUT + first_simd_out + 8, OUT);
+    }
+    if (has_third) {
+        simdgroup_store(third0, weight_tile + 16 * OUT + first_simd_out, OUT);
+        simdgroup_store(third1, weight_tile + 16 * OUT + first_simd_out + 8, OUT);
+    }
+    if (has_fourth) {
+        simdgroup_store(fourth0, weight_tile + 24 * OUT + first_simd_out, OUT);
+        simdgroup_store(fourth1, weight_tile + 24 * OUT + first_simd_out + 8, OUT);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (FuseSiTU) {
@@ -194,7 +323,12 @@ kernel void inkling2_resident_moe_gemm(
 }
 
 typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false>) inkling2_resident_moe_gemm_t;
+typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false, false, 32>) inkling2_resident_moe_gemm_m32_t;
 template [[host_name("inkling2_resident_moe_gemm_q8_0")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56, false>;
 template [[host_name("inkling2_resident_moe_gemm_iq4_nl")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true>;
 template [[host_name("inkling2_resident_moe_gemm_situ_q8_0")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56, true>;
 template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true>;
+template [[host_name("inkling2_resident_moe_gemm_q8_0_m32")]] kernel inkling2_resident_moe_gemm_m32_t inkling2_resident_moe_gemm<block_q8_0_56, false, false, 32>;
+template [[host_name("inkling2_resident_moe_gemm_iq4_nl_m32")]] kernel inkling2_resident_moe_gemm_m32_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true, 32>;
+template [[host_name("inkling2_resident_moe_gemm_situ_q8_0_m32")]] kernel inkling2_resident_moe_gemm_m32_t inkling2_resident_moe_gemm<block_q8_0_56, true, false, 32>;
+template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl_m32")]] kernel inkling2_resident_moe_gemm_m32_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true, 32>;
