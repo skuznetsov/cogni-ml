@@ -180,11 +180,19 @@ module ML::GGUF
       if (append_rows = @append_prefill_rows) && position > 0 && tokens.size >= append_rows
         tile_rows = append_rows
       end
+      # Explicit wide tiles merge 128-row tiles. Keep a short final tile on
+      # the same projection and expert paths as an explicit 128-row prefill.
+      batched_end = tokens.size
+      if @prefill_rows > Inkling2Engine::MAX_AUTO_PREFILL_TILE
+        tail = tokens.size % Inkling2Engine::MAX_AUTO_PREFILL_TILE
+        batched_end -= tail if tail < Inkling2ResidentLinear::MIN_GROUPED_ROWS
+      end
       ids = @ids.contents.as(Int32*)
       offset = 0
       result = nil
       while offset < tokens.size
-        rows = Math.min(tile_rows, tokens.size - offset)
+        end_offset = offset < batched_end ? batched_end : tokens.size
+        rows = Math.min(tile_rows, end_offset - offset)
         rows.times { |row| ids[row] = tokens[offset + row] }
         result = evaluate(position + offset, rows, offset + rows == tokens.size)
         offset += rows

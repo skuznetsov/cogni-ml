@@ -341,8 +341,8 @@ describe ML::GGUF::Inkling2Engine do
     path = File.tempname("inkling2-prefill", ".gguf")
     write_inkling2_test_gguf(path, include_all_tensors: true)
     begin
-      [0, 129].each do |tile|
-        expect_raises(ArgumentError, /prefill tile.*1.*128/) do
+      [0, 129, 384, 513].each do |tile|
+        expect_raises(ArgumentError, /prefill tile.*1.*128.*256.*512/) do
           ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: tile)
         end
       end
@@ -663,6 +663,41 @@ describe ML::GGUF::Inkling2Engine do
           ensure
             reference.close
           end
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
+    it "keeps the narrow final tile in explicit wide prefill" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-prefill-tail", ".gguf")
+      write_inkling2_test_gguf(path, n_embd: 32, expert_dim: 32, sliding_window: 48,
+        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+      begin
+        prompt = Array(Int32).new(642) { |index| (index * 5 + index // 7) % 7 }
+        reference = ML::GGUF::Inkling2Engine.new(path, prompt.size + 1, metal: true, prefill_tile: 128)
+        wide = ML::GGUF::Inkling2Engine.new(path, prompt.size + 1, metal: true, prefill_tile: 512)
+        begin
+          ML::Metal::PipelineCache.clear
+          actual = wide.prefill(prompt)
+          {% if flag?(:aarch64) %}
+            ML::Metal::PipelineCache.get("inkling2_resident_moe_matvec_q8_0") do
+              raise "wide prefill did not dispatch the narrow expert tail"
+            end
+          {% end %}
+          actual.map(&.unsafe_as(UInt32)).should eq(reference.prefill(prompt).map(&.unsafe_as(UInt32)))
+          wide.forward(2).not_nil!.map(&.unsafe_as(UInt32)).should eq(reference.forward(2).not_nil!.map(&.unsafe_as(UInt32)))
+          wide.layer_visits.times do |visit|
+            wide.kv_count(visit).should eq(reference.kv_count(visit))
+            wide.kv_count(visit).times do |index|
+              expect_inkling2_kv_bits(wide.key_value_at(visit, index), reference.key_value_at(visit, index))
+            end
+          end
+        ensure
+          wide.close
+          reference.close
         end
       ensure
         File.delete?(path)

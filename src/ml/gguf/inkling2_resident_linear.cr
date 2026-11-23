@@ -15,6 +15,7 @@ module ML::GGUF
     # Encode-only projection and MoE helpers for an inference-wide Metal
     # command buffer. The GGUF mmap remains owned by its GGUFFile/Weights.
     class Inkling2ResidentLinear
+      MIN_GROUPED_ROWS =  16
       MAX_GROUPED_ROWS = 512
       SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }} + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe.metal") }}
 
@@ -25,7 +26,6 @@ module ML::GGUF
       private MAX_DECODE_BLOCK_ROWS = 4_i32
       {% if flag?(:aarch64) %}
         private Q8_MATRIX_TILE = 32_i32
-        private Q8_MATRIX_MIN_ROWS = 16_i32
         private Q8_MATRIX_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_q8_gemm.metal") }}
       {% end %}
 
@@ -223,7 +223,7 @@ module ML::GGUF
         source = SOURCE
         tile = BATCH_TILE
         {% if flag?(:aarch64) %}
-          if weight.type.q8_0? && rows >= Q8_MATRIX_MIN_ROWS
+          if weight.type.q8_0? && rows >= MIN_GROUPED_ROWS
             name = "inkling2_resident_gemm_q8_0_simd"
             source = Q8_MATRIX_SOURCE
             tile = Q8_MATRIX_TILE
@@ -307,7 +307,7 @@ module ML::GGUF
 
       private def grouped_experts?(rows : Int32, n_experts : Int32) : Bool
         {% if flag?(:aarch64) %}
-          16 <= rows <= MAX_GROUPED_ROWS && n_experts <= 256
+          MIN_GROUPED_ROWS <= rows <= MAX_GROUPED_ROWS && n_experts <= 256
         {% else %}
           false
         {% end %}

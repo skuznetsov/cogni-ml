@@ -602,7 +602,7 @@ module ML::GGUF
       ) : Nil
         # Bound scratch to the research model's panel sizes. The packed
         # kernel reads the unwrapped cache prefix and a vector-aligned gate.
-        if @prefill_mode.ordered? && !decode_block && (64..128).includes?(rows) &&
+        if @prefill_mode.ordered? && !decode_block && (64..512).includes?(rows) &&
            start + rows <= PREFILL_SCORE_LIMIT && (!@sliding || start + rows <= @config.sliding_window) &&
            @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head <= 24 && @config.n_head_kv <= 8 &&
            gate.offset % (4 * sizeof(Float32)) == 0
