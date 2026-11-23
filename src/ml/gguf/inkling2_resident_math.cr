@@ -63,7 +63,9 @@ require "./inkling2_metal_view"
       # Eight SIMD groups each write one partial dot product per key. One
       # additional value per key holds its completed score, then its weight.
       keys = count + (current_norm ? 1 : 0)
-      scratch_bytes = keys.to_i64 * 9_i64 * 4_i64
+      payload_bytes = keys.to_i64 * 9_i64 * sizeof(Float32)
+      # Metal requires a 16-byte-aligned threadgroup memory length.
+      scratch_bytes = (payload_bytes + 15) // 16 * 16
       raise ArgumentError.new("Inkling 2 depth mix scratch exceeds Int32") if scratch_bytes > Int32::MAX
 
       current = current_norm || bank
