@@ -3,6 +3,31 @@
 
 constant uint INKLING2_RESIDENT_TILE = 4;
 
+// Independent projections occupy the y dimension. Keep the lane's column
+// traversal and SIMD reduction identical to simd_mv_f32_f32.
+kernel void inkling2_resident_f32_projection_triplet(
+    device const uchar* model          [[buffer(0)]],
+    device const float* input          [[buffer(1)]],
+    device       float* output         [[buffer(2)]],
+    constant     ulong* weight_offsets [[buffer(3)]],
+    constant     uint&  in_dim         [[buffer(4)]],
+    constant     uint&  out_dim        [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    const uint row = group.x * 4 + simd;
+    if (row >= out_dim) return;
+    device const float* weights = (device const float*)(model + weight_offsets[group.y]);
+    device const float* x = input + (size_t)group.y * in_dim;
+    float sum = 0.0f;
+    for (uint col = lane; col < in_dim; col += 32) {
+        sum += weights[row * in_dim + col] * x[col];
+    }
+    const float total = simd_sum(sum);
+    if (lane == 0) output[(size_t)group.y * out_dim + row] = total;
+}
+
 // A simdgroup computes one output row and four adjacent input rows. Each
 // thread loads one weight value and reuses it across the four token rows.
 kernel void inkling2_resident_gemm_f32(

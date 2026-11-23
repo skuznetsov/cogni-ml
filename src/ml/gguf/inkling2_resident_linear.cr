@@ -83,6 +83,14 @@ module ML::GGUF
         expected == weight.raw.size.to_i64
       end
 
+      def self.f32_triplet_supported?(weights : {QuantWeight, QuantWeight, QuantWeight}) : Bool
+        first = weights[0]
+        weights.all? do |weight|
+          weight.type.f32? && weight.in_dim == first.in_dim && weight.out_dim == first.out_dim &&
+            projection_supported?(weight)
+        end
+      end
+
       # Static capability guard for the resident MoE path, including all
       # dimensions and raw extents that its GPU indexing assumes.
       def self.moe_supported?(layer : Inkling2LayerWeights, config : Inkling2Config) : Bool
@@ -127,6 +135,31 @@ module ML::GGUF
             output.buffer, output_offset, count)
           row_base += count
         end
+      end
+
+      # Three independent single-row F32 matvecs. Inputs and outputs are
+      # consecutive vectors in their respective scratch views.
+      def project_f32_triplet(encoder : ML::Metal::ComputeEncoder,
+                              weights : {QuantWeight, QuantWeight, QuantWeight},
+                              input : Inkling2View, output : Inkling2View) : Nil
+        ensure_open!
+        unless self.class.f32_triplet_supported?(weights)
+          raise ArgumentError.new("Inkling 2 F32 projection triplet needs three matrices of the same shape")
+        end
+
+        first = weights[0]
+        ensure_view!(input, checked_bytes(3, first.in_dim, "projection triplet input"))
+        ensure_view!(output, checked_bytes(3, first.out_dim, "projection triplet output"))
+        offsets = StaticArray(UInt64, 3).new { |index| model_offset(weights[index].raw).to_u64 }
+        name = "inkling2_resident_f32_projection_triplet"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        encoder.set_buffer(@model, 0)
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 3, 3)
+        encoder.set_value(first.in_dim.to_u32, 4)
+        encoder.set_value(first.out_dim.to_u32, 5)
+        encoder.dispatch_threadgroups({(first.out_dim + 3) // 4, 3, 1}, {128, 1, 1})
       end
 
       # Encode router, expert up/gate, SiTU activation, expert down, and
