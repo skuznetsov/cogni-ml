@@ -28,6 +28,46 @@ kernel void inkling2_resident_f32_projection_triplet(
     if (lane == 0) output[(size_t)group.y * out_dim + row] = total;
 }
 
+// Fuse two scalar F32 projections and their controller epilogue. Each lane
+// visits the same columns, in the same order, as simd_mv_f32_f32; the shared
+// rank value feeds both independent accumulators before their usual reductions.
+kernel void inkling2_resident_f32_control_pair(
+    device const uchar* model          [[buffer(0)]],
+    device const float* rank           [[buffer(1)]],
+    device const float* input          [[buffer(2)]],
+    device const float* message        [[buffer(3)]],
+    device       float* output         [[buffer(4)]],
+    constant ulong* weight_offsets    [[buffer(5)]],
+    constant uint&  in_dim             [[buffer(6)]],
+    constant uint&  out_dim            [[buffer(7)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    const uint row = group.x * 4 + (uint)simd;
+    if (row >= out_dim) return;
+
+    device const float* gain_weights = (device const float*)(model + weight_offsets[0]);
+    device const float* forget_weights = (device const float*)(model + weight_offsets[1]);
+    const size_t weight_base = (size_t)row * in_dim;
+    float gain_sum = 0.0f;
+    float forget_sum = 0.0f;
+    for (uint col = (uint)lane; col < in_dim; col += 32) {
+        const float rank_value = rank[col];
+        gain_sum += gain_weights[weight_base + col] * rank_value;
+        forget_sum += forget_weights[weight_base + col] * rank_value;
+    }
+
+    const float gain_value = simd_sum(gain_sum);
+    const float forget_value = simd_sum(forget_sum);
+    if (lane == 0) {
+        const float source = input[row];
+        const float forgotten = tanh(forget_value) * source;
+        const float gained = tanh(gain_value) * message[row];
+        output[row] = source - forgotten + gained;
+    }
+}
+
 // A simdgroup computes one output row and four adjacent input rows. Each
 // thread loads one weight value and reuses it across the four token rows.
 kernel void inkling2_resident_gemm_f32(
