@@ -91,6 +91,15 @@ module ML::GGUF
         end
       end
 
+      def self.f32_control_pair_supported?(weights : {QuantWeight, QuantWeight}, output_dim : Int32) : Bool
+        first = weights[0]
+        return false unless output_dim > 0 && first.out_dim == output_dim
+        weights.all? do |weight|
+          weight.type.f32? && weight.in_dim == first.in_dim && weight.out_dim == output_dim &&
+            projection_supported?(weight)
+        end
+      end
+
       # Static capability guard for the resident MoE path, including all
       # dimensions and raw extents that its GPU indexing assumes.
       def self.moe_supported?(layer : Inkling2LayerWeights, config : Inkling2Config) : Bool
@@ -160,6 +169,38 @@ module ML::GGUF
         encoder.set_value(first.in_dim.to_u32, 4)
         encoder.set_value(first.out_dim.to_u32, 5)
         encoder.dispatch_threadgroups({(first.out_dim + 3) // 4, 3, 1}, {128, 1, 1})
+      end
+
+      # Two scalar F32 projections and the controller epilogue share one
+      # dispatch and reuse each rank input read for both matrix rows.
+      def project_f32_control_pair(encoder : ML::Metal::ComputeEncoder,
+                                   weights : {QuantWeight, QuantWeight},
+                                   rank : Inkling2View, input : Inkling2View,
+                                   message : Inkling2View, output : Inkling2View,
+                                   output_dim : Int32) : Bool
+        ensure_open!
+        return false unless self.class.f32_control_pair_supported?(weights, output_dim)
+
+        first = weights[0]
+        return false unless view_fits?(rank, first.in_dim) && view_fits?(input, output_dim) &&
+                            view_fits?(message, output_dim) && view_fits?(output, output_dim)
+        return false if view_overlaps?(output, output_dim, rank, first.in_dim) ||
+                        view_overlaps?(output, output_dim, input, output_dim) ||
+                        view_overlaps?(output, output_dim, message, output_dim)
+
+        offsets = StaticArray(UInt64, 2).new { |index| model_offset(weights[index].raw).to_u64 }
+        name = "inkling2_resident_f32_control_pair"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        encoder.set_buffer(@model, 0)
+        encoder.set_buffer(rank.buffer, 1, offset: rank.offset)
+        encoder.set_buffer(input.buffer, 2, offset: input.offset)
+        encoder.set_buffer(message.buffer, 3, offset: message.offset)
+        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 2, 5)
+        encoder.set_value(first.in_dim.to_u32, 6)
+        encoder.set_value(output_dim.to_u32, 7)
+        encoder.dispatch_threadgroups({(output_dim + 3) // 4, 1, 1}, {128, 1, 1})
+        true
       end
 
       # Encode router, expert up/gate, SiTU activation, expert down, and
@@ -540,6 +581,20 @@ module ML::GGUF
         unless view.offset >= 0 && bytes >= 0 && view.offset <= view.buffer.size && bytes <= view.buffer.size - view.offset
           raise ArgumentError.new("Inkling 2 resident view exceeds its Metal buffer")
         end
+      end
+
+      private def view_fits?(view : Inkling2View, elements : Int32) : Bool
+        return false unless elements > 0 && view.offset >= 0 && view.offset % sizeof(Float32).to_i64 == 0
+        bytes = elements.to_i64 * sizeof(Float32).to_i64
+        view.offset <= view.buffer.size && bytes <= view.buffer.size - view.offset
+      end
+
+      private def view_overlaps?(left : Inkling2View, left_elements : Int32,
+                                 right : Inkling2View, right_elements : Int32) : Bool
+        return false unless left.buffer.handle == right.buffer.handle
+        left_end = left.offset + left_elements.to_i64 * sizeof(Float32).to_i64
+        right_end = right.offset + right_elements.to_i64 * sizeof(Float32).to_i64
+        left.offset < right_end && right.offset < left_end
       end
 
       private def checked_bytes(rows : Int32, width : Int32, label : String) : Int64

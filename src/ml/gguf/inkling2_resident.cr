@@ -773,6 +773,12 @@ module ML::GGUF
       result
     end
 
+    # Override this predicate in a same-binary probe to compare fused scalar
+    # controller evaluation with the reference projection-plus-epilogue path.
+    private def decode_fused_control? : Bool
+      true
+    end
+
     private def control_attention(tile : Tile, controller : Inkling2LoopWeights,
                                   inputs : {Inkling2View, Inkling2View, Inkling2View},
                                   messages : Inkling2View) : {Inkling2View, Inkling2View, Inkling2View}
@@ -821,6 +827,12 @@ module ML::GGUF
     private def apply_control(tile : Tile, controller : Inkling2LoopWeights, index : Int32,
                               input : Inkling2View, message : Inkling2View,
                               rank : Inkling2View, result : Inkling2View) : Nil
+      if tile.rows == 1 && !tile.decode_block? && decode_fused_control? &&
+         @linear.project_f32_control_pair(tile.encoder, {controller.gain[index], controller.forget[index]},
+           rank, input, message, result, tile.elements)
+        return
+      end
+
       gain = project(tile, controller.gain[index], rank)
       forget = project(tile, controller.forget[index], rank)
       MathOps.controls(tile.encoder, input, message, gain, forget, result, tile.elements)
