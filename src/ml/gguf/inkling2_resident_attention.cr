@@ -2,6 +2,7 @@ require "./inkling2_weights"
 require "./inkling2_metal_view"
 
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
+  require "./inkling2_resident_linear"
   require "../metal/device"
   require "../metal/dispatch"
   require "../core/buffer"
@@ -14,6 +15,9 @@ module ML::GGUF
     # matching Inkling2Convolution's per-channel state.
     class Inkling2ResidentConvolution
       SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_resident_attention.metal") }}
+
+      private Q8_PROJECTION_CONV_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }} + "\n" +
+                                   {{ read_file("#{__DIR__}/kernels/inkling2_resident_post_conv.metal") }}
 
       @history : ML::MetalBuffer? = nil
       @last_end_position : Int32? = nil
@@ -70,15 +74,7 @@ module ML::GGUF
         output = scratch.take(total)
         history_slots = @history_slots
         history_count = checked_elements(history_slots, @channels, "convolution history dispatch")
-        history = @history
-        if history_slots > 0
-          history ||= begin
-            buffer = ML::MetalBuffer.new(checked_bytes(history_slots, @channels, "convolution history"), ML::StorageMode::Shared)
-            @history = buffer
-            buffer
-          end
-        end
-        history_buffer = history || input.buffer
+        history_buffer = history_for_encode || input.buffer
 
         encoder.set_pipeline(pipeline("inkling2_resident_convolution"))
         encoder.set_buffer(input.buffer, 0, offset: input.offset)
@@ -105,10 +101,64 @@ module ML::GGUF
           encoder.dispatch_1d(history_count)
         end
 
+        record_encoded_tile(start, rows)
+        output
+      end
+
+      # Fuse the four Q8_0 verifier rows with the static causal convolution.
+      # The ring stores raw projected inputs, before the convolution.
+      def encode_q8_block(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        start : Int32,
+        rows : Int32,
+        linear : Inkling2ResidentLinear,
+        weight : QuantWeight,
+        input : Inkling2View,
+        taps_weights : Inkling2View,
+      ) : Inkling2View?
+        ensure_open!
+        return unless rows == 4 && @history_slots > 0 && weight.out_dim == @channels &&
+                      weight.type.q8_0? && Inkling2ResidentLinear.projection_supported?(weight)
+
+        input_width = weight.in_dim
+        validate_speculation_tile!(start, rows)
+        validate_tile!(start, rows)
+        validate_view!(input, checked_elements(rows, input_width, "projection input"), "projection input")
+        validate_view!(taps_weights, checked_elements(@channels, @taps, "convolution taps"), "convolution weights")
+        weights = linear.view(weight)
+        output = scratch.take(checked_elements(rows, @channels, "convolution output"))
+        history = history_for_encode.not_nil!
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(
+          "inkling2_resident_q8_post_conv_batch", Q8_PROJECTION_CONV_SOURCE))
+        encoder.set_buffer(weights.buffer, 0, offset: weights.offset)
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_buffer(history, 3, ML::Metal::BufferAccess::ReadWrite)
+        encoder.set_buffer(taps_weights.buffer, 4, offset: taps_weights.offset)
+        encoder.set_value(input_width.to_u32, 5)
+        encoder.set_value(@channels.to_u32, 6)
+        encoder.set_value(rows.to_u32, 7)
+        encoder.set_value(start.to_u32, 8)
+        encoder.set_value(@taps.to_u32, 9)
+        encoder.set_value(@history_slots.to_u32, 10)
+        encoder.dispatch_threadgroups({(@channels + 3) // 4, 1, 1}, {128, 1, 1})
+        record_encoded_tile(start, rows)
+        output
+      end
+
+      private def history_for_encode : ML::MetalBuffer?
+        return nil if @history_slots == 0
+        @history ||= begin
+          elements = checked_elements(@history_slots, @channels, "convolution history")
+          ML::MetalBuffer.new(elements.to_i64 * sizeof(Float32), ML::StorageMode::Shared)
+        end
+      end
+
+      private def record_encoded_tile(start : Int32, rows : Int32) : Nil
         @last_end_position = start + rows
         @last_encoded_start_position = start
         @last_encoded_end_position = start + rows
-        output
       end
 
       # `start == 0` begins a fresh visit. Physical ring contents stay
@@ -209,12 +259,6 @@ module ML::GGUF
         product = rows.to_i64 * width
         raise ArgumentError.new("Inkling 2 resident #{name} exceeds Int32 elements") unless rows >= 0 && width >= 0 && product <= Int32::MAX
         product.to_i32
-      end
-
-      private def checked_bytes(rows : Int32, width : Int32, name : String) : Int64
-        elements = rows.to_i64 * width
-        raise ArgumentError.new("Inkling 2 resident #{name} exceeds Int64 bytes") unless rows > 0 && width > 0 && elements <= Int64::MAX // sizeof(Float32)
-        elements * sizeof(Float32)
       end
 
       private def ensure_open! : Nil

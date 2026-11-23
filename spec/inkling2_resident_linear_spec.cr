@@ -305,6 +305,74 @@ require "../src/ml/gguf/inkling2_engine"
       end
     end
 
+    it "keeps raw Q8_0 projection history across post-convolution wrap and rewind" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      buffers = [] of ML::MetalBuffer
+      scratch = ML::GGUF::Inkling2ResidentScratch.new
+      begin
+        channels = 39_i32
+        input_width = 64_i32
+        tap_count = 3_i32
+        raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_tiled_projection"], channels * 2 * 34)
+        weight = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, channels, input_width)
+        input = Inkling2LinearSpecSupport.float_view(
+          Array(Float32).new(14 * input_width) { |i| ((i * 23) % 97 - 48).to_f32 * 0.013_f32 }, buffers)
+        taps = Inkling2LinearSpecSupport.float_view(
+          Array(Float32).new(channels * tap_count) { |i| ((i * 3) % 17 - 8).to_f32 * 0.027_f32 }, buffers)
+
+        {0, 4}.each do |rollback_rows|
+          reference = ML::GGUF::Inkling2ResidentConvolution.new(channels, tap_count, rollback_rows: rollback_rows)
+          fused = ML::GGUF::Inkling2ResidentConvolution.new(channels, tap_count, rollback_rows: rollback_rows)
+          steps = rollback_rows == 0 ? [{0, 4, 0}, {4, 1, 4}, {5, 4, 5}, {9, 1, 9}] :
+            [{0, 4, 0}, {4, 4, 4}, {5, 1, 8}, {6, 4, 9}, {10, 1, 13}]
+          begin
+            steps.each_with_index do |(start, rows, input_row), index|
+              if rollback_rows > 0 && index == 2
+                reference.rewind(start)
+                fused.rewind(start)
+              end
+              elements = rows * channels
+              result_view = Inkling2LinearSpecSupport.float_view(Array(Float32).new(2 * elements, 0_f32), buffers)
+              activation = input.slice(input_row * input_width)
+              scratch.reset
+              command = ML::Metal::CommandBuffer.new
+              encoder = ML::Metal::ComputeEncoder.new(command)
+              begin
+                projected = scratch.take(elements)
+                linear.project(encoder, weight, activation, projected, rows, decode_block: rows > 1)
+                separate = reference.encode(encoder, scratch, start, rows, projected, taps)
+                combined = if rows == 4
+                             fused.encode_q8_block(encoder, scratch, start, rows, linear, weight, activation, taps).not_nil!
+                           else
+                             fused.encode(encoder, scratch, start, rows, projected, taps)
+                           end
+                ML::GGUF::Inkling2ResidentMath.copy(encoder, separate, result_view, elements)
+                ML::GGUF::Inkling2ResidentMath.copy(encoder, combined, result_view.slice(elements), elements)
+              ensure
+                encoder.end_encoding
+              end
+              command.commit_and_wait
+              bits = Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(result_view, 2 * elements))
+              bits[0, elements].should eq(bits[elements, elements])
+            end
+          ensure
+            reference.close
+            fused.close
+          end
+        end
+      ensure
+        scratch.close
+        buffers.each(&.release)
+        linear.close
+        gguf.close
+        File.delete?(fixture.path)
+      end
+    end
+
     it "encodes F32 and Q8_0 single-row and batched projections with batched MoE in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

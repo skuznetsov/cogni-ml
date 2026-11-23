@@ -752,8 +752,15 @@ module ML::GGUF
         q.not_nil!, k.not_nil!, v.not_nil!, q_rel.not_nil!, gate.not_nil!, sink.not_nil!,
         constant(weight.q_clip), constant(weight.rel_clip), constant(weight.rel_bias),
         constant(weight.k_conv), constant(weight.v_conv), dynamic_k, dynamic_v, decode_block: tile.decode_block?)
+      taps = constant(weight.post_conv)
+      if tile.decode_block?
+        if convolved = visit.post_conv.encode_q8_block(tile.encoder, @scratch, tile.start, tile.rows,
+             @linear, weight.output, context, taps)
+          return convolved
+        end
+      end
       projected = project(tile, weight.output, context)
-      visit.post_conv.encode(tile.encoder, @scratch, tile.start, tile.rows, projected, constant(weight.post_conv))
+      visit.post_conv.encode(tile.encoder, @scratch, tile.start, tile.rows, projected, taps)
     end
 
     # Override in a same-binary comparison with individual projection dispatches.
