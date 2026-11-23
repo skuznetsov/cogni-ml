@@ -171,25 +171,31 @@ module ML::GGUF
         encoder.dispatch_threadgroups({(first.out_dim + 3) // 4, 3, 1}, {128, 1, 1})
       end
 
-      # Two scalar F32 projections and the controller epilogue share one
-      # dispatch and reuse each rank input read for both matrix rows.
+      # Two F32 projections and the controller epilogue share one dispatch.
+      # The one-row path keeps its scalar reduction; batched rows match the
+      # resident F32 GEMM's four-row float4 accumulator order.
       def project_f32_control_pair(encoder : ML::Metal::ComputeEncoder,
                                    weights : {QuantWeight, QuantWeight},
                                    rank : Inkling2View, input : Inkling2View,
                                    message : Inkling2View, output : Inkling2View,
-                                   output_dim : Int32) : Bool
+                                   output_dim : Int32, *, rows : Int32 = 1) : Bool
         ensure_open!
+        raise ArgumentError.new("Inkling 2 F32 control pair has no rows") unless rows > 0
+        return false if rows > MAX_ROWS_PER_GRID
         return false unless self.class.f32_control_pair_supported?(weights, output_dim)
 
         first = weights[0]
-        return false unless view_fits?(rank, first.in_dim) && view_fits?(input, output_dim) &&
-                            view_fits?(message, output_dim) && view_fits?(output, output_dim)
-        return false if view_overlaps?(output, output_dim, rank, first.in_dim) ||
-                        view_overlaps?(output, output_dim, input, output_dim) ||
-                        view_overlaps?(output, output_dim, message, output_dim)
+        rank_elements = rows.to_i64 * first.in_dim.to_i64
+        output_elements = rows.to_i64 * output_dim.to_i64
+        return false if rank_elements > UInt32::MAX.to_i64 || output_elements > UInt32::MAX.to_i64
+        return false unless view_fits?(rank, rank_elements) && view_fits?(input, output_elements) &&
+                            view_fits?(message, output_elements) && view_fits?(output, output_elements)
+        return false if view_overlaps?(output, output_elements, rank, rank_elements) ||
+                        view_overlaps?(output, output_elements, input, output_elements) ||
+                        view_overlaps?(output, output_elements, message, output_elements)
 
         offsets = StaticArray(UInt64, 2).new { |index| model_offset(weights[index].raw).to_u64 }
-        name = "inkling2_resident_f32_control_pair"
+        name = rows == 1 ? "inkling2_resident_f32_control_pair" : "inkling2_resident_f32_control_pair_batch"
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
         encoder.set_buffer(@model, 0)
         encoder.set_buffer(rank.buffer, 1, offset: rank.offset)
@@ -199,7 +205,12 @@ module ML::GGUF
         encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 2, 5)
         encoder.set_value(first.in_dim.to_u32, 6)
         encoder.set_value(output_dim.to_u32, 7)
-        encoder.dispatch_threadgroups({(output_dim + 3) // 4, 1, 1}, {128, 1, 1})
+        if rows == 1
+          encoder.dispatch_threadgroups({(output_dim + 3) // 4, 1, 1}, {128, 1, 1})
+        else
+          encoder.set_value(rows.to_u32, 8)
+          encoder.dispatch_threadgroups({(output_dim + 3) // 4, (rows + 3) // 4, 1}, {128, 1, 1})
+        end
         true
       end
 
@@ -583,17 +594,17 @@ module ML::GGUF
         end
       end
 
-      private def view_fits?(view : Inkling2View, elements : Int32) : Bool
+      private def view_fits?(view : Inkling2View, elements : Int64) : Bool
         return false unless elements > 0 && view.offset >= 0 && view.offset % sizeof(Float32).to_i64 == 0
-        bytes = elements.to_i64 * sizeof(Float32).to_i64
+        bytes = elements * sizeof(Float32).to_i64
         view.offset <= view.buffer.size && bytes <= view.buffer.size - view.offset
       end
 
-      private def view_overlaps?(left : Inkling2View, left_elements : Int32,
-                                 right : Inkling2View, right_elements : Int32) : Bool
+      private def view_overlaps?(left : Inkling2View, left_elements : Int64,
+                                 right : Inkling2View, right_elements : Int64) : Bool
         return false unless left.buffer.handle == right.buffer.handle
-        left_end = left.offset + left_elements.to_i64 * sizeof(Float32).to_i64
-        right_end = right.offset + right_elements.to_i64 * sizeof(Float32).to_i64
+        left_end = left.offset + left_elements * sizeof(Float32).to_i64
+        right_end = right.offset + right_elements * sizeof(Float32).to_i64
         left.offset < right_end && right.offset < left_end
       end
 

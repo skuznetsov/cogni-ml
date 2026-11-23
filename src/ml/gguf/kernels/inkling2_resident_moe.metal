@@ -68,6 +68,62 @@ kernel void inkling2_resident_f32_control_pair(
     }
 }
 
+// Batched controller projections use the same four-row accumulator and SIMD
+// reduction order as inkling2_resident_gemm_f32 while sharing each rank read
+// between the gain and forget matrices.
+kernel void inkling2_resident_f32_control_pair_batch(
+    device const uchar* model          [[buffer(0)]],
+    device const float* rank           [[buffer(1)]],
+    device const float* input          [[buffer(2)]],
+    device const float* message        [[buffer(3)]],
+    device       float* output         [[buffer(4)]],
+    constant ulong* weight_offsets    [[buffer(5)]],
+    constant uint&  in_dim             [[buffer(6)]],
+    constant uint&  out_dim            [[buffer(7)]],
+    constant uint&  rows               [[buffer(8)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    const uint output_row = group.x * 4 + (uint)simd;
+    if (output_row >= out_dim) return;
+
+    const uint first_batch = group.y * 4;
+    device const float* gain_weights = (device const float*)(model + weight_offsets[0]);
+    device const float* forget_weights = (device const float*)(model + weight_offsets[1]);
+    const size_t weight_base = (size_t)output_row * in_dim;
+    float4 gain_sums = float4(0.0f);
+    float4 forget_sums = float4(0.0f);
+    for (uint col = (uint)lane; col < in_dim; col += 32) {
+        float4 rank_values = float4(0.0f);
+        for (uint batch_row = 0; batch_row < 4; ++batch_row) {
+            const uint row = first_batch + batch_row;
+            if (row < rows) {
+                rank_values[batch_row] = rank[(size_t)row * in_dim + col];
+            }
+        }
+        gain_sums += rank_values * gain_weights[weight_base + col];
+        forget_sums += rank_values * forget_weights[weight_base + col];
+    }
+
+    const float4 gain_values = float4(simd_sum(gain_sums.x), simd_sum(gain_sums.y),
+                                     simd_sum(gain_sums.z), simd_sum(gain_sums.w));
+    const float4 forget_values = float4(simd_sum(forget_sums.x), simd_sum(forget_sums.y),
+                                        simd_sum(forget_sums.z), simd_sum(forget_sums.w));
+    if (lane == 0) {
+        for (uint batch_row = 0; batch_row < 4; ++batch_row) {
+            const uint row = first_batch + batch_row;
+            if (row < rows) {
+                const size_t output_index = (size_t)row * out_dim + output_row;
+                const float source = input[output_index];
+                const float forgotten = tanh(forget_values[batch_row]) * source;
+                const float gained = tanh(gain_values[batch_row]) * message[output_index];
+                output[output_index] = source - forgotten + gained;
+            }
+        }
+    }
+}
+
 // A simdgroup computes one output row and four adjacent input rows. Each
 // thread loads one weight value and reuses it across the four token rows.
 kernel void inkling2_resident_gemm_f32(
