@@ -53,13 +53,64 @@ Thinking Machines Lab reports that the research checkpoint improves through
 ten passes on N-Hop Lookup. Its aggregate no-CoT time horizon is roughly flat
 past three. [Release evaluation](https://thinkingmachines.ai/news/inkling-2-mini/#no-cot-capabilities)
 
+In a local research IQ4_NL sweep at `47cbfe40`, the same 100 lookup tasks
+scored 20, 22, 21, and 23 correct at 3, 4, 5, and 10 passes, respectively.
+Always answering A scored 20. An explicit key/value rendering improved
+the one-hop pilot. On its held-out set of 40 tasks at 3–6 hops, the four
+depths scored 14, 13, 12, and 12 correct. These runs measure sensitivity
+to the local prompt formats. The published evaluation uses its own tasks
+and inference setup.
+
+## Metal throughput on Apple M2 Max
+
+The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
+`e6d624b9` with the same research IQ4_NL GGUF, three passes, FP32 KV,
+the same prompt and 48 forced decode IDs, and the same prefill tile
+boundaries. Flash Attention was disabled in llama.cpp. Cogni-ml used
+`INKLING2_PREFILL_ATTENTION=ordered` and `INKLING2_MOE_PREFILL_ROUTES=32`
+with explicit prefill tiles. Ordinary CLI defaults are a 32-token tile,
+`regular` attention, and 16 expert routes per tile.
+
+Both engines returned one full-vocabulary logit row at the end of
+prefill and one after each scalar decode step. Wall time excludes model
+load, warmup, and token selection. Prefill rates count prompt tokens and
+decode rates count the 48 forced inputs, including the step across the
+1,024-token sliding-window boundary on the long fixture.
+
+| Prompt + decode | Prefill tiles | Cogni-ml prefill (tok/s) | llama.cpp prefill (tok/s) | Cogni-ml scalar (tok/s) | llama.cpp scalar (tok/s) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 188 + 48 | 128 + 60 | 199.77 (1) | 242.03 (3) | 28.46 (1) | 26.84 (1) |
+| 1,022 + 48 | 512 + 510 | 351.62\* | 332.18\* | 25.88 (1) | 25.35 (3) |
+
+Parentheses give the number of quiet intervals out of three warmed
+repeats for each phase. Rates are medians of those intervals. The
+quiet-host check requires three GPU utilization readings at or below
+30% before each phase, then sampled background CPU below one core
+total and half a core per process, with gaps below one second.
+The asterisk marks the long prefill medians over all three repeats
+per engine. Background load left one quiet cogni-ml interval and zero
+quiet llama.cpp intervals there, so those prefill rates are diagnostic.
+The top-ranked IDs agreed at 47 of 49 positions for the 188-token
+N-Hop fixture and 49 of 49 for the 1,022-token fixture.
+
+In a separate warmed run at the same cogni-ml revision, `block4` processed
+40.23 tok/s after an 81-token prose prompt and 37.54 tok/s after the
+1,022-token prompt. Each rate is the median of three quiet baseline
+intervals over 48 decode rows. The benchmark supplies every input ID
+in advance, includes greedy top-1 scans, and excludes prefill.
+In actual generation, n-gram throughput depends on draft availability
+and acceptance.
+
 ## Fixed-depth Metal execution contract
 
-Fixed-depth decode submits one Metal command per token. Prefill evaluates a
+Scalar decode submits one Metal command buffer per token. Prefill evaluates a
 bounded tile of consecutive tokens together at every layer visit and reads
-logits for the last token. The same per-visit KV and convolution histories
-continue into decode. Each new query reads old history and the causal part
-of its tile before the tile can overwrite the sliding cache.
+one logit row for the whole prompt. The same per-visit KV and convolution
+histories continue into decode. Each new query reads old history and the
+causal part of its tile before the tile can overwrite the sliding cache.
+Intermediate buffers stay on the GPU across the prelude, repeated core,
+and epilogue. With fixed depth, the CPU submits the work and reads the
+requested logit rows.
 
 The resident Metal backend accepts explicit tile sizes from 1 through 128
 and the wider sizes 256 and 512. The default is 32. All sizes use float32
@@ -76,11 +127,12 @@ sizing requires resident Metal and is mutually exclusive with an explicit
 tile in the engine constructor.
 
 Tiles from 16 through 512 rows use grouped expert GEMM on Apple Silicon
-when at most 256 experts are present. The tile height is a runtime dispatch
-parameter. The Metal pipeline cache keys compiled kernels by function name.
-Wider tiles grow the reusable scratch buffers on first use. Default tile
-promotion requires warmed wall time measurements under the same conditions
-at 3 and 10 passes.
+when at most 256 experts are present. The GPU groups routes by expert for
+the IQ4_NL and Q8_0 gate/up and down GEMMs. Gate/up applies SiTU in its
+epilogue. The down output returns to the original token and routing rank
+for the weighted sum. The tile height is a runtime dispatch parameter.
+The Metal pipeline cache keys kernels by function name. Wider tiles grow
+the reusable scratch buffers as needed.
 
 Set `INKLING2_MOE_PREFILL_ROUTES=32` to try two expert tile widths in the
 grouped path. The GPU router sends tiles with up to 16 routes to the M16
@@ -97,9 +149,16 @@ and down GEMMs using the actual tile count. The routing kernel writes both
 Metal dispatch grids into GPU scratch and reuses the existing FP32 M16
 GEMMs. Warming this mode after direct M16 adds one routing pipeline.
 
-For a single query with more than 64 visible keys, attention splits the
-history across four SIMD groups per head and combines their softmax
-partials before applying the output gate.
+The resident path fuses Q/K/V/R preparation. Eligible Q8_0 attention
+projections share a dispatch. Eligible F32 loop controllers compute
+gain, forget, and their epilogue together in scalar decode and prefill.
+Scalar IQ4_NL MoE fuses gate/up with SiTU and reuses activation loads.
+
+Decode attention with more than 64 visible keys partitions the key
+range and combines the softmax partials before applying the output gate.
+The optimized split-K kernel computes scores once per partition and reuses
+them for PV. Its sliding-window loop walks contiguous spans of the KV ring
+in logical order, preserving the FP32 summation order across wrap.
 
 Set `INKLING2_PREFILL_ATTENTION=scores` to cache FP32 scores during
 multirow resident prefill. Set it to `shared_kv` to share each K/V load
@@ -112,27 +171,30 @@ decode use the existing attention dispatch.
 
 The prefill kernels keep the zero-logit sink and the reference FP32
 accumulation order. Both modes size their threadgroup score storage at
-dispatch. In the original M2 Max comparison with the research IQ4_NL
-GGUF, 128-row tiles and three loop passes, `scores` led at 1,022 tokens
-and `shared_kv` led at 188 tokens.
+dispatch.
 
-Set `INKLING2_PREFILL_ATTENTION=ordered` to batch four adjacent queries
-per head with packed FP32 K and V. QK uses the same lane-local additions
-and SIMD reduction as `scores`. Softmax starts with the zero-logit sink
-and PV visits keys in ascending order for each query. The four compiled
-pipelines reuse GPU scratch across visits. This path handles tiles of
-64–512 rows in the first 1,024 positions with an unwrapped cache,
-a vector-aligned gate and up to 24 query heads and eight KV heads.
-When the batch is ineligible, the selector follows the `scores` path.
+Set `INKLING2_PREFILL_ATTENTION=ordered` to batch queries against packed
+FP32 K and V. On layouts with three query heads per KV head, QK shares
+the packed K loads across all three heads. QK keeps the lane-local additions
+and SIMD reduction of `scores`. One kernel computes softmax and PV, starting
+with the zero-logit sink and visiting keys in ascending order. Packing,
+QK, and softmax/PV reuse GPU scratch across visits. This path handles tiles
+of 64–512 rows in the first 1,024 positions with an unwrapped cache,
+a vector-aligned gate, 128 head channels, 16 relative channels, and up to
+24 query heads and eight KV heads. Other tiles use `scores` when eligible
+and regular attention otherwise.
 
 The fixed-depth resident Metal engine also exposes
 `decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.
 It evaluates all four input IDs in one command, returns the unpadded
 next-token logits after each input, and advances the sequence by four.
 Each row uses the decode reduction order. Tokens routed to the same
-expert share packed weight loads. Compare the returned logits and
-retained F32 KV with four `forward` calls from the same prefix to test
-the block path independently of prefill arithmetic.
+expert share packed weight loads. Eligible Q8_0 projections reuse
+activation reads across rows, and the attention output projection can
+apply its static convolution and commit raw history in the same kernel.
+Compare the returned logits and retained F32 KV with four `forward` calls
+from the same prefix to test the block path independently of prefill
+arithmetic.
 
 The staged backend remains available for adaptive depth, traces, and
 checkpoint layouts outside the resident kernel bounds. Backend selection
@@ -155,7 +217,7 @@ make build/inkling2_verify_bench
   --case /path/to/lookup-3.txt --case /path/to/lookup-10.txt \
   --mode verify --scenario all
 ./build/inkling2_verify_bench --model /path/to/research-IQ4_NL.gguf \
-  --case /path/to/lookup-3.txt --mode bench --pairs 2
+  --case /path/to/lookup-3.txt --passes 3 --mode bench --pairs 2
 ```
 
 The default corpus scenario uses the fixture as supplied. The other two
@@ -191,7 +253,12 @@ On the research IQ4_NL checkpoint at 3 and 10 passes, two repeating
 continuations accepted all 24 proposed tokens over eight blocks each.
 The story and six-hop lookup continuations produced no drafts.
 Greedy output matched scalar decode in these cases and on a mixed
-counter-record continuation with partial acceptance.
+counter-record continuation with partial acceptance. In an earlier
+three-pass M2 Max comparison at `7dc3116c`, the six-fixture mixed workload
+rose from 26.12 to 28.14 committed decode tok/s (+7.75%) with n-gram drafting.
+The five fixtures with matched prefill and decode brackets gained 0.89%
+in combined throughput. Timings included rejected verification rows,
+rewinds, and scalar fallback. This result depends on repeat frequency.
 
 ## Greedy 3→10 depth speculation
 
@@ -229,7 +296,8 @@ make build/inkling2_depth_bench
 ```
 
 On the M2 Max with research IQ4_NL weights and prefill tiles of up to
-128 tokens, the warmed runs produced the following decode results.
+128 tokens, the original `47cbfe40` runs produced the following decode
+results after warmup.
 Both intervals of each retained pair had sampled background CPU below
 one full core, with samples less than one second apart. The speedup is
 the median of the paired ratios.
@@ -261,7 +329,9 @@ projections and the last four layers' experts, and F32 for the loop controllers
 and router. The loader checks loop metadata and tensor layout and extents
 before decode.
 
-## Native Metal MoE comparison
+## Historical Metal baselines
+
+### Staged Metal MoE
 
 On an Apple M2 Max with the research checkpoint, the Metal MoE path matched
 the native engine at `9fdba2dd` on all 256 top-ranked tokens. The comparison
@@ -286,7 +356,7 @@ submissions per token at 3 passes and 1,093 → 829 at 10 passes. In an
 adaptive smoke test with a 10-pass limit and Δ = 0.15, the engine backfilled
 16 passes and generated `Paris.`.
 
-## Resident Metal comparison
+### Initial resident Metal parity
 
 The resident path matched the staged engine at all 68 output positions
 across the 46-token story and 188-token six-hop lookup prefixes, with 3 and
@@ -297,20 +367,6 @@ positions agreed at every layer visit after prefill and after decode. The
 largest absolute differences were `5.70e-4` for K and `5.20e-4` for V.
 The focused Metal specs also check an overflowing sliding window, continued
 decode after prefill, and cache reuse after reset.
-
-On an Apple M2 Max, both backends used this same GGUF, float32 KV,
-and a 256-token context. For each case, cogni-ml and llama.cpp ran
-consecutively, with the same 16 forced decode inputs. Each figure is the
-median of three timed repetitions after warmup. The host had background
-CPU load. Cogni-ml used tiles of up to 32 tokens and llama.cpp used one
-batch per prompt.
-
-| Prompt tokens | Passes | Cogni-ml prefill (tok/s) | llama.cpp prefill (tok/s) | Cogni-ml decode (tok/s) | llama.cpp decode (tok/s) |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 46 | 3 | 61.38 | 146.38 | 15.23 | 18.70 |
-| 46 | 10 | 18.98 | 48.72 | 5.73 | 7.49 |
-| 188 | 3 | 52.52 | 303.74 | 15.98 | 26.89 |
-| 188 | 10 | 16.72 | 81.49 | 6.04 | 6.47 |
 
 ### Matched prefill tiles and Q8_0 projections
 
@@ -341,11 +397,10 @@ increasing the node reserve from 22,528 to 44,032 in the benchmark build.
 
 ### Grouped expert GEMM
 
-On Apple Silicon, resident prefill tiles of 16–32 tokens with up to 256
-experts bucket the selected routes on the GPU. The IQ4_NL and Q8_0 gate/up
-and down GEMMs share the route map and reuse each dequantized weight tile
-across up to 16 routes for one expert. The kernels scatter their output
-back to the original token and top-k rank before the weighted sum.
+The initial grouped kernels bucketed routes on the GPU for 16–32-token
+prefill tiles with up to 256 experts. The IQ4_NL and Q8_0 gate/up and down
+GEMMs shared the route map and each dequantized weight tile across up to
+16 routes for one expert.
 
 On the same 188-token research-checkpoint case and six tiles, an interleaved
 A/B comparison on the M2 Max gave the following medians of three timed runs
@@ -385,15 +440,18 @@ fixed-depth trace. Including 16 deferred passes, the core ran 52 times
 compared with 60 for fixed depth. At a threshold of 0.08, the last two
 positions reached the cap and deferred work brought the total back to 60.
 
-Two local direct-answer lookup examples with five and nine hops scored zero
-correct at both fixed depths, three and ten. The last prompt token's delta
-decreased on both examples.
+The Metal check for `872baf18` compared the block4 output fusion with
+the unfused path on 1,022 prompt tokens and 48 forced decode steps at
+three passes. With Metal API Validation enabled, all 49 full-vocabulary
+logit rows and live KV at 13 checkpoints matched bitwise across 48
+layer visits. The check included retaining one through four rows of a
+block, rollback across the physical ring boundary, and the next scalar step.
 
 Run the focused CPU and Metal specs from the repository root.
 
 ```sh
 crystal spec -Dcpu_only spec/inkling2_*_spec.cr
 make build/bridge.o
-crystal spec spec/inkling2_*_spec.cr \
+MTL_DEBUG_LAYER=1 crystal spec spec/inkling2_*_spec.cr \
   --link-flags="-fuse-ld=/usr/bin/ld $PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
 ```
