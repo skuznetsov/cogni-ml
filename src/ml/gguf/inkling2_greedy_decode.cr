@@ -54,7 +54,7 @@ module ML::GGUF
           end
         end
 
-        pending = Inkling2Engine.greedy_token_id(engine.forward(pending).not_nil!)
+        pending = engine.forward_greedy(pending)
       end
 
       Result.new(ids, blocks, accepted_rows)

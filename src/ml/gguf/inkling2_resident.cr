@@ -85,6 +85,7 @@ module ML::GGUF
     @ids : ML::MetalBuffer
     @logits : ML::MetalBuffer
     @block_logits : ML::MetalBuffer? = nil
+    @greedy_ids : ML::MetalBuffer? = nil
     @scratch = Inkling2ResidentScratch.new
     @visits = [] of Visit
     @draft_epilogue_visits = [] of Visit
@@ -154,6 +155,13 @@ module ML::GGUF
       evaluate(position, 1, with_logits)
     end
 
+    def forward_greedy(token : Int32, position : Int32) : Int32
+      @ids.contents.as(Int32*).value = token
+      output = greedy_ids_buffer
+      submit_tile(position, 1, output, greedy: true)
+      output.contents.as(Int32*).value
+    end
+
     def decode_block4(tokens : StaticArray(Int32, 4), position : Int32) : StaticArray(Array(Float32), 4)
       ensure_ordinary_mode! if @depth_speculation
       ids = @ids.contents.as(Int32*)
@@ -162,6 +170,16 @@ module ML::GGUF
       logits = @block_logits ||= allocate_shared(tokens.size.to_i64 * vocab * sizeof(Float32))
       submit_tile(position, tokens.size, logits, decode_block: true)
       read_block_logits(logits)
+    end
+
+    def decode_block4_greedy(tokens : StaticArray(Int32, 4), position : Int32) : StaticArray(Int32, 4)
+      ensure_ordinary_mode! if @depth_speculation
+      ids = @ids.contents.as(Int32*)
+      tokens.each_with_index { |token, row| ids[row] = token }
+      output = greedy_ids_buffer
+      submit_tile(position, tokens.size, output, decode_block: true, greedy: true)
+      data = output.contents.as(Int32*)
+      StaticArray(Int32, 4).new { |row| data[row] }
     end
 
     def rewind_block(end_position : Int32) : Nil
@@ -405,6 +423,10 @@ module ML::GGUF
       @logits.read(@config.vocab_size) if with_logits
     end
 
+    private def greedy_ids_buffer : ML::MetalBuffer
+      @greedy_ids ||= allocate_shared(4_i64 * sizeof(Int32))
+    end
+
     private def submit_depth_draft_row(position : Int32, row : Int32, with_logits : Bool) : Nil
       submit_command do |encoder|
         encode_depth_draft_row(encoder, position, row, with_logits)
@@ -501,13 +523,14 @@ module ML::GGUF
       encode_logits(tile, logits)
     end
 
-    private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *, decode_block : Bool = false) : Nil
+    private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *,
+                            decode_block : Bool = false, greedy : Bool = false) : Nil
       if @depth_speculation
         ensure_ordinary_mode!
         raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
       end
       submit_command do |encoder|
-        encode_tile(encoder, position, rows, logits, decode_block)
+        encode_tile(encoder, position, rows, logits, decode_block, greedy)
       end
       @depth_frontier = position + rows if @depth_speculation
     end
@@ -534,7 +557,7 @@ module ML::GGUF
     end
 
     private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32,
-                            logits : ML::MetalBuffer?, decode_block : Bool) : Nil
+                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool) : Nil
       tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
       prelude = tile.hidden if @passes > 1
       banks = StaticArray[@scratch.take(@core_blocks * tile.elements), @scratch.take(@core_blocks * tile.elements)] if @passes > 1
@@ -562,10 +585,10 @@ module ML::GGUF
         encode_layer(physical, visit, tile, nil)
         visit += 1
       end
-      encode_logits(tile, logits) if logits
+      encode_logits(tile, logits, greedy: greedy) if logits
     end
 
-    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer) : Nil
+    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false) : Nil
       encoder = tile.encoder
       rows = tile.decode_block? ? tile.rows : 1
       mixed = mix(tile, tile.current, @weights.output_res_query, 1)
@@ -577,8 +600,12 @@ module ML::GGUF
       logits = @scratch.take(rows * padded_vocab)
       @linear.project(encoder, @weights.output, normalized, logits, rows, decode_block: tile.decode_block?)
       output = Inkling2View.new(buffer)
-      rows.times do |row|
-        MathOps.softcap(encoder, logits.slice(row * padded_vocab), output.slice(row * vocab), @config.logit_softcap, vocab)
+      if greedy
+        MathOps.greedy_ids(encoder, @scratch, logits, output, @config.logit_softcap, vocab, padded_vocab, rows)
+      else
+        rows.times do |row|
+          MathOps.softcap(encoder, logits.slice(row * padded_vocab), output.slice(row * vocab), @config.logit_softcap, vocab)
+        end
       end
     end
 

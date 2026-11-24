@@ -170,20 +170,36 @@ module ML::GGUF
     end
 
     def forward(token : Int32, *, logits : Bool = true) : Array(Float32)?
+      evaluate_token(token) do
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          if backend = @resident
+            backend.forward(token, @position, logits)
+          else
+            run_token(token, logits)
+          end
+        {% else %}
+          run_token(token, logits)
+        {% end %}
+      end
+    end
+
+    def forward_greedy(token : Int32) : Int32
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        if (backend = @resident) && resident_greedy_top1?
+          id = evaluate_token(token) { backend.forward_greedy(token, @position) }
+          return require_greedy_id(id)
+        end
+      {% end %}
+      self.class.greedy_token_id(forward(token).not_nil!)
+    end
+
+    private def evaluate_token(token : Int32, & : -> T) : T forall T
       validate_active!
       validate_token!(token)
       raise ArgumentError.new("Inkling 2 context of #{@max_seq} tokens is full") if @position >= @max_seq
 
       begin
-        result = {% if flag?(:darwin) && !flag?(:cpu_only) %}
-                   if backend = @resident
-                     backend.forward(token, @position, logits)
-                   else
-                     run_token(token, logits)
-                   end
-                 {% else %}
-                   run_token(token, logits)
-                 {% end %}
+        result = yield
         @position += 1
         result
       rescue ex
@@ -195,7 +211,7 @@ module ML::GGUF
     # Evaluate four known continuation tokens with the serial decode numerics.
     # Commits all four to the sequence and returns the next-token logits after each.
     def decode_block4(tokens : StaticArray(Int32, 4)) : StaticArray(Array(Float32), 4)
-      evaluate_block4(tokens) { |rows| {rows, tokens.size} }
+      evaluate_block4(tokens) { |backend| {backend.decode_block4(tokens, @position), tokens.size} }
     end
 
     # The caller supplies the exact pending token in row zero. Commit it and
@@ -203,18 +219,30 @@ module ML::GGUF
     # Return the committed row count and the exact next pending token ID.
     def verify_greedy_block4(tokens : StaticArray(Int32, 4)) : {Int32, Int32}
       raise ArgumentError.new("Inkling 2 greedy verification was not enabled") unless @greedy_verifier
-      evaluate_block4(tokens) do |rows|
-        accepted = 1
-        expected = self.class.greedy_token_id(rows[0])
+      evaluate_block4(tokens) do |backend|
+        rows = resident_greedy_top1? ? backend.decode_block4_greedy(tokens, @position) : backend.decode_block4(tokens, @position)
+        accepted = 0
+        expected = tokens[0]
         while accepted < tokens.size && tokens[accepted] == expected
-          expected = self.class.greedy_token_id(rows[accepted])
+          row = rows[accepted]
+          expected = row.is_a?(Int32) ? require_greedy_id(row) : self.class.greedy_token_id(row)
           accepted += 1
         end
         { {accepted, expected}, accepted }
       end
     end
 
-    private def evaluate_block4(tokens : StaticArray(Int32, 4), & : StaticArray(Array(Float32), 4) -> Tuple(T, Int32)) : T forall T
+    # Override in a same-binary comparison with the full-logit CPU scan.
+    private def resident_greedy_top1? : Bool
+      true
+    end
+
+    private def require_greedy_id(id : Int32) : Int32
+      raise "Inkling 2 returned no finite logits" if id < 0
+      id
+    end
+
+    private def evaluate_block4(tokens : StaticArray(Int32, 4), &)
       validate_active!
       raise ArgumentError.new("Inkling 2 decode block exceeds the context of #{@max_seq} tokens") if tokens.size > @max_seq - @position
       tokens.each { |token| validate_token!(token) }
@@ -222,7 +250,7 @@ module ML::GGUF
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         backend = @resident || raise ArgumentError.new("Inkling 2 block decode requires fixed-depth resident Metal")
         begin
-          result, accepted = yield backend.decode_block4(tokens, @position)
+          result, accepted = yield backend
           backend.rewind_block(@position + accepted) if accepted < tokens.size
           @position += accepted
           result

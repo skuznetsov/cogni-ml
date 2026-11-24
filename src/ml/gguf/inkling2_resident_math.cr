@@ -8,6 +8,7 @@ require "./inkling2_metal_view"
     module Inkling2ResidentMath
       THREADS = 256_i32
       SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_resident_math.metal") }}
+      private TOP1_TILE = 4 * THREADS
 
     # CPU RMSNorm accumulates squared values in Float64 before converting the
     # reciprocal scale to Float32. This row-parallel Metal implementation
@@ -165,6 +166,34 @@ require "./inkling2_metal_view"
       encoder.set_value(vocab.to_u32, 2)
       encoder.set_value(cap, 3)
       encoder.dispatch_1d(vocab, THREADS)
+    end
+
+    # Reduce only the unpadded vocabulary, applying the same softcap as the
+    # full-logit path before selecting the first finite maximum. A row without
+    # a finite score returns -1, which the greedy caller handles when consumed.
+    def self.greedy_ids(
+      encoder : ML::Metal::ComputeEncoder, scratch : Inkling2ResidentScratch,
+      input : Inkling2View, output : Inkling2View, cap : Float32,
+      vocab : Int32, stride : Int32, rows : Int32,
+    ) : Nil
+      validate_rows!(stride, rows)
+      raise ArgumentError.new("Inkling 2 greedy vocabulary must fit in one row") unless 0 < vocab <= stride
+      tiles = (vocab - 1) // TOP1_TILE + 1
+      partials = scratch.take(2 * tiles * rows)
+      encoder.set_pipeline(pipeline("inkling2_resident_greedy_tiles"))
+      encoder.set_buffer(input.buffer, 0, offset: input.offset)
+      encoder.set_buffer(partials.buffer, 1, ML::Metal::BufferAccess::Write, offset: partials.offset)
+      encoder.set_value(vocab.to_u32, 2)
+      encoder.set_value(stride.to_u32, 3)
+      encoder.set_value(tiles.to_u32, 4)
+      encoder.set_value(cap, 5)
+      encoder.dispatch_threadgroups({tiles, rows, 1}, {THREADS, 1, 1})
+
+      encoder.set_pipeline(pipeline("inkling2_resident_greedy_reduce"))
+      encoder.set_buffer(partials.buffer, 0, offset: partials.offset)
+      encoder.set_buffer(output.buffer, 1, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(tiles.to_u32, 2)
+      encoder.dispatch_threadgroups({rows, 1, 1}, {THREADS, 1, 1})
     end
 
     private def self.validate_rows!(width : Int32, rows : Int32) : Nil

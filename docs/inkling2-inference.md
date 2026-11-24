@@ -140,6 +140,32 @@ in advance, includes greedy top-1 scans, and excludes prefill.
 In actual generation, n-gram throughput depends on draft availability
 and acceptance.
 
+### Greedy readout on Metal
+
+Resident Metal greedy decode reduces the output projection to one token
+ID per row on the GPU. It applies the FP32 softcap before filtering
+nonfinite scores and breaks ties by lowest token ID. The n-gram verifier
+uses the same reduction for four rows. Use `forward` and `decode_block4`
+to read full logit vectors.
+
+On the same research checkpoint and M2 Max at three passes, a warmed
+same-binary A/B isolated the GPU reduction with the separate FFN tail.
+The timer covers 48 decode rows, including selection, after prefill.
+
+| Prompt + decode | Decode | Quiet pairs | CPU top-1 (tok/s) | GPU top-1 (tok/s) | Paired change |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 81 + 48 prose | Scalar | 3 | 28.75 | 28.99 | +0.83% |
+| 81 + 48 prose | Block4 | 4 | 39.28 | 39.82 | +0.72% |
+| 1,022 + 48 | Scalar | 1 | 25.76 | 26.23 | +1.82% |
+| 1,022 + 48 | Block4 | 1 | 36.05 | 37.00 | +2.64% |
+
+Arm rates are medians. The change is the median of the within-pair
+ratios. The long-context figures are single qualified pairs. The
+block4 input is a known continuation with all four rows accepted.
+Selected IDs and live KV matched on both fixtures. The rollback
+checks also matched live FFN history and the first full FP32 logit row
+after replay across the 1,024-token boundary.
+
 ## Fixed-depth Metal execution contract
 
 Scalar decode submits one Metal command buffer per token. Prefill evaluates a
@@ -148,8 +174,8 @@ one logit row for the whole prompt. The same per-visit KV and convolution
 histories continue into decode. Each new query reads old history and the
 causal part of its tile before the tile can overwrite the sliding cache.
 Intermediate buffers stay on the GPU across the prelude, repeated core,
-and epilogue. With fixed depth, the CPU submits the work and reads the
-requested logit rows.
+and epilogue. With fixed depth, the CPU submits the work and reads token
+IDs or the requested logit rows.
 
 The resident Metal backend accepts explicit tile sizes from 1 through 128
 and the wider sizes 256 and 512. The default is 32. All sizes use float32

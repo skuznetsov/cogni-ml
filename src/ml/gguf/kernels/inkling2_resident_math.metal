@@ -267,6 +267,11 @@ kernel void inkling2_resident_embed(
     }
 }
 
+inline float inkling2_logit_softcap(float value, float cap)
+{
+    return cap > 0.0f ? cap * tanh(value / cap) : value;
+}
+
 kernel void inkling2_resident_softcap(
     device const float* input  [[buffer(0)]],
     device       float* output [[buffer(1)]],
@@ -275,6 +280,94 @@ kernel void inkling2_resident_softcap(
     uint tid [[thread_position_in_grid]])
 {
     if (tid >= vocab) return;
-    const float value = input[tid];
-    output[tid] = cap > 0.0f ? cap * tanh(value / cap) : value;
+    output[tid] = inkling2_logit_softcap(input[tid], cap);
+}
+
+struct Inkling2GreedyCandidate {
+    uint score_key;
+    uint id;
+};
+
+constant uint INKLING2_NO_GREEDY_ID = 0xffffffffu;
+constant uint INKLING2_GREEDY_TILE = 4 * INKLING2_RESIDENT_THREADS;
+
+inline uint inkling2_greedy_score_key(float score)
+{
+    // Float SIMD comparisons can flush subnormals. Order finite IEEE bits
+    // as unsigned integers, with both signed zeros treated as equal.
+    const uint bits = as_type<uint>(score);
+    const uint sign = 0x80000000u;
+    if ((bits & ~sign) == 0) return sign;
+    return bits & sign ? ~bits : bits ^ sign;
+}
+
+inline Inkling2GreedyCandidate inkling2_greedy_best(Inkling2GreedyCandidate a, Inkling2GreedyCandidate b)
+{
+    return b.score_key > a.score_key || (b.score_key == a.score_key && b.id < a.id) ? b : a;
+}
+
+inline Inkling2GreedyCandidate inkling2_greedy_simd_best(Inkling2GreedyCandidate best)
+{
+    const uint key = simd_max(best.score_key);
+    const uint id = simd_min(best.score_key == key ? best.id : INKLING2_NO_GREEDY_ID);
+    return {key, id};
+}
+
+inline Inkling2GreedyCandidate inkling2_greedy_group_best(
+    Inkling2GreedyCandidate best, threadgroup Inkling2GreedyCandidate* partials,
+    ushort lane, ushort group)
+{
+    best = inkling2_greedy_simd_best(best);
+    if (lane == 0) partials[group] = best;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (group == 0) {
+        const Inkling2GreedyCandidate candidate =
+            lane < INKLING2_RESIDENT_SIMDGROUPS ? partials[lane] : Inkling2GreedyCandidate{0u, INKLING2_NO_GREEDY_ID};
+        best = inkling2_greedy_simd_best(candidate);
+    }
+    return best;
+}
+
+kernel void inkling2_resident_greedy_tiles(
+    device const float*                   logits    [[buffer(0)]],
+    device       Inkling2GreedyCandidate*  tiles     [[buffer(1)]],
+    constant     uint&                    vocab     [[buffer(2)]],
+    constant     uint&                    stride    [[buffer(3)]],
+    constant     uint&                    count     [[buffer(4)]],
+    constant     float&                   cap       [[buffer(5)]],
+    uint2  tile  [[threadgroup_position_in_grid]],
+    ushort lane  [[thread_index_in_simdgroup]],
+    ushort group [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    threadgroup Inkling2GreedyCandidate partials[INKLING2_RESIDENT_SIMDGROUPS];
+    device const float* row = logits + (size_t)tile.y * stride;
+    const uint start = tile.x * INKLING2_GREEDY_TILE;
+    const uint end = min(start + INKLING2_GREEDY_TILE, vocab);
+    Inkling2GreedyCandidate best = {0u, INKLING2_NO_GREEDY_ID};
+    for (uint id = start + tid; id < end; id += INKLING2_RESIDENT_THREADS) {
+        const float score = inkling2_logit_softcap(row[id], cap);
+        if (isfinite(score)) best = inkling2_greedy_best(best, {inkling2_greedy_score_key(score), id});
+    }
+    best = inkling2_greedy_group_best(best, partials, lane, group);
+    if (tid == 0) tiles[(size_t)tile.y * count + tile.x] = best;
+}
+
+kernel void inkling2_resident_greedy_reduce(
+    device const Inkling2GreedyCandidate* tiles  [[buffer(0)]],
+    device       int*                    ids    [[buffer(1)]],
+    constant     uint&                   count  [[buffer(2)]],
+    uint   row   [[threadgroup_position_in_grid]],
+    ushort lane  [[thread_index_in_simdgroup]],
+    ushort group [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    threadgroup Inkling2GreedyCandidate partials[INKLING2_RESIDENT_SIMDGROUPS];
+    device const Inkling2GreedyCandidate* row_tiles = tiles + (size_t)row * count;
+    Inkling2GreedyCandidate best = {0u, INKLING2_NO_GREEDY_ID};
+    for (uint i = tid; i < count; i += INKLING2_RESIDENT_THREADS) {
+        best = inkling2_greedy_best(best, row_tiles[i]);
+    }
+    best = inkling2_greedy_group_best(best, partials, lane, group);
+    if (tid == 0) ids[row] = best.id == INKLING2_NO_GREEDY_ID ? -1 : (int)best.id;
 }
