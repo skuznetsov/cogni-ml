@@ -100,6 +100,24 @@ Full logits and live KV match bitwise through 48 forced decode inputs
 after each prefill, including the 1,024-token boundary. Scratch capacity
 stays constant and warming the shared path adds one pipeline-cache key.
 
+### M64 expert tiles
+
+On the same M2 Max and research IQ4_NL GGUF at three passes, an
+ordered-attention A/B compared the M16/M32 buckets with an additional
+M64 bucket. Each row uses four quiet, alternating pairs. The change
+is the median of the within-pair speed ratios.
+
+| Prompt tokens | Prefill tiles | M16/M32 (tok/s) | M16/M32/M64 (tok/s) | Paired change | Pair range |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 188 | 128 + 60 | 203.09 | 203.82 | +0.66% | −0.35% to +1.86% |
+| 1,022 | 512 + 510 | 373.63 | 403.66 | +7.66% | +6.36% to +9.41% |
+
+The wide fixture improved in all four pairs. Full FP32 logits and
+live KV matched bitwise through 48 forced decode inputs on both
+fixtures, including the 1,024-token boundary on the wide fixture.
+Scratch capacity stayed constant and warming M64 added five Metal
+pipeline keys.
+
 ### Comparison with llama.cpp
 
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
@@ -208,6 +226,11 @@ On an M2 Max with the research IQ4_NL GGUF at three passes, appending a
 512-token tile after a 510-token prefix improved from 225.0 to 232.5
 tokens/s in two quiet A/B pairs. Logits and KV matched bitwise.
 `INKLING2_MOE_PREFILL_ROUTES=16` is the default.
+
+Set `INKLING2_MOE_PREFILL_ROUTES=64` for the optional wide-prefill
+mode. It batches full sets of 64 routes per expert with one shared
+FP32 weight tile and uses the M16/M32 GEMMs for the tail. Prefill
+tiles with fewer than 64 tokens keep the smaller route widths.
 
 Set `INKLING2_MOE_PREFILL_ROUTES=16_indirect` to launch the M16 gate/up
 and down GEMMs using the actual tile count. The routing kernel writes both

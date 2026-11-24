@@ -142,8 +142,9 @@ module ML::GGUF
                                        when nil, "16"     then {16, false}
                                        when "16_indirect" then {16, true}
                                        when "32"          then {32, false}
+                                       when "64"          then {64, false}
                                        else
-                                         raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, or 32")
+                                         raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, 32, or 64")
                                        end
       @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: tile_routes,
         prefill_indirect_dispatch: indirect_dispatch)

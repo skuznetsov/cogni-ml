@@ -435,14 +435,22 @@ require "../src/ml/gguf/inkling2_engine"
         "inkling2_resident_moe_gemm_situ_iq4_nl_m32",
         "inkling2_resident_moe_gemm_iq4_nl_m32",
       }
+      m64_pipelines = {
+        "inkling2_resident_moe_gemm_situ_q8_0_m64",
+        "inkling2_resident_moe_gemm_q8_0_m64",
+        "inkling2_resident_moe_gemm_situ_iq4_nl_m64",
+        "inkling2_resident_moe_gemm_iq4_nl_m64",
+      }
       fixture = Inkling2LinearSpecSupport.write_model
       gguf = ML::GGUF::GGUFFile.new(fixture.path)
       linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
       linear_indirect = ML::GGUF::Inkling2ResidentLinear.new(gguf, prefill_indirect_dispatch: true)
       linear_m32 = ML::GGUF::Inkling2ResidentLinear.new(gguf, prefill_expert_tile_routes: 32_i32)
+      linear_m64 = ML::GGUF::Inkling2ResidentLinear.new(gguf, prefill_expert_tile_routes: 64_i32)
       scratch = ML::GGUF::Inkling2ResidentScratch.new
       scratch_indirect = ML::GGUF::Inkling2ResidentScratch.new
       scratch_m32 = ML::GGUF::Inkling2ResidentScratch.new
+      scratch_m64 = ML::GGUF::Inkling2ResidentScratch.new
       buffers = [] of ML::MetalBuffer
       command = ML::Metal::CommandBuffer.new
       encoder = ML::Metal::ComputeEncoder.new(command)
@@ -640,10 +648,9 @@ require "../src/ml/gguf/inkling2_engine"
           ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_group_routes_split").should be_true
         {% end %}
 
-        # Expert 0 fills one M16 tile, spills into a short or wide tail, or
-        # exceeds an M32 tile. Expert 2 stays empty for Q8_0 and receives only
-        # the final row for IQ4_NL.
-        prefill_moe_cases = {16_i32, 17_i32, 25_i32, 33_i32}.flat_map do |rows|
+        # Exercise both sides of the M64 boundary, mixed-size tails and
+        # multiple full M64 tiles. Expert 2 is empty or receives one route.
+        prefill_moe_cases = {16, 17, 25, 33, 63, 64, 65, 97, 145}.flat_map do |rows|
           input = Array(Float32).new(rows * 32) do |index|
             row, column = index.divmod(32)
             case column
@@ -665,7 +672,10 @@ require "../src/ml/gguf/inkling2_engine"
             m32 = linear_m32.moe(encoder, scratch_m32, weights, config, input_view, bias, rows)
             m32_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 32, 0_f32), buffers)
             ML::GGUF::Inkling2ResidentMath.copy(encoder, m32, m32_readback, rows * 32)
-            {rows, m16_readback, indirect_readback, m32_readback}
+            m64 = linear_m64.moe(encoder, scratch_m64, weights, config, input_view, bias, rows)
+            m64_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 32, 0_f32), buffers)
+            ML::GGUF::Inkling2ResidentMath.copy(encoder, m64, m64_readback, rows * 32)
+            {rows, m16_readback, indirect_readback, m32_readback, m64_readback}
           end
         end
 
@@ -712,9 +722,9 @@ require "../src/ml/gguf/inkling2_engine"
             actual.should be_close(reference, tolerance)
           end
         end
-        prefill_moe_cases.each do |rows, m16_readback, indirect_readback, m32_readback|
+        prefill_moe_cases.each do |rows, m16_readback, indirect_readback, m32_readback, m64_readback|
           expected = Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(m16_readback, rows * 32))
-          {indirect_readback, m32_readback}.each do |readback|
+          {indirect_readback, m32_readback, m64_readback}.each do |readback|
             Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(readback, rows * 32)).should eq(expected)
           end
         end
@@ -725,6 +735,9 @@ require "../src/ml/gguf/inkling2_engine"
           m32_pipelines.each do |pipeline|
             ML::Metal::PipelineCache.resident_linear_spec_contains?(pipeline).should be_true
           end
+          m64_pipelines.each do |pipeline|
+            ML::Metal::PipelineCache.resident_linear_spec_contains?(pipeline).should be_true
+          end
         {% end %}
       ensure
         encoder.end_encoding unless encoding_ended
@@ -732,9 +745,11 @@ require "../src/ml/gguf/inkling2_engine"
         scratch.close
         scratch_indirect.close
         scratch_m32.close
+        scratch_m64.close
         linear.close
         linear_indirect.close
         linear_m32.close
+        linear_m64.close
         gguf.close
         File.delete(fixture.path) if File.exists?(fixture.path)
       end

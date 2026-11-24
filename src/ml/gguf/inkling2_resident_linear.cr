@@ -33,10 +33,11 @@ module ML::GGUF
       private DECODE_EXPERT_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe_decode.metal") }}
       private EXPERT_TILE_ROUTES = 16_i32
       private WIDE_EXPERT_TILE_ROUTES = 32_i32
+      private M64_EXPERT_TILE_ROUTES = 64_i32
       private EXPERT_TILE_OUTPUTS = 64_i32
 
       private record ExpertGrouping, routes : Inkling2View, tiles : Inkling2View, max_tiles : Int32,
-        grids : Inkling2View? = nil, wide_tiles : Inkling2View? = nil
+        grids : Inkling2View? = nil, wide_tiles : Inkling2View? = nil, m64_tiles : Inkling2View? = nil
 
       @base : UInt64
       @file_size : UInt64
@@ -45,8 +46,8 @@ module ML::GGUF
 
       def initialize(gguf : GGUFFile, *, @prefill_expert_tile_routes : Int32 = EXPERT_TILE_ROUTES,
                      @prefill_indirect_dispatch : Bool = false)
-        unless {EXPERT_TILE_ROUTES, WIDE_EXPERT_TILE_ROUTES}.includes?(@prefill_expert_tile_routes)
-          raise ArgumentError.new("Inkling 2 prefill expert tile must have 16 or 32 routes")
+        unless {EXPERT_TILE_ROUTES, WIDE_EXPERT_TILE_ROUTES, M64_EXPERT_TILE_ROUTES}.includes?(@prefill_expert_tile_routes)
+          raise ArgumentError.new("Inkling 2 prefill expert tile must have 16, 32, or 64 routes")
         end
         raise "Metal is unavailable. Use --cpu for CPU inference." unless ML::Metal::Device.init!
 
@@ -326,7 +327,14 @@ module ML::GGUF
         # Keep the bucket kernel's <=256-expert threadgroup bound; wider
         # routers fall back to the exact ungrouped matvec path.
         grouping = if (decode_block && config.n_expert <= 256) || grouped_experts?(rows, config.n_expert)
-                     tile_routes = rows > EXPERT_TILE_ROUTES ? @prefill_expert_tile_routes : EXPERT_TILE_ROUTES
+                     tile_limit = if rows >= M64_EXPERT_TILE_ROUTES
+                                    M64_EXPERT_TILE_ROUTES
+                                  elsif rows > EXPERT_TILE_ROUTES
+                                    WIDE_EXPERT_TILE_ROUTES
+                                  else
+                                    EXPERT_TILE_ROUTES
+                                  end
+                     tile_routes = Math.min(@prefill_expert_tile_routes, tile_limit)
                      group_expert_routes(encoder, scratch, ids, config.n_expert, rows, routed_rows.to_i32,
                        tile_routes, expert_output_tiles(layer.gate_up), expert_output_tiles(layer.down),
                        indirect: @prefill_indirect_dispatch && !decode_block)
@@ -519,13 +527,18 @@ module ML::GGUF
         routes = scratch.take(n_experts * rows)
         # At most one partial tile per expert; every other tile is full.
         max_tiles = Math.min(routed_rows, n_experts + (routed_rows - 1) // tile_routes)
-        split = tile_routes == WIDE_EXPERT_TILE_ROUTES
-        # With split maps, only the tail of each expert can be a narrow tile.
+        split = tile_routes > EXPERT_TILE_ROUTES
+        m64 = tile_routes == M64_EXPERT_TILE_ROUTES
+        # Each tail uses at most one M16 tile. An M64 tail can also use
+        # up to two M32 tiles.
         tiles = scratch.take(1 + 3 * (split ? n_experts : max_tiles))
-        wide_tiles = scratch.take(1 + 3 * max_tiles) if split
-        grids = scratch.take(split ? 12 : 6) if split || indirect
+        wide_tiles = scratch.take(1 + 3 * (m64 ? 2 * n_experts : max_tiles)) if split
+        m64_tiles = scratch.take(1 + 3 * (routed_rows // M64_EXPERT_TILE_ROUTES)) if m64
+        grids = scratch.take(m64 ? 18 : (split ? 12 : 6)) if split || indirect
 
-        name = if split
+        name = if m64
+                 "inkling2_resident_moe_group_routes_split_m64"
+               elsif split
                  "inkling2_resident_moe_group_routes_split"
                elsif indirect
                  "inkling2_resident_moe_group_routes_indirect"
@@ -542,6 +555,9 @@ module ML::GGUF
         if wide_tiles
           encoder.set_buffer(wide_tiles.buffer, 6, ML::Metal::BufferAccess::Write, offset: wide_tiles.offset)
         end
+        if m64_tiles
+          encoder.set_buffer(m64_tiles.buffer, 10, ML::Metal::BufferAccess::Write, offset: m64_tiles.offset)
+        end
         if grids
           encoder.set_buffer(grids.buffer, 7, ML::Metal::BufferAccess::Write, offset: grids.offset)
           encoder.set_value(gate_tiles.to_u32, 8)
@@ -549,7 +565,7 @@ module ML::GGUF
         end
         encoder.set_threadgroup_memory(((n_experts + 3) // 4) * 16, 0)
         encoder.dispatch_threadgroups({1, 1, 1}, {((n_experts + 31) // 32) * 32, 1, 1})
-        ExpertGrouping.new(routes, tiles, max_tiles, grids, wide_tiles)
+        ExpertGrouping.new(routes, tiles, max_tiles, grids, wide_tiles, m64_tiles)
       end
 
       private def encode_grouped_experts(encoder : ML::Metal::ComputeEncoder, weight : Inkling2ExpertWeights,
@@ -559,10 +575,14 @@ module ML::GGUF
         grid = situ ? 0 : 3
         grids = grouping.grids
         encode_expert_tiles(encoder, weight, input, output, grouping, grouping.tiles, input_route_divisor,
-          situ, wide: false, indirect_grid: grids.try(&.slice(grid)))
+          situ, tile_routes: EXPERT_TILE_ROUTES, indirect_grid: grids.try(&.slice(grid)))
         if wide_tiles = grouping.wide_tiles
           encode_expert_tiles(encoder, weight, input, output, grouping, wide_tiles, input_route_divisor,
-            situ, wide: true, indirect_grid: grids.not_nil!.slice(grid + 6))
+            situ, tile_routes: WIDE_EXPERT_TILE_ROUTES, indirect_grid: grids.not_nil!.slice(grid + 6))
+        end
+        if m64_tiles = grouping.m64_tiles
+          encode_expert_tiles(encoder, weight, input, output, grouping, m64_tiles, input_route_divisor,
+            situ, tile_routes: M64_EXPERT_TILE_ROUTES, indirect_grid: grids.not_nil!.slice(grid + 12))
         end
       end
 
@@ -574,16 +594,20 @@ module ML::GGUF
                                       input : Inkling2View, output : Inkling2View, grouping : ExpertGrouping,
                                       tiles : Inkling2View, input_route_divisor : Int32,
                                       situ : {Float32, Float32}?, *,
-                                      wide : Bool, indirect_grid : Inkling2View? = nil) : Nil
-        name = if situ && weight.type.iq4_nl?
-                 wide ? "inkling2_resident_moe_gemm_situ_iq4_nl_m32" : "inkling2_resident_moe_gemm_situ_iq4_nl"
-               elsif situ
-                 wide ? "inkling2_resident_moe_gemm_situ_q8_0_m32" : "inkling2_resident_moe_gemm_situ_q8_0"
-               elsif weight.type.iq4_nl?
-                 wide ? "inkling2_resident_moe_gemm_iq4_nl_m32" : "inkling2_resident_moe_gemm_iq4_nl"
-               else
-                 wide ? "inkling2_resident_moe_gemm_q8_0_m32" : "inkling2_resident_moe_gemm_q8_0"
-               end
+                                      tile_routes : Int32, indirect_grid : Inkling2View? = nil) : Nil
+        names = case tile_routes
+                when M64_EXPERT_TILE_ROUTES
+                  {"inkling2_resident_moe_gemm_q8_0_m64", "inkling2_resident_moe_gemm_situ_q8_0_m64",
+                   "inkling2_resident_moe_gemm_iq4_nl_m64", "inkling2_resident_moe_gemm_situ_iq4_nl_m64"}
+                when WIDE_EXPERT_TILE_ROUTES
+                  {"inkling2_resident_moe_gemm_q8_0_m32", "inkling2_resident_moe_gemm_situ_q8_0_m32",
+                   "inkling2_resident_moe_gemm_iq4_nl_m32", "inkling2_resident_moe_gemm_situ_iq4_nl_m32"}
+                else
+                  {"inkling2_resident_moe_gemm_q8_0", "inkling2_resident_moe_gemm_situ_q8_0",
+                   "inkling2_resident_moe_gemm_iq4_nl", "inkling2_resident_moe_gemm_situ_iq4_nl"}
+                end
+        base = weight.type.iq4_nl? ? 2 : 0
+        name = names[base + (situ ? 1 : 0)]
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, GROUPED_EXPERT_SOURCE))
         encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
@@ -599,7 +623,8 @@ module ML::GGUF
           encoder.set_value(situ[1], 10)
         end
         if indirect_grid
-          encoder.dispatch_threadgroups_indirect(indirect_grid.buffer, indirect_grid.offset, {128, 1, 1})
+          threads = tile_routes == M64_EXPERT_TILE_ROUTES ? 256 : 128
+          encoder.dispatch_threadgroups_indirect(indirect_grid.buffer, indirect_grid.offset, {threads, 1, 1})
         else
           encoder.dispatch_threadgroups({expert_output_tiles(weight), grouping.max_tiles, 1}, {128, 1, 1})
         end
