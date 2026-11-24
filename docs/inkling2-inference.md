@@ -231,6 +231,28 @@ Full FP32 logits, live KV, and convolution history matched bitwise
 on both fixtures, including the sliding-window boundary and block4
 rollback and replay after keeping one through four tokens.
 
+
+### Scalar K/V convolution and history commit
+
+On Apple Silicon, scalar K/V convolution with more than one tap uses one
+dispatch for both convolutions and their raw-history writes. Each thread
+reads the old taps for its channel before replacing the current ring slot.
+The three-pass research checkpoint saves 144 dispatches per decoded token.
+
+A same-binary M2 Max A/B on AC power timed scalar decode over 48 forced
+inputs with full logit readout after prefill. The table uses the pairs
+that qualified for the quiet-host gate in three alternating schedules.
+Rates are arm medians. The change is the median of the within-pair ratios.
+
+| Prompt + decode | Quiet pairs | Separate (tok/s) | Fused (tok/s) | Paired change |
+| --- | ---: | ---: | ---: | ---: |
+| 81 + 48 prose | 3 | 29.17 | 29.78 | +1.94% |
+| 1,022 + 48 | 9 | 26.34 | 26.65 | +1.19% |
+
+Full FP32 logits, live KV, and raw convolution histories matched bitwise.
+The checks covered the 1,024-token boundary and block4 rollback and replay
+after keeping one through four tokens.
+
 ## Fixed-depth Metal execution contract
 
 Scalar decode submits one Metal command buffer per token. Prefill evaluates a

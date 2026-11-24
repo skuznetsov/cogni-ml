@@ -276,6 +276,66 @@ require "../src/ml/gguf/inkling2_resident_math"
     values.map(&.unsafe_as(UInt32))
   end
 
+  private def resident_check_scalar_convolution_pair(
+    start : Int32,
+    reference : {ML::GGUF::Inkling2ResidentConvolution, ML::GGUF::Inkling2ResidentConvolution},
+    paired : {ML::GGUF::Inkling2ResidentConvolution, ML::GGUF::Inkling2ResidentConvolution},
+    seed : Int32,
+  ) : Nil
+    width = reference[0].channels
+    taps = reference[0].taps
+    heads = 3_i32
+    buffers = [] of ML::MetalBuffer
+    scratch = ML::GGUF::Inkling2ResidentScratch.new
+    readback = ML::MetalBuffer.new(4_i64 * width * sizeof(Float32), ML::StorageMode::Shared)
+    command = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(command)
+    begin
+      inputs = StaticArray(ML::GGUF::Inkling2View, 2).new do |side|
+        view = resident_shared_view(Array(Float32).new(width + 4) do |index|
+          Math.sin((index + 1) * (seed + 1) * (side + 1) * 0.013).to_f32
+        end, buffers)
+        ML::GGUF::Inkling2View.new(view.buffer, 4_i64 * sizeof(Float32))
+      end
+      weights = StaticArray(ML::GGUF::Inkling2View, 2).new do |side|
+        view = resident_shared_view(Array(Float32).new(width * taps + 4) do |index|
+          Math.cos((index + 1) * (side + 1) * 0.077).to_f32
+        end, buffers)
+        ML::GGUF::Inkling2View.new(view.buffer, 4_i64 * sizeof(Float32))
+      end
+      dynamic_taps = resident_shared_view(Array(Float32).new(heads * taps + 4) do |index|
+        Math.sin((seed + index + 1) * 0.17).to_f32
+      end, buffers)
+      dynamic = StaticArray(ML::GGUF::Inkling2View?, 2).new do |side|
+        ML::GGUF::Inkling2View.new(dynamic_taps.buffer, 4_i64 * sizeof(Float32)) if seed % 3 != side
+      end
+
+      begin
+        expected = StaticArray(ML::GGUF::Inkling2View, 2).new do |side|
+          reference[side].encode(encoder, scratch, start, 1, inputs[side], weights[side],
+            dynamic[side], dynamic_heads: dynamic[side] ? heads : 0)
+        end
+        actual = paired[0].encode_scalar_pair(encoder, scratch, start, paired[1],
+          {inputs[0], inputs[1]}, {weights[0], weights[1]}, {dynamic[0], dynamic[1]}, heads)
+        {expected[0], expected[1], actual[0], actual[1]}.each_with_index do |view, index|
+          destination = ML::GGUF::Inkling2View.new(readback, index.to_i64 * width * sizeof(Float32))
+          ML::GGUF::Inkling2ResidentMath.copy(encoder, view, destination, width)
+        end
+      ensure
+        encoder.end_encoding
+      end
+      command.commit_and_wait
+      bits = resident_bits(readback.read(4 * width))
+      2.times do |side|
+        bits[(side + 2) * width, width].should eq bits[side * width, width]
+      end
+    ensure
+      scratch.close
+      readback.release
+      buffers.each(&.release)
+    end
+  end
+
   private def resident_encode_convolution_tile(
     convolution : ML::GGUF::Inkling2ResidentConvolution,
     start : Int32,
@@ -811,6 +871,27 @@ require "../src/ml/gguf/inkling2_resident_math"
           end
         ensure
           gpu.close
+        end
+      end
+
+      it "matches separate scalar K/V convolutions across a history wrap and partial keep" do
+        {0_i32, 4_i32}.each do |reserve|
+          reference = {ML::GGUF::Inkling2ResidentConvolution.new(129, 3, rollback_rows: reserve),
+                       ML::GGUF::Inkling2ResidentConvolution.new(129, 3, rollback_rows: reserve)}
+          paired = {ML::GGUF::Inkling2ResidentConvolution.new(129, 3, rollback_rows: reserve),
+                    ML::GGUF::Inkling2ResidentConvolution.new(129, 3, rollback_rows: reserve)}
+          begin
+            5.times { |position| resident_check_scalar_convolution_pair(position, reference, paired, position) }
+            if reserve > 0
+              {reference, paired}.each { |convolutions| convolutions.each(&.begin_speculation(5)) }
+              5.upto(8) { |position| resident_check_scalar_convolution_pair(position, reference, paired, position) }
+              {reference, paired}.each { |convolutions| convolutions.each(&.finish_speculation(7)) }
+              7.upto(10) { |position| resident_check_scalar_convolution_pair(position, reference, paired, position + 20) }
+            end
+            resident_check_scalar_convolution_pair(0, reference, paired, 42)
+          ensure
+            {reference, paired}.each { |convolutions| convolutions.each(&.close) }
+          end
         end
       end
 
