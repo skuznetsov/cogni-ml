@@ -22,6 +22,7 @@ struct Inkling2PrefillOrderedParams {
     uint score_stride;
     uint sliding_window;
     uint cache_capacity;
+    uint source_start;
 };
 
 // Position and result are relative to the first packed key. Zero window
@@ -163,23 +164,47 @@ static inline float ordered_qk_broadcast_relative(float q, float bias, ushort la
     return simd_sum(partial);
 }
 
-kernel void inkling2_prefill_ordered_qk_gqa3(
-    device const float* q                [[buffer(0)]],
-    device const float* q_rel            [[buffer(1)]],
-    device const float* relative_bias    [[buffer(2)]],
-    device const float* sink             [[buffer(3)]],
-    device const float4* packed_k        [[buffer(4)]],
-    device       float* scores           [[buffer(5)]],
-    constant Inkling2PrefillOrderedParams& p [[buffer(6)]],
-    uint3 group [[threadgroup_position_in_grid]],
-    ushort simd [[simdgroup_index_in_threadgroup]],
-    ushort lane [[thread_index_in_simdgroup]])
+// The global cache is row-major and never wraps. The active span stays
+// visible through its K/V views until it is committed, including rows
+// that preceded the current query panel.
+template <bool DirectKV>
+static inline float4 ordered_load_key(
+    device const float* keys,
+    device const float* key_cache,
+    uint head,
+    uint key,
+    ushort lane,
+    constant Inkling2PrefillOrderedParams& p)
+{
+    if (DirectKV) {
+        const bool in_tile = key >= p.source_start;
+        const uint row = in_tile ? key - p.source_start : key;
+        device const float* k = (in_tile ? keys : key_cache) +
+            (row * p.kv_heads + head) * ordered_channels + lane;
+        return float4(k[0], k[32], k[64], k[96]);
+    }
+    return ((device const float4*)keys)[(head * p.packed_keys + key) * 32 + lane];
+}
+
+template <bool DirectKV>
+static inline void ordered_qk_gqa3(
+    device const float* q,
+    device const float* q_rel,
+    device const float* relative_bias,
+    device const float* sink,
+    device const float* keys,
+    device const float* key_cache,
+    device float* scores,
+    constant Inkling2PrefillOrderedParams& p,
+    uint3 group,
+    ushort simd,
+    ushort lane)
 {
     const uint row = group.y * gqa_rows;
     const uint kv_head = group.z;
     const uint first_head = kv_head * gqa_heads;
-    const uint first_position = p.start + row - p.key_origin;
-    const uint begin = ordered_first_key(first_position, p) + group.x * gqa_key_tile;
+    const uint first_position = p.start + row - (DirectKV ? 0 : p.key_origin);
+    const uint begin = (DirectKV ? 0 : ordered_first_key(first_position, p)) + group.x * gqa_key_tile;
     const uint end = min(begin + gqa_key_tile, first_position + min(p.rows - row, gqa_rows));
     if (begin >= end) return;
 
@@ -191,7 +216,7 @@ kernel void inkling2_prefill_ordered_qk_gqa3(
     uint first_keys[gqa_rows];
     #pragma clang loop unroll(full)
     for (uint i = 0; i < gqa_rows; ++i) {
-        first_keys[i] = ordered_first_key(first_position + i, p);
+        first_keys[i] = DirectKV ? 0 : ordered_first_key(first_position + i, p);
         #pragma clang loop unroll(full)
         for (uint h = 0; h < gqa_heads; ++h) {
             const uint src = min(row + i, p.rows - 1) * p.query_heads + first_head + h;
@@ -202,20 +227,19 @@ kernel void inkling2_prefill_ordered_qk_gqa3(
         }
     }
 
-    // Full causal tiles overlap two independent K loads. The edge path
-    // below only writes visible scores and preserves the conditional bias.
-    if (p.rows - row >= gqa_rows &&
-        begin >= first_keys[gqa_rows - 1] &&
-        begin + gqa_key_tile - 1 <= first_position &&
-        first_position + gqa_rows - 1 - begin < p.relative_extent) {
+    // Full causal tiles overlap two independent K loads. Tiles at the
+    // relative-extent or causal boundary take the per-key checks below.
+    const uint last_key = begin + gqa_key_tile - 1;
+    const bool full_tile = p.rows - row >= gqa_rows &&
+                           begin >= first_keys[gqa_rows - 1] && last_key <= first_position;
+    if (full_tile && first_position + gqa_rows - 1 - begin < p.relative_extent) {
         for (uint offset = 0; offset < gqa_key_tile; offset += 2 * gqa_simdgroups) {
             const uint key0 = begin + offset + simd;
-            device const float4* key_lane = packed_k + (kv_head * p.packed_keys + key0) * 32 + lane;
-            const float4 k0 = key_lane[0];
-            const uint distance0 = first_position - key0;
             const uint key1 = key0 + gqa_simdgroups;
-            const float4 k1 = key_lane[gqa_simdgroups * 32];
-            const uint distance1 = distance0 - gqa_simdgroups;
+            const float4 k0 = ordered_load_key<DirectKV>(keys, key_cache, kv_head, key0, lane, p);
+            const float4 k1 = ordered_load_key<DirectKV>(keys, key_cache, kv_head, key1, lane, p);
+            const uint distance0 = first_position - key0;
+            const uint distance1 = first_position - key1;
             #pragma clang loop unroll(full)
             for (uint i = 0; i < gqa_rows; ++i) {
                 const float bias0 = lane < 16 ? relative_bias[(distance0 + i) * 16 + lane] : 0.0f;
@@ -237,8 +261,32 @@ kernel void inkling2_prefill_ordered_qk_gqa3(
         return;
     }
 
+    if (DirectKV && full_tile && first_position - last_key >= p.relative_extent) {
+        // All queries are past relative extent for every key in this tile.
+        for (uint offset = 0; offset < gqa_key_tile; offset += 2 * gqa_simdgroups) {
+            const uint key0 = begin + offset + simd;
+            const uint key1 = key0 + gqa_simdgroups;
+            const float4 k0 = ordered_load_key<DirectKV>(keys, key_cache, kv_head, key0, lane, p);
+            const float4 k1 = ordered_load_key<DirectKV>(keys, key_cache, kv_head, key1, lane, p);
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < gqa_rows; ++i) {
+                #pragma clang loop unroll(full)
+                for (uint h = 0; h < gqa_heads; ++h) {
+                    const float score0 = ordered_qk_dot(query[i][h], k0);
+                    const float score1 = ordered_qk_dot(query[i][h], k1);
+                    if (lane == 0) {
+                        device float* line = scores + ((first_head + h) * p.rows + row + i) * p.score_stride;
+                        line[key0] = score0 - sinks[i][h];
+                        line[key1] = score1 - sinks[i][h];
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     for (uint key = begin + simd; key < end; key += gqa_simdgroups) {
-        const float4 k = packed_k[(kv_head * p.packed_keys + key) * 32 + lane];
+        const float4 k = ordered_load_key<DirectKV>(keys, key_cache, kv_head, key, lane, p);
         #pragma clang loop unroll(full)
         for (uint i = 0; i < gqa_rows; ++i) {
             const uint position = first_position + i;
@@ -258,21 +306,72 @@ kernel void inkling2_prefill_ordered_qk_gqa3(
     }
 }
 
-kernel void inkling2_prefill_ordered_softmax_pv(
-    device const float4* packed_v        [[buffer(0)]],
-    device const float*  scores           [[buffer(1)]],
-    device const float4* gate            [[buffer(2)]],
-    device       float4* output          [[buffer(3)]],
-    constant Inkling2PrefillOrderedParams& p [[buffer(4)]],
+kernel void inkling2_prefill_ordered_qk_gqa3(
+    device const float* q                [[buffer(0)]],
+    device const float* q_rel            [[buffer(1)]],
+    device const float* relative_bias    [[buffer(2)]],
+    device const float* sink             [[buffer(3)]],
+    device const float4* packed_k        [[buffer(4)]],
+    device       float* scores           [[buffer(5)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(6)]],
     uint3 group [[threadgroup_position_in_grid]],
+    ushort simd [[simdgroup_index_in_threadgroup]],
     ushort lane [[thread_index_in_simdgroup]])
+{
+    ordered_qk_gqa3<false>(q, q_rel, relative_bias, sink, (device const float*)packed_k,
+        nullptr, scores, p, group, simd, lane);
+}
+
+kernel void inkling2_prefill_global_qk_gqa3(
+    device const float* q                [[buffer(0)]],
+    device const float* q_rel            [[buffer(1)]],
+    device const float* relative_bias    [[buffer(2)]],
+    device const float* sink             [[buffer(3)]],
+    device const float* keys             [[buffer(4)]],
+    device       float* scores           [[buffer(5)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(6)]],
+    device const float* key_cache        [[buffer(7)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort simd [[simdgroup_index_in_threadgroup]],
+    ushort lane [[thread_index_in_simdgroup]])
+{
+    ordered_qk_gqa3<true>(q, q_rel, relative_bias, sink, keys, key_cache, scores, p, group, simd, lane);
+}
+
+template <bool DirectKV>
+static inline float4 ordered_load_value(
+    device const float4* values,
+    device const float4* value_cache,
+    uint head,
+    uint key,
+    ushort lane,
+    constant Inkling2PrefillOrderedParams& p)
+{
+    if (DirectKV) {
+        const bool in_tile = key >= p.source_start;
+        const uint row = in_tile ? key - p.source_start : key;
+        return (in_tile ? values : value_cache)[(row * p.kv_heads + head) * 32 + lane];
+    }
+    return values[(head * p.packed_keys + key) * 32 + lane];
+}
+
+template <bool DirectKV>
+static inline void ordered_softmax_pv(
+    device const float4* values,
+    device const float4* value_cache,
+    device const float* scores,
+    device const float4* gate,
+    device float4* output,
+    constant Inkling2PrefillOrderedParams& p,
+    threadgroup float* cached_weights,
+    uint3 group,
+    ushort lane)
 {
     const uint row = group.y * ordered_query_rows;
     const uint head = group.z;
     const uint kv_head = head / (p.query_heads / p.kv_heads);
-    const uint common_end = p.start + row + 1 - p.key_origin;
+    const uint common_end = p.start + row + 1 - (DirectKV ? 0 : p.key_origin);
     const uint active_rows = min(ordered_query_rows, p.rows - row);
-    device const float4* values = packed_v + kv_head * p.packed_keys * 32 + lane;
     device const float* lines[ordered_query_rows];
     float maxima[ordered_query_rows];
     float denominator[ordered_query_rows];
@@ -283,7 +382,7 @@ kernel void inkling2_prefill_ordered_softmax_pv(
     for (uint i = 0; i < ordered_query_rows; ++i) {
         const uint active = min(i, active_rows - 1);
         lines[i] = scores + (head * p.rows + row + active) * p.score_stride;
-        first_keys[i] = ordered_first_key(common_end + active - 1, p);
+        first_keys[i] = DirectKV ? 0 : ordered_first_key(common_end + active - 1, p);
         counts[i] = common_end + active - first_keys[i];
         maxima[i] = 0.0f;
         context[i] = float4(0.0f);
@@ -311,14 +410,13 @@ kernel void inkling2_prefill_ordered_softmax_pv(
         for (uint key = first_keys[i]; key < common_begin; ++key) {
             const float weight = exp(lines[i][key - first_keys[i]] - maxima[i]);
             denominator[i] += weight;
-            context[i] += weight * values[key * 32];
+            context[i] += weight * ordered_load_value<DirectKV>(values, value_cache, kv_head, key, lane, p);
         }
     }
 
     // One SIMD group stages a stripe of weights for all four queries and
     // reuses each V tuple in the intersection before overwriting the stripe.
     constexpr uint stripe = ordered_pv_stripe;
-    threadgroup float cached_weights[ordered_query_rows * stripe];
     for (uint block = common_begin; block < common_end; block += stripe) {
         const uint count = min(stripe, common_end - block);
         for (uint offset = lane; offset < count; offset += 32) {
@@ -331,7 +429,7 @@ kernel void inkling2_prefill_ordered_softmax_pv(
         simdgroup_barrier(mem_flags::mem_threadgroup);
         #pragma clang loop unroll_count(2)
         for (uint offset = 0; offset < count; ++offset) {
-            const float4 value = values[(block + offset) * 32];
+            const float4 value = ordered_load_value<DirectKV>(values, value_cache, kv_head, block + offset, lane, p);
             #pragma clang loop unroll(full)
             for (uint i = 0; i < ordered_query_rows; ++i) {
                 const float weight = cached_weights[i * stripe + offset];
@@ -349,10 +447,37 @@ kernel void inkling2_prefill_ordered_softmax_pv(
         for (uint key = max(common_end, first_keys[i]); key < common_end + i; ++key) {
             const float weight = exp(lines[i][key - first_keys[i]] - maxima[i]);
             denominator[i] += weight;
-            context[i] += weight * values[key * 32];
+            context[i] += weight * ordered_load_value<DirectKV>(values, value_cache, kv_head, key, lane, p);
         }
         const uint dst = ((row + i) * p.query_heads + head) * 32 + lane;
         const float4 sigmoid = 1.0f / (1.0f + exp(-gate[dst]));
         output[dst] = (context[i] / denominator[i]) * sigmoid;
     }
+}
+
+kernel void inkling2_prefill_ordered_softmax_pv(
+    device const float4* packed_v        [[buffer(0)]],
+    device const float*  scores           [[buffer(1)]],
+    device const float4* gate            [[buffer(2)]],
+    device       float4* output          [[buffer(3)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(4)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float cached_weights[ordered_query_rows * ordered_pv_stripe];
+    ordered_softmax_pv<false>(packed_v, nullptr, scores, gate, output, p, cached_weights, group, lane);
+}
+
+kernel void inkling2_prefill_global_softmax_pv(
+    device const float4* values          [[buffer(0)]],
+    device const float* scores           [[buffer(1)]],
+    device const float4* gate            [[buffer(2)]],
+    device float4* output                [[buffer(3)]],
+    constant Inkling2PrefillOrderedParams& p [[buffer(4)]],
+    device const float4* value_cache     [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float cached_weights[ordered_query_rows * ordered_pv_stripe];
+    ordered_softmax_pv<true>(values, value_cache, scores, gate, output, p, cached_weights, group, lane);
 }

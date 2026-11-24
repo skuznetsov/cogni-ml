@@ -350,6 +350,7 @@ module ML::GGUF
         score_stride : UInt32
         sliding_window : UInt32
         cache_capacity : UInt32
+        source_start : UInt32
       end
 
       # Matches Inkling2PrepareQKVRParams in inkling2_resident_attention.metal.
@@ -383,6 +384,8 @@ module ML::GGUF
       private SPLIT_PARALLEL_THREADS = 128_i32
       private PREFILL_SCORE_LIMIT = 1024_i32
       private MAX_PREFILL_ATTENTION_ROWS = 512_i32
+      private GLOBAL_ORDERED_PANEL_ROWS = 32_i32
+      private GLOBAL_ORDERED_KEY_LIMIT  = PREFILL_SCORE_LIMIT * MAX_PREFILL_ATTENTION_ROWS // GLOBAL_ORDERED_PANEL_ROWS
       private PREFILL_THREADS = 128_i32
       MAX_HEAD_DIM = 256_i32
 
@@ -738,14 +741,21 @@ module ML::GGUF
         decode_block : Bool,
       ) : Nil
         visible_keys = @sliding ? Math.min(start + rows, @config.sliding_window) : start + rows
-        # Bound scores by the visible window and read a vector-aligned gate.
-        if @prefill_mode.ordered? && !decode_block && (64..MAX_PREFILL_ATTENTION_ROWS).includes?(rows) &&
-           visible_keys <= PREFILL_SCORE_LIMIT &&
+        # The packed path bounds scores by the visible window; the global
+        # path bounds them by the query panel size.
+        if @prefill_mode.ordered? && !decode_block &&
            @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head <= 24 && @config.n_head_kv <= 8 &&
            gate.offset % (4 * sizeof(Float32)) == 0
-          encode_prefill_ordered(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output,
-            start, rows, relative_extent, visible_keys)
-          return
+          if rows >= 64 && visible_keys <= PREFILL_SCORE_LIMIT
+            encode_prefill_ordered(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output,
+              start, rows, relative_extent, visible_keys)
+            return
+          elsif !@sliding && visible_keys > PREFILL_SCORE_LIMIT && visible_keys <= GLOBAL_ORDERED_KEY_LIMIT &&
+                rows >= GLOBAL_ORDERED_PANEL_ROWS && @config.n_head == 3 * @config.n_head_kv
+            encode_prefill_global(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output,
+              start, rows, relative_extent)
+            return
+          end
         end
 
         key_count = @sliding ? Math.min(start + 1, @config.sliding_window) : start + 1
@@ -819,6 +829,7 @@ module ML::GGUF
           score_stride: score_stride.to_u32,
           sliding_window: window.to_u32,
           cache_capacity: @cache_capacity.to_u32,
+          source_start: start.to_u32,
         )
         params_bytes = pointerof(params).as(Void*)
         params_size = sizeof(LibInkling2Attention::PrefillOrderedParams)
@@ -860,6 +871,76 @@ module ML::GGUF
         encoder.set_buffer(output.buffer, 3, ML::Metal::BufferAccess::Write, offset: output.offset)
         encoder.set_bytes(params_bytes, params_size, 4)
         encoder.dispatch_threadgroups({1, query_groups, heads}, {32, 1, 1})
+      ensure
+        scratch.rewind(mark) if mark
+      end
+
+      private def encode_prefill_global(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        rows : Int32,
+        relative_extent : Int32,
+      ) : Nil
+        mark = scratch.mark
+        heads = @config.n_head
+        kv_heads = @config.n_head_kv
+        width = heads * @config.head_dim
+        relative_width = heads * @config.rel_dim
+        scores = scratch.take(checked_elements(GLOBAL_ORDERED_PANEL_ROWS * heads, start + rows, "global prefill scores"))
+        key_cache = @k_cache.not_nil!
+        value_cache = @v_cache.not_nil!
+        qk_pipeline = ordered_prefill_pipeline("inkling2_prefill_global_qk_gqa3")
+        pv_pipeline = ordered_prefill_pipeline("inkling2_prefill_global_softmax_pv")
+
+        offset = 0
+        while offset < rows
+          panel_start = start + offset
+          panel_rows = Math.min(rows - offset, GLOBAL_ORDERED_PANEL_ROWS)
+          keys = panel_start + panel_rows
+          params = LibInkling2Attention::PrefillOrderedParams.new(
+            start: panel_start.to_u32,
+            rows: panel_rows.to_u32,
+            query_heads: heads.to_u32,
+            kv_heads: kv_heads.to_u32,
+            relative_extent: relative_extent.to_u32,
+            key_origin: 0_u32,
+            packed_keys: keys.to_u32,
+            score_stride: keys.to_u32,
+            sliding_window: 0_u32,
+            cache_capacity: @cache_capacity.to_u32,
+            source_start: start.to_u32,
+          )
+          params_bytes = pointerof(params).as(Void*)
+          params_size = sizeof(LibInkling2Attention::PrefillOrderedParams)
+
+          encoder.set_pipeline(qk_pipeline)
+          {q.slice(offset * width), q_rel.slice(offset * relative_width), relative_bias, sink.slice(offset * heads), k}.each_with_index do |view, index|
+            encoder.set_buffer(view.buffer, index, offset: view.offset)
+          end
+          encoder.set_buffer(scores.buffer, 5, ML::Metal::BufferAccess::Write, offset: scores.offset)
+          encoder.set_bytes(params_bytes, params_size, 6)
+          encoder.set_buffer(key_cache, 7)
+          encoder.dispatch_threadgroups({(keys + 31) // 32, (panel_rows + 1) // 2, kv_heads}, {64, 1, 1})
+
+          encoder.set_pipeline(pv_pipeline)
+          {v, scores, gate.slice(offset * width)}.each_with_index do |view, index|
+            encoder.set_buffer(view.buffer, index, offset: view.offset)
+          end
+          encoder.set_buffer(output.buffer, 3, ML::Metal::BufferAccess::Write, offset: output.offset + offset.to_i64 * width * sizeof(Float32))
+          encoder.set_bytes(params_bytes, params_size, 4)
+          encoder.set_buffer(value_cache, 5)
+          encoder.dispatch_threadgroups({1, (panel_rows + 3) // 4, heads}, {32, 1, 1})
+          offset += panel_rows
+        end
       ensure
         scratch.rewind(mark) if mark
       end
