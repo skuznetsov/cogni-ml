@@ -345,6 +345,11 @@ module ML::GGUF
         query_heads : UInt32
         kv_heads : UInt32
         relative_extent : UInt32
+        key_origin : UInt32
+        packed_keys : UInt32
+        score_stride : UInt32
+        sliding_window : UInt32
+        cache_capacity : UInt32
       end
 
       # Matches Inkling2PrepareQKVRParams in inkling2_resident_attention.metal.
@@ -732,13 +737,14 @@ module ML::GGUF
         relative_extent : Int32,
         decode_block : Bool,
       ) : Nil
-        # Bound scratch to the research model's panel sizes. The packed
-        # kernel reads the unwrapped cache prefix and a vector-aligned gate.
+        visible_keys = @sliding ? Math.min(start + rows, @config.sliding_window) : start + rows
+        # Bound scores by the visible window and read a vector-aligned gate.
         if @prefill_mode.ordered? && !decode_block && (64..MAX_PREFILL_ATTENTION_ROWS).includes?(rows) &&
-           start + rows <= PREFILL_SCORE_LIMIT && (!@sliding || start + rows <= @config.sliding_window) &&
+           visible_keys <= PREFILL_SCORE_LIMIT &&
            @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head <= 24 && @config.n_head_kv <= 8 &&
            gate.offset % (4 * sizeof(Float32)) == 0
-          encode_prefill_ordered(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output, start, rows, relative_extent)
+          encode_prefill_ordered(encoder, scratch, q, k, v, q_rel, gate, sink, relative_bias, output,
+            start, rows, relative_extent, visible_keys)
           return
         end
 
@@ -788,16 +794,19 @@ module ML::GGUF
         start : Int32,
         rows : Int32,
         relative_extent : Int32,
+        score_stride : Int32,
       ) : Nil
         mark = scratch.mark
-        keys = start + rows
+        window = @sliding && score_stride < start + rows ? @config.sliding_window : 0
+        key_origin = window > 0 ? Math.max(0, start + 1 - window) : 0
+        packed_keys = start + rows - key_origin
         heads = @config.n_head
         kv_heads = @config.n_head_kv
-        kv_size = checked_elements(keys, @kv_width, "ordered prefill KV")
+        kv_size = checked_elements(packed_keys, @kv_width, "ordered prefill KV")
         query_count = checked_elements(rows, heads, "ordered prefill queries")
         packed_k = scratch.take(kv_size)
         packed_v = scratch.take(kv_size)
-        scores = scratch.take(checked_elements(query_count, keys, "ordered prefill scores"))
+        scores = scratch.take(checked_elements(query_count, score_stride, "ordered prefill scores"))
 
         params = LibInkling2Attention::PrefillOrderedParams.new(
           start: start.to_u32,
@@ -805,6 +814,11 @@ module ML::GGUF
           query_heads: heads.to_u32,
           kv_heads: kv_heads.to_u32,
           relative_extent: relative_extent.to_u32,
+          key_origin: key_origin.to_u32,
+          packed_keys: packed_keys.to_u32,
+          score_stride: score_stride.to_u32,
+          sliding_window: window.to_u32,
+          cache_capacity: @cache_capacity.to_u32,
         )
         params_bytes = pointerof(params).as(Void*)
         params_size = sizeof(LibInkling2Attention::PrefillOrderedParams)
@@ -819,7 +833,7 @@ module ML::GGUF
         encoder.set_buffer(packed_k.buffer, 4, ML::Metal::BufferAccess::Write, offset: packed_k.offset)
         encoder.set_buffer(packed_v.buffer, 5, ML::Metal::BufferAccess::Write, offset: packed_v.offset)
         encoder.set_bytes(params_bytes, params_size, 6)
-        encoder.dispatch_threadgroups({1, (keys + 3) // 4, kv_heads}, {32, 4, 1})
+        encoder.dispatch_threadgroups({1, (packed_keys + 3) // 4, kv_heads}, {32, 4, 1})
 
         grouped_qk = heads == 3 * kv_heads
         qk_pipeline = grouped_qk ? "inkling2_prefill_ordered_qk_gqa3" : "inkling2_prefill_ordered_qk"
@@ -829,10 +843,14 @@ module ML::GGUF
         end
         encoder.set_buffer(scores.buffer, 5, ML::Metal::BufferAccess::Write, offset: scores.offset)
         encoder.set_bytes(params_bytes, params_size, 6)
+        # Each query group starts at its first visible key. Later queries can
+        # extend that union by at most one key per additional row.
         if grouped_qk
-          encoder.dispatch_threadgroups({(keys + 31) // 32, (rows + 1) // 2, kv_heads}, {64, 1, 1})
+          key_columns = Math.min(packed_keys, score_stride + 1)
+          encoder.dispatch_threadgroups({(key_columns + 31) // 32, (rows + 1) // 2, kv_heads}, {64, 1, 1})
         else
-          encoder.dispatch_threadgroups({(keys + 63) // 64, query_groups, heads}, {128, 1, 1})
+          key_columns = Math.min(packed_keys, score_stride + 3)
+          encoder.dispatch_threadgroups({(key_columns + 63) // 64, query_groups, heads}, {128, 1, 1})
         end
 
         encoder.set_pipeline(ordered_prefill_pipeline("inkling2_prefill_ordered_softmax_pv"))
