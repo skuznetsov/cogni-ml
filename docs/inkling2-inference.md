@@ -209,6 +209,27 @@ Selected IDs and live KV matched on both fixtures. The rollback
 checks also matched live FFN history and the first full FP32 logit row
 after replay across the 1,024-token boundary.
 
+### Scalar decode RMS-concat grouping
+
+On Apple Silicon, each eligible scalar attention controller dispatches
+three independent RMS-concat threadgroups together before the existing
+FP32 projection triplet. Each group keeps the original FP32 reduction
+order. This saves 48 dispatches per decoded token on the three-pass
+research checkpoint.
+
+A same-binary quiet M2 Max A/B timed 48 forced scalar decode inputs
+with full logit readout after prefill. Rates are arm medians over four
+alternating pairs per fixture. The change uses the within-pair ratios.
+
+| Prompt + decode | Separate (tok/s) | Grouped (tok/s) | Paired change |
+| --- | ---: | ---: | ---: |
+| 81 + 48 prose | 29.33 | 29.63 | +1.02% |
+| 1,022 + 48 | 26.45 | 26.73 | +1.07% |
+
+Full FP32 logits, live KV, and convolution history matched bitwise
+on both fixtures, including the sliding-window boundary and block4
+rollback and replay after keeping one through four tokens.
+
 ## Fixed-depth Metal execution contract
 
 Scalar decode submits one Metal command buffer per token. Prefill evaluates a
