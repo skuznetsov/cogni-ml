@@ -54,23 +54,8 @@ module ML::GGUF
         *,
         dynamic_heads : Int32 = 0,
       ) : Inkling2View
-        ensure_open!
-        validate_speculation_tile!(start, rows)
-        validate_tile!(start, rows)
-        total = checked_elements(rows, @channels, "convolution output")
-        validate_view!(input, total, "convolution input")
-        validate_view!(taps_weights, checked_elements(@channels, @taps, "convolution taps"), "convolution weights")
-
+        total = validate_encode!(start, rows, input, taps_weights, dynamic, dynamic_heads)
         dynamic_view = dynamic || input
-        if dynamic
-          unless dynamic_heads > 0 && @channels % dynamic_heads == 0
-            raise ArgumentError.new("Inkling 2 resident dynamic convolution heads must divide channel width")
-          end
-          validate_view!(dynamic_view, checked_elements(checked_elements(rows, dynamic_heads, "dynamic tap rows"), @taps, "dynamic taps"), "dynamic convolution taps")
-        elsif dynamic_heads != 0
-          raise ArgumentError.new("Inkling 2 resident dynamic head count requires dynamic taps")
-        end
-
         output = scratch.take(total)
         history_slots = @history_slots
         history_count = checked_elements(history_slots, @channels, "convolution history dispatch")
@@ -103,6 +88,53 @@ module ML::GGUF
 
         record_encoded_tile(start, rows)
         output
+      end
+
+      # Each thread owns one channel of one history ring. It reads the old
+      # taps before replacing the current slot with the raw projection.
+      def encode_scalar_pair(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        start : Int32,
+        value_convolution : Inkling2ResidentConvolution,
+        inputs : {Inkling2View, Inkling2View},
+        weights : {Inkling2View, Inkling2View},
+        dynamic : {Inkling2View?, Inkling2View?},
+        dynamic_heads : Int32,
+      ) : {Inkling2View, Inkling2View}
+        unless !same?(value_convolution) && @taps > 1 && @taps == value_convolution.taps &&
+               @channels == value_convolution.channels && @rollback_rows == value_convolution.rollback_rows
+          raise ArgumentError.new("Inkling 2 resident scalar K/V convolution needs two matching history rings")
+        end
+
+        key_heads = dynamic[0] ? dynamic_heads : 0
+        value_heads = dynamic[1] ? dynamic_heads : 0
+        validate_encode!(start, 1, inputs[0], weights[0], dynamic[0], key_heads)
+        value_convolution.validate_encode!(start, 1, inputs[1], weights[1], dynamic[1], value_heads)
+
+        histories = {history_for_encode.not_nil!, value_convolution.history_for_encode.not_nil!}
+        outputs = {scratch.take(@channels), scratch.take(@channels)}
+        params = LibInkling2Attention::ScalarConvolutionPairParams.new(
+          channels: @channels.to_u32, taps: @taps.to_u32, start: start.to_u32,
+          history_slots: @history_slots.to_u32, key_dynamic_heads: key_heads.to_u32,
+          value_dynamic_heads: value_heads.to_u32)
+        encoder.set_pipeline(pipeline("inkling2_resident_scalar_kv_convolution"))
+        inputs.each_with_index do |input, side|
+          base = side * 5
+          taps_weights = weights[side]
+          dynamic_view = dynamic[side] || input
+          output = outputs[side]
+          encoder.set_buffer(input.buffer, base, offset: input.offset)
+          encoder.set_buffer(taps_weights.buffer, base + 1, offset: taps_weights.offset)
+          encoder.set_buffer(dynamic_view.buffer, base + 2, offset: dynamic_view.offset)
+          encoder.set_buffer(histories[side], base + 3, ML::Metal::BufferAccess::ReadWrite)
+          encoder.set_buffer(output.buffer, base + 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        end
+        encoder.set_bytes(pointerof(params).as(Void*), sizeof(LibInkling2Attention::ScalarConvolutionPairParams), 10)
+        encoder.dispatch_threadgroups({(@channels - 1) // 128 + 1, 2, 1}, {128, 1, 1})
+        record_encoded_tile(start, 1)
+        value_convolution.record_encoded_tile(start, 1)
+        outputs
       end
 
       # Fuse the four Q8_0 verifier rows with the static causal convolution.
@@ -147,7 +179,32 @@ module ML::GGUF
         output
       end
 
-      private def history_for_encode : ML::MetalBuffer?
+      protected def validate_encode!(
+        start : Int32,
+        rows : Int32,
+        input : Inkling2View,
+        taps_weights : Inkling2View,
+        dynamic : Inkling2View?,
+        dynamic_heads : Int32,
+      ) : Int32
+        ensure_open!
+        validate_speculation_tile!(start, rows)
+        validate_tile!(start, rows)
+        total = checked_elements(rows, @channels, "convolution output")
+        validate_view!(input, total, "convolution input")
+        validate_view!(taps_weights, checked_elements(@channels, @taps, "convolution taps"), "convolution weights")
+        if dynamic
+          unless dynamic_heads > 0 && @channels % dynamic_heads == 0
+            raise ArgumentError.new("Inkling 2 resident dynamic convolution heads must divide channel width")
+          end
+          validate_view!(dynamic, checked_elements(checked_elements(rows, dynamic_heads, "dynamic tap rows"), @taps, "dynamic taps"), "dynamic convolution taps")
+        elsif dynamic_heads != 0
+          raise ArgumentError.new("Inkling 2 resident dynamic head count requires dynamic taps")
+        end
+        total
+      end
+
+      protected def history_for_encode : ML::MetalBuffer?
         return nil if @history_slots == 0
         @history ||= begin
           elements = checked_elements(@history_slots, @channels, "convolution history")
@@ -155,7 +212,7 @@ module ML::GGUF
         end
       end
 
-      private def record_encoded_tile(start : Int32, rows : Int32) : Nil
+      protected def record_encoded_tile(start : Int32, rows : Int32) : Nil
         @last_end_position = start + rows
         @last_encoded_start_position = start
         @last_encoded_end_position = start + rows
@@ -271,6 +328,16 @@ module ML::GGUF
     end
 
     private lib LibInkling2Attention
+      # Matches Inkling2ScalarConvolutionPairParams in inkling2_resident_attention.metal.
+      struct ScalarConvolutionPairParams
+        channels : UInt32
+        taps : UInt32
+        start : UInt32
+        history_slots : UInt32
+        key_dynamic_heads : UInt32
+        value_dynamic_heads : UInt32
+      end
+
       # Matches Inkling2PrefillOrderedParams in inkling2_prefill_ordered.metal.
       struct PrefillOrderedParams
         start : UInt32
@@ -421,8 +488,13 @@ module ML::GGUF
         required_capacity = @sliding ? @capacity : start + rows
         ensure_cache_capacity(encoder, required_capacity, start)
 
-        key = @key_convolution.encode(encoder, scratch, start, rows, k, k_taps, dynamic_k, dynamic_heads: dynamic_k ? n_head_kv : 0)
-        value = @value_convolution.encode(encoder, scratch, start, rows, v, v_taps, dynamic_v, dynamic_heads: dynamic_v ? n_head_kv : 0)
+        key, value = if rows == 1 && !decode_block && @config.conv_size > 1 && scalar_kv_convolution_pair?
+                       @key_convolution.encode_scalar_pair(encoder, scratch, start, @value_convolution,
+                         {k, v}, {k_taps, v_taps}, {dynamic_k, dynamic_v}, n_head_kv)
+                     else
+                       {@key_convolution.encode(encoder, scratch, start, rows, k, k_taps, dynamic_k, dynamic_heads: dynamic_k ? n_head_kv : 0),
+                        @value_convolution.encode(encoder, scratch, start, rows, v, v_taps, dynamic_v, dynamic_heads: dynamic_v ? n_head_kv : 0)}
+                     end
 
         encode_prepare_qkvr(encoder, q, key, value, q_rel, q_clip, rel_clip, start, rows)
 
@@ -436,6 +508,10 @@ module ML::GGUF
         @last_encoded_start_position = start
         @last_encoded_end_position = start + rows
         attended
+      end
+
+      private def scalar_kv_convolution_pair? : Bool
+        {{ flag?(:aarch64) }}
       end
 
       # Move the logical end back within the most recently encoded tile. K/V

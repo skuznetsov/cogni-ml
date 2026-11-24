@@ -4,25 +4,19 @@
 #include <metal_stdlib>
 using namespace metal;
 
-kernel void inkling2_resident_convolution(
-    device const float* input          [[buffer(0)]],
-    device const float* weights        [[buffer(1)]],
-    device const float* dynamic_taps   [[buffer(2)]],
-    device const float* history        [[buffer(3)]],
-    device       float* output         [[buffer(4)]],
-    constant     uint&  channels       [[buffer(5)]],
-    constant     uint&  taps           [[buffer(6)]],
-    constant     uint&  rows           [[buffer(7)]],
-    constant     uint&  start          [[buffer(8)]],
-    constant     uint&  dynamic_heads  [[buffer(9)]],
-    constant     uint&  history_slots  [[buffer(10)]],
-    uint tid [[thread_position_in_grid]])
+inline float inkling2_resident_convolve_channel(
+    device const float* input,
+    device const float* weights,
+    device const float* dynamic_taps,
+    device const float* history,
+    uint channels,
+    uint taps,
+    uint start,
+    uint dynamic_heads,
+    uint history_slots,
+    uint row,
+    uint channel)
 {
-    const uint count = rows * channels;
-    if (tid >= count) return;
-
-    const uint row = tid / channels;
-    const uint channel = tid - row * channels;
     const uint position = start + row;
     float static_sum = 0.0f;
 
@@ -60,8 +54,69 @@ kernel void inkling2_resident_convolution(
     }
 
     const float scale_terms = (dynamic_heads > 0 ? 2.0f : 1.0f) * (float)taps + 1.0f;
-    const float sum = input[tid] + static_sum + dynamic_sum;
-    output[tid] = sum / sqrt(scale_terms);
+    const float sum = input[row * channels + channel] + static_sum + dynamic_sum;
+    return sum / sqrt(scale_terms);
+}
+
+kernel void inkling2_resident_convolution(
+    device const float* input          [[buffer(0)]],
+    device const float* weights        [[buffer(1)]],
+    device const float* dynamic_taps   [[buffer(2)]],
+    device const float* history        [[buffer(3)]],
+    device       float* output         [[buffer(4)]],
+    constant     uint&  channels       [[buffer(5)]],
+    constant     uint&  taps           [[buffer(6)]],
+    constant     uint&  rows           [[buffer(7)]],
+    constant     uint&  start          [[buffer(8)]],
+    constant     uint&  dynamic_heads  [[buffer(9)]],
+    constant     uint&  history_slots  [[buffer(10)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= rows * channels) return;
+    const uint row = tid / channels;
+    const uint channel = tid - row * channels;
+    output[tid] = inkling2_resident_convolve_channel(input, weights, dynamic_taps, history,
+        channels, taps, start, dynamic_heads, history_slots, row, channel);
+}
+
+struct Inkling2ScalarConvolutionPairParams {
+    uint channels;
+    uint taps;
+    uint start;
+    uint history_slots;
+    uint key_dynamic_heads;
+    uint value_dynamic_heads;
+};
+
+kernel void inkling2_resident_scalar_kv_convolution(
+    device const float* key_input           [[buffer(0)]],
+    device const float* key_weights         [[buffer(1)]],
+    device const float* key_dynamic_taps    [[buffer(2)]],
+    device       float* key_history         [[buffer(3)]],
+    device       float* key_output          [[buffer(4)]],
+    device const float* value_input         [[buffer(5)]],
+    device const float* value_weights       [[buffer(6)]],
+    device const float* value_dynamic_taps  [[buffer(7)]],
+    device       float* value_history       [[buffer(8)]],
+    device       float* value_output        [[buffer(9)]],
+    constant Inkling2ScalarConvolutionPairParams& params [[buffer(10)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    const uint channel = tid.x;
+    if (channel >= params.channels) return;
+
+    const bool is_key = tid.y == 0;
+    device const float* input = is_key ? key_input : value_input;
+    device const float* weights = is_key ? key_weights : value_weights;
+    device const float* dynamic_taps = is_key ? key_dynamic_taps : value_dynamic_taps;
+    device float* history = is_key ? key_history : value_history;
+    device float* output = is_key ? key_output : value_output;
+    const uint heads = is_key ? params.key_dynamic_heads : params.value_dynamic_heads;
+
+    output[channel] = inkling2_resident_convolve_channel(input, weights, dynamic_taps, history,
+        params.channels, params.taps, params.start, heads, params.history_slots, 0, channel);
+    // With no rollback reserve this slot aliases the oldest tap we just read.
+    history[(params.start % params.history_slots) * params.channels + channel] = input[channel];
 }
 
 // Commit only the newest input for each history slot. This remains correct
