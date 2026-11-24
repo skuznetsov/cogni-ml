@@ -835,6 +835,16 @@ module ML::GGUF
       true
     end
 
+    # Keep this predicate as the same-binary A/B hook. The triplet dispatch is
+    # enabled on Apple Silicon; block4 and multi-row paths do not consult it.
+    private def decode_rms_concat_triplet? : Bool
+      {% if flag?(:aarch64) %}
+        true
+      {% else %}
+        false
+      {% end %}
+    end
+
     # Override this predicate in a same-binary probe to compare batched
     # prefill controller evaluation with the reference projection path.
     private def prefill_fused_control? : Bool
@@ -855,13 +865,28 @@ module ML::GGUF
 
       results = {tile.hidden, tile.hidden, tile.hidden}
       mark = @scratch.mark
+      triplet_rms_concat = decode_rms_concat_triplet?
       feature_dim = 2 * tile.elements
       rank_dim = downs[0].out_dim
-      features = @scratch.take(3 * feature_dim)
-      ranks = @scratch.take(3 * rank_dim)
-      inputs.each_with_index do |input, index|
-        MathOps.rms_concat(tile.encoder, input, messages.slice(index * tile.elements),
-          features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
+      feature_elements = if triplet_rms_concat
+                           MathOps.rms_concat_triplet_elements(tile.width)
+                         else
+                           3 * feature_dim
+                         end
+      rank_elements = if triplet_rms_concat
+                        MathOps.triplet_elements(rank_dim, 3)
+                      else
+                        3 * rank_dim
+                      end
+      features = @scratch.take(feature_elements)
+      ranks = @scratch.take(rank_elements)
+      if triplet_rms_concat
+        MathOps.rms_concat_triplet(tile.encoder, inputs, messages, features, tile.width, DEPTH_EPS)
+      else
+        inputs.each_with_index do |input, index|
+          MathOps.rms_concat(tile.encoder, input, messages.slice(index * tile.elements),
+            features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
+        end
       end
       @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
       apply_mark = @scratch.mark

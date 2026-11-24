@@ -15,6 +15,14 @@ require "../src/ml/gguf/inkling2_resident_math"
       ML::GGUF::Inkling2View.new(buffer, PREFIX.to_i64 * sizeof(Float32))
     end
 
+    def guarded_float_view(values : Array(Float32), suffix : Int32,
+                           buffers : Array(ML::MetalBuffer)) : ML::GGUF::Inkling2View
+      data = Array(Float32).new(PREFIX, -777.0_f32) + values + Array(Float32).new(suffix, -999.0_f32)
+      buffer = ML::MetalBuffer.from_array(data)
+      buffers << buffer
+      ML::GGUF::Inkling2View.new(buffer, PREFIX.to_i64 * sizeof(Float32))
+    end
+
     def byte_view(bytes : Bytes, buffers : Array(ML::MetalBuffer)) : ML::GGUF::Inkling2View
       buffer = ML::MetalBuffer.new(bytes.size.to_i64)
       buffer.write_bytes(bytes.to_unsafe, bytes.size)
@@ -38,6 +46,111 @@ require "../src/ml/gguf/inkling2_resident_math"
   end
 
   describe ML::GGUF::Inkling2ResidentMath do
+    it "checks triplet scratch extents before Int32 allocation" do
+      max_width = Int32::MAX // 6
+      ML::GGUF::Inkling2ResidentMath.rms_concat_triplet_elements(max_width).should eq(max_width * 6)
+      expect_raises(ArgumentError) do
+        ML::GGUF::Inkling2ResidentMath.rms_concat_triplet_elements(max_width + 1)
+      end
+      expect_raises(ArgumentError) do
+        ML::GGUF::Inkling2ResidentMath.triplet_elements(Int32::MAX, 3)
+      end
+    end
+
+    it "batches three offset RMS-concat rows without changing FP32 bits or guards" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      buffers = [] of ML::MetalBuffer
+      width = 513_i32
+      eps = 1e-6_f32
+      suffix = 5_i32
+      guard_count = Inkling2ResidentMathSpecSupport::PREFIX + suffix
+      x_values = Array(Float32).new(3 * width) do |index|
+        (((index * 17) % 127) - 63).to_f32 * 0.00390625_f32
+      end
+      message_values = Array(Float32).new(3 * width) do |index|
+        (((index * 29) % 113) - 56).to_f32 * 0.005859375_f32
+      end
+      alias_values = x_values[0, width].to_a
+      x_view = Inkling2ResidentMathSpecSupport.guarded_float_view(x_values, suffix, buffers)
+      alias_view = Inkling2ResidentMathSpecSupport.guarded_float_view(alias_values, suffix, buffers)
+      message_view = Inkling2ResidentMathSpecSupport.guarded_float_view(message_values, suffix, buffers)
+      x_before = x_view.buffer.read(guard_count + x_values.size.to_i32).map(&.unsafe_as(UInt32))
+      alias_before = alias_view.buffer.read(guard_count + alias_values.size.to_i32).map(&.unsafe_as(UInt32))
+      message_before = message_view.buffer.read(guard_count + message_values.size.to_i32).map(&.unsafe_as(UInt32))
+
+      input_sets = [
+        {x_view, x_view.slice(width), x_view.slice(2 * width)},
+        {alias_view, alias_view, alias_view},
+      ]
+      expected_views = Array(Array(ML::GGUF::Inkling2View)).new(2) do
+        Array(ML::GGUF::Inkling2View).new(3) do
+          Inkling2ResidentMathSpecSupport.guarded_float_view(
+            Array(Float32).new(2 * width, 123.5_f32), suffix, buffers
+          )
+        end
+      end
+      output_views = Array(ML::GGUF::Inkling2View).new(2) do
+        Inkling2ResidentMathSpecSupport.guarded_float_view(
+          Array(Float32).new(6 * width, 321.25_f32), suffix, buffers
+        )
+      end
+
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      encoder_ended = false
+      begin
+        input_sets.each_with_index do |inputs, case_index|
+          3.times do |index|
+            ML::GGUF::Inkling2ResidentMath.rms_concat(
+              encoder, inputs[index], message_view.slice(index * width), expected_views[case_index][index],
+              width, 1_i32, eps
+            )
+          end
+          ML::GGUF::Inkling2ResidentMath.rms_concat_triplet(
+            encoder, inputs, message_view, output_views[case_index], width, eps
+          )
+        end
+        encoder.end_encoding
+        encoder_ended = true
+        command.commit_and_wait
+
+        input_sets.size.times do |case_index|
+          expected = expected_views[case_index].flat_map do |view|
+            Inkling2ResidentMathSpecSupport.read(view, 2 * width)
+          end
+          actual_view = output_views[case_index]
+          actual = Inkling2ResidentMathSpecSupport.read(actual_view, 6 * width)
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+
+          full_output = actual_view.buffer.read(guard_count + 6 * width)
+          full_output[0, Inkling2ResidentMathSpecSupport::PREFIX].map(&.unsafe_as(UInt32)).should eq(
+            Array(Float32).new(Inkling2ResidentMathSpecSupport::PREFIX, -777.0_f32).map(&.unsafe_as(UInt32))
+          )
+          full_output[Inkling2ResidentMathSpecSupport::PREFIX + 6 * width, suffix].map(&.unsafe_as(UInt32)).should eq(
+            Array(Float32).new(suffix, -999.0_f32).map(&.unsafe_as(UInt32))
+          )
+
+          expected_views[case_index].each do |view|
+            guarded = view.buffer.read(guard_count + 2 * width)
+            guarded[0, Inkling2ResidentMathSpecSupport::PREFIX].map(&.unsafe_as(UInt32)).should eq(
+              Array(Float32).new(Inkling2ResidentMathSpecSupport::PREFIX, -777.0_f32).map(&.unsafe_as(UInt32))
+            )
+            guarded[Inkling2ResidentMathSpecSupport::PREFIX + 2 * width, suffix].map(&.unsafe_as(UInt32)).should eq(
+              Array(Float32).new(suffix, -999.0_f32).map(&.unsafe_as(UInt32))
+            )
+          end
+        end
+
+        x_view.buffer.read(guard_count + x_values.size.to_i32).map(&.unsafe_as(UInt32)).should eq(x_before)
+        alias_view.buffer.read(guard_count + alias_values.size.to_i32).map(&.unsafe_as(UInt32)).should eq(alias_before)
+        message_view.buffer.read(guard_count + message_values.size.to_i32).map(&.unsafe_as(UInt32)).should eq(message_before)
+      ensure
+        encoder.end_encoding unless encoder_ended
+        buffers.each(&.release)
+      end
+    end
+
     it "encodes offset-aware row and element math in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

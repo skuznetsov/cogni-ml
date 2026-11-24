@@ -48,6 +48,49 @@ require "./inkling2_metal_view"
       encoder.dispatch_threadgroups({rows, 1, 1}, {THREADS, 1, 1})
     end
 
+    # Scalar decode: preserve three independent RMS reductions but encode their
+    # work as three threadgroups in one dispatch. `messages` and
+    # `output` are consecutive triplets; input views may be distinct slices or
+    # aliases of the same vector.
+    def self.rms_concat_triplet(
+      encoder : ML::Metal::ComputeEncoder,
+      inputs : {Inkling2View, Inkling2View, Inkling2View},
+      messages : Inkling2View, output : Inkling2View, width : Int32, eps : Float32,
+    ) : Nil
+      validate_rows!(width, 1_i32)
+      message_elements = triplet_elements(width, 3)
+      output_elements = rms_concat_triplet_elements(width)
+      inputs.each_with_index do |input, index|
+        validate_view_extent!(input, width, "RMS-concat triplet input #{index}")
+      end
+      validate_view_extent!(messages, message_elements, "RMS-concat triplet messages")
+      validate_view_extent!(output, output_elements, "RMS-concat triplet output")
+
+      encoder.set_pipeline(pipeline("inkling2_resident_rms_concat_triplet"))
+      inputs.each_with_index do |input, index|
+        encoder.set_buffer(input.buffer, index, offset: input.offset)
+      end
+      encoder.set_buffer(messages.buffer, 3, offset: messages.offset)
+      encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(width.to_u32, 5)
+      encoder.set_value(eps, 6)
+      encoder.dispatch_threadgroups({3, 1, 1}, {THREADS, 1, 1})
+    end
+
+    # Shared checked arithmetic for triplet scratch allocations and the
+    # triplet encoder's packed message/output layouts.
+    def self.triplet_elements(elements_per_item : Int32, items : Int32) : Int32
+      raise ArgumentError.new("Inkling 2 triplet element width must be positive") unless elements_per_item > 0
+      raise ArgumentError.new("Inkling 2 triplet item count must be positive") unless items > 0
+      elements = elements_per_item.to_i64 * items.to_i64
+      raise ArgumentError.new("Inkling 2 triplet element count exceeds Int32") if elements > Int32::MAX
+      elements.to_i32
+    end
+
+    def self.rms_concat_triplet_elements(width : Int32) : Int32
+      triplet_elements(width, 6)
+    end
+
     # `bank` is normalized and laid out [depth][row][width]. The optional
     # normalized current state is appended after all bank entries, matching
     # Inkling2Math.depth_mix's [blocks + current] ordering.
@@ -204,6 +247,14 @@ require "./inkling2_metal_view"
 
     private def self.validate_count!(count : Int32) : Nil
       raise ArgumentError.new("Inkling 2 resident math count must be positive") unless count > 0
+    end
+
+    private def self.validate_view_extent!(view : Inkling2View, elements : Int32, label : String) : Nil
+      bytes = elements.to_i64 * sizeof(Float32)
+      offset = view.offset
+      unless offset >= 0 && offset <= view.buffer.size && bytes <= view.buffer.size - offset
+        raise ArgumentError.new("#{label} view exceeds its Metal buffer")
+      end
     end
 
     private def self.pipeline(name : String) : ML::Metal::ComputePipeline

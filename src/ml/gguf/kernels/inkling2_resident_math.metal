@@ -44,24 +44,17 @@ kernel void inkling2_resident_rms(
     }
 }
 
-kernel void inkling2_resident_rms_concat(
-    device const float* x           [[buffer(0)]],
-    device const float* message     [[buffer(1)]],
-    device       float* output      [[buffer(2)]],
-    constant     uint&  width       [[buffer(3)]],
-    constant     uint&  rows        [[buffer(4)]],
-    constant     float& eps         [[buffer(5)]],
-    uint3  tgpig [[threadgroup_position_in_grid]],
-    ushort tiisg [[thread_index_in_simdgroup]],
-    ushort sgitg [[simdgroup_index_in_threadgroup]],
-    ushort tid   [[thread_index_in_threadgroup]])
+inline void inkling2_resident_rms_concat_row(
+    device const float* x_row,
+    device const float* m_row,
+    device       float* out_row,
+    uint width,
+    float eps,
+    ushort tiisg,
+    ushort sgitg,
+    ushort tid,
+    threadgroup float* partials)
 {
-    const uint row = tgpig.x;
-    if (row >= rows) return;
-
-    device const float* x_row = x + (size_t)row * width;
-    device const float* m_row = message + (size_t)row * width;
-    device float* out_row = output + (size_t)row * (size_t)(2 * width);
     float x_squares = 0.0f;
     float m_squares = 0.0f;
     for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
@@ -71,7 +64,6 @@ kernel void inkling2_resident_rms_concat(
         m_squares += mv * mv;
     }
 
-    threadgroup float partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
     const float x_group_sum = simd_sum(x_squares);
     const float m_group_sum = simd_sum(m_squares);
     if (tiisg == 0) {
@@ -92,6 +84,57 @@ kernel void inkling2_resident_rms_concat(
         out_row[column] = x_row[column] * x_scale;
         out_row[width + column] = m_row[column] * m_scale;
     }
+}
+
+kernel void inkling2_resident_rms_concat(
+    device const float* x           [[buffer(0)]],
+    device const float* message     [[buffer(1)]],
+    device       float* output      [[buffer(2)]],
+    constant     uint&  width       [[buffer(3)]],
+    constant     uint&  rows        [[buffer(4)]],
+    constant     float& eps         [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint row = tgpig.x;
+    if (row >= rows) return;
+
+    device const float* x_row = x + (size_t)row * width;
+    device const float* m_row = message + (size_t)row * width;
+    device float* out_row = output + (size_t)row * (size_t)(2 * width);
+    threadgroup float partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_rms_concat_row(x_row, m_row, out_row, width, eps,
+        tiisg, sgitg, tid, partials);
+}
+
+// Three independent scalar RMS-concat rows share one dispatch. Each
+// threadgroup retains the original 256-lane traversal and reduction order.
+kernel void inkling2_resident_rms_concat_triplet(
+    device const float* x0          [[buffer(0)]],
+    device const float* x1          [[buffer(1)]],
+    device const float* x2          [[buffer(2)]],
+    device const float* messages    [[buffer(3)]],
+    device       float* output      [[buffer(4)]],
+    constant     uint&  width       [[buffer(5)]],
+    constant     float& eps         [[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint triplet = tgpig.x;
+    if (triplet >= 3) return;
+
+    device const float* x_row = x0;
+    if (triplet == 1) x_row = x1;
+    else if (triplet == 2) x_row = x2;
+    device const float* m_row = messages + (size_t)triplet * (size_t)width;
+    device float* out_row = output + (size_t)triplet * (size_t)2 * (size_t)width;
+    threadgroup float partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_rms_concat_row(x_row, m_row, out_row, width, eps,
+        tiisg, sgitg, tid, partials);
 }
 
 kernel void inkling2_resident_depth_mix(
