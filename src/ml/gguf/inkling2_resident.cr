@@ -738,16 +738,21 @@ module ML::GGUF
       matrices = {weight.q, weight.k, weight.v, weight.rel_proj, weight.gate, weight.sink, weight.k_conv_proj, weight.v_conv_proj}
       inputs = {q_in, k_in, v_in, q_in, q_in, q_in, k_in, v_in}
       outputs = matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
+      q, k, v, q_rel, gate, sink, dynamic_k, dynamic_v = outputs
       unless (tile.rows == 1 || tile.decode_block?) && decode_grouped_attention_projections? &&
              @linear.project_q8_group(tile.encoder, matrices, inputs, outputs, tile.rows)
+        paired = !tile.decode_block? && tile.rows >= Inkling2ResidentLinear::MIN_GROUPED_ROWS &&
+                 prefill_grouped_attention_projections? &&
+                 @linear.project_q8_prefill_pair(tile.encoder, {weight.q, weight.gate}, q_in,
+                   {q.not_nil!, gate.not_nil!}, tile.rows)
         matrices.each_with_index do |matrix, index|
+          next if paired && (index == 0 || index == 4) # Q and gate
           if matrix
             @linear.project(tile.encoder, matrix, inputs[index], outputs[index].not_nil!, tile.rows,
               decode_block: tile.decode_block?)
           end
         end
       end
-      q, k, v, q_rel, gate, sink, dynamic_k, dynamic_v = outputs
       context = visit.attention.encode(tile.encoder, @scratch, tile.start, tile.rows,
         q.not_nil!, k.not_nil!, v.not_nil!, q_rel.not_nil!, gate.not_nil!, sink.not_nil!,
         constant(weight.q_clip), constant(weight.rel_clip), constant(weight.rel_bias),
@@ -765,6 +770,11 @@ module ML::GGUF
 
     # Override in a same-binary comparison with individual projection dispatches.
     private def decode_grouped_attention_projections? : Bool
+      true
+    end
+
+    # Override in a same-binary comparison with individual prefill dispatches.
+    private def prefill_grouped_attention_projections? : Bool
       true
     end
 

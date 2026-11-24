@@ -83,6 +83,23 @@ The `ordered` rows come from the batched FP32 controller fusion A/B for
 attention kernel on the first tile and falls back to `scores` for the
 60-token tail.
 
+### Shared Q8_0 prefill projections
+
+A same-binary A/B over `b49fe64a` isolated shared Q and gate staging
+on the same M2 Max and research GGUF at three passes. Each row uses
+four quiet, alternating pairs. The change is the median of the
+within-pair speed ratios.
+
+| Prompt tokens | Prefill tiles | Attention | MoE route mode | Separate (tok/s) | Shared (tok/s) | Paired change |
+| ---: | --- | --- | ---: | ---: | ---: | ---: |
+| 188 | 5 × 32 + 28 | `scores` | 16 | 130.50 | 132.81 | +1.75% |
+| 188 | 128 + 60 | `scores` | 16 | 202.63 | 202.59 | −0.09% |
+| 1,022 | 512 + 510 | `ordered` | 32 | 385.59 | 388.11 | +0.61% |
+
+Full logits and live KV match bitwise through 48 forced decode inputs
+after each prefill, including the 1,024-token boundary. Scratch capacity
+stays constant and warming the shared path adds one pipeline-cache key.
+
 ### Comparison with llama.cpp
 
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
@@ -172,8 +189,12 @@ Metal dispatch grids into GPU scratch and reuses the existing FP32 M16
 GEMMs. Warming this mode after direct M16 adds one routing pipeline.
 
 The resident path fuses Q/K/V/R preparation. Eligible Q8_0 attention
-projections share a dispatch. Eligible F32 loop controllers compute
-gain, forget, and their epilogue together in scalar decode and prefill.
+projections share a dispatch in scalar decode and block4 verification.
+On Apple Silicon, prefill tiles with 16 to 512 rows can run compatible
+Q8_0 Q and gate projections in one dispatch with a shared 32-by-32 FP32
+input tile. Each projection keeps its own FP32 accumulation order and
+output buffer binding. Eligible F32 loop controllers compute gain,
+forget, and their epilogue together in scalar decode and prefill.
 Scalar IQ4_NL MoE fuses gate/up with SiTU and reuses activation loads.
 
 Decode attention with more than 64 visible keys partitions the key

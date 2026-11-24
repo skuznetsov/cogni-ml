@@ -305,6 +305,57 @@ require "../src/ml/gguf/inkling2_engine"
       end
     end
 
+    {% if flag?(:aarch64) %}
+      it "shares the Q8_0 prefill input across projections with independent output buffers" do
+        pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+        fixture = Inkling2LinearSpecSupport.write_model
+        gguf = ML::GGUF::GGUFFile.new(fixture.path)
+        linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+        buffers = [] of ML::MetalBuffer
+        begin
+          rows, in_dim, out_dim = 35, 64, 39
+          elements = rows * out_dim
+          bytes = out_dim * (in_dim // 32) * 34
+          weights = {"q8_tiled_projection", "gate_up"}.map do |name|
+            raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets[name], bytes)
+            ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, out_dim, in_dim)
+          end
+          input = Inkling2LinearSpecSupport.float_view(
+            Array(Float32).new(rows * in_dim + 1) { |index| ((index * 13) % 71 - 35).to_f32 * 0.019_f32 },
+            buffers
+          ).slice(1)
+          guarded = weights.map do
+            Inkling2LinearSpecSupport.float_view(Array(Float32).new(elements + 2, 123_f32), buffers)
+          end
+          outputs = guarded.map(&.slice(1))
+          reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(2 * elements, 0_f32), buffers)
+
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          weights.each_with_index do |weight, i|
+            linear.project(encoder, weight, input, reference.slice(i * elements), rows)
+          end
+          linear.project_q8_prefill_pair(encoder, weights, input, outputs, 15).should be_false
+          linear.project_q8_prefill_pair(encoder, weights, input, outputs, rows).should be_true
+          encoder.end_encoding
+          command.commit_and_wait
+
+          guarded.each_with_index do |view, i|
+            data = Inkling2LinearSpecSupport.read(view, elements + 2)
+            {data.first, data.last}.should eq({123_f32, 123_f32})
+            expected = Inkling2LinearSpecSupport.read(reference.slice(i * elements), elements)
+            Inkling2LinearSpecSupport.float_bits(data[1, elements]).should eq(Inkling2LinearSpecSupport.float_bits(expected))
+          end
+        ensure
+          buffers.each(&.release)
+          linear.close
+          gguf.close
+          File.delete?(fixture.path)
+        end
+      end
+    {% end %}
+
     it "keeps raw Q8_0 projection history across post-convolution wrap and rewind" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

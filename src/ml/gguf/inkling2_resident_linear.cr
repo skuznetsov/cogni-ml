@@ -187,6 +187,40 @@ module ML::GGUF
         true
       end
 
+      # Share each activation tile across two same-shaped Q8_0 projections.
+      # Separate bindings let wide prefill place their outputs on different
+      # scratch pages. The caller provides disjoint input and output views.
+      def project_q8_prefill_pair(encoder : ML::Metal::ComputeEncoder,
+                                  weights : {QuantWeight, QuantWeight}, input : Inkling2View,
+                                  outputs : {Inkling2View, Inkling2View}, rows : Int32) : Bool
+        {% if flag?(:aarch64) %}
+          ensure_open!
+          return false unless rows.in?(MIN_GROUPED_ROWS..MAX_GROUPED_ROWS)
+          first, second = weights
+          return false unless first.in_dim == second.in_dim && first.out_dim == second.out_dim
+          return false unless weights.all? { |weight| weight.type.q8_0? && self.class.projection_supported?(weight) }
+          return false unless view_fits?(input, rows.to_i64 * first.in_dim) &&
+                              outputs.all? { |output| view_fits?(output, rows.to_i64 * first.out_dim) }
+
+          encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile("inkling2_resident_gemm_q8_0_simd_pair", Q8_MATRIX_SOURCE))
+          weights.each_with_index do |weight, index|
+            encoder.set_buffer(@model, index, offset: model_offset(weight.raw))
+          end
+          encoder.set_buffer(input.buffer, 2, offset: input.offset)
+          outputs.each_with_index do |output, index|
+            encoder.set_buffer(output.buffer, 3 + index, ML::Metal::BufferAccess::Write, offset: output.offset)
+          end
+          encoder.set_value(first.in_dim.to_u32, 5)
+          encoder.set_value(first.out_dim.to_u32, 6)
+          encoder.set_value(rows.to_u32, 7)
+          tile = Q8_MATRIX_TILE
+          encoder.dispatch_threadgroups({(first.out_dim + tile - 1) // tile, (rows + tile - 1) // tile, 1}, {256, 1, 1})
+          true
+        {% else %}
+          false
+        {% end %}
+      end
+
       # Three independent single-row F32 matvecs. Inputs and outputs are
       # consecutive vectors in their respective scratch views.
       def project_f32_triplet(encoder : ML::Metal::ComputeEncoder,
