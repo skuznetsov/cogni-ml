@@ -171,9 +171,13 @@ kernel void inkling2_resident_f32_control_pair_coalesced8(
     float4 rank_values[2][RowVectors];
     for (uint step = 0; step < 2; ++step) {
         const uint col = (uint)lane + step * 32;
-        for (uint b = 0; b < BatchRows; ++b) {
-            const uint offset = b * Rank + col;
-            rank_values[step][b / 4][b % 4] = rank_tile[offset];
+        for (uint b = 0; b < RowVectors; ++b) {
+            const uint row = b * 4;
+            rank_values[step][b] = float4(
+                rank_tile[(row + 0) * Rank + col],
+                rank_tile[(row + 1) * Rank + col],
+                rank_tile[(row + 2) * Rank + col],
+                rank_tile[(row + 3) * Rank + col]);
         }
     }
 
