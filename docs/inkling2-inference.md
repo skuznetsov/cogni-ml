@@ -162,6 +162,26 @@ FP32 logit rows matched bitwise through 48 forced decode inputs.
 The live K/V and raw convolution histories matched at sequence lengths
 1,022, 1,023, 1,024, 1,025, and 1,070.
 
+### Ordered sliding attention on long prompts
+
+On the M2 Max with three passes, research IQ4_NL, an outer tile of
+1,024, and M64 expert tiles, the quiet 4,096-token A/B pair improved
+from 208.68 to 307.53 tok/s (+47.37%). Both warmed scratch arenas
+allocated 561 MiB. The warmed Metal pipeline cache went from 37 to
+36 entries because the long sliding spans kept using ordered attention.
+
+At 8,192 tokens, GPU timestamp profiles measured 17.81 to 2.76 s for
+sliding attention after the first outer tile. Global attention took
+28.25 s in the wrapped-path profile. A separate uninstrumented
+8,192-token pair took 56.49 and 39.68 s, with sampled background CPU
+spikes. This pair gives a diagnostic wall-time comparison.
+
+At 1,022, 4,096, and 8,192 tokens, the full final FP32 logit row, live
+K/V at all 48 visits, and raw convolution histories matched bitwise
+between the two builds. The long prompt repeats a fixed 1,022-token prefix.
+Four quiet follow-up pairs on the 1,022-token control had a median change
+of +0.24% (range −0.32% to +1.03%).
+
 ### Comparison with llama.cpp
 
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
@@ -291,6 +311,9 @@ With `--prefill-tile 1024`, projections, convolutions, and expert routing
 can use the full tile. Attention works in spans of up to 512 rows and
 commits KV after each span. This bounds the ordered attention score panel
 to 48 MiB on the research checkpoint (512 rows, 24 heads, and 1,024 keys).
+For sliding attention, the packed K/V panel covers the union of the span's
+windows. On this checkpoint it holds up to 1,535 keys, or about 12 MiB
+for K and V together.
 
 Select `--prefill-tile auto` or pass `auto_prefill_tile: true` to
 `Inkling2Engine.new` to use up to 128 rows on a fresh sequence. The same
@@ -363,10 +386,12 @@ the packed K loads across all three heads. QK keeps the lane-local additions
 and SIMD reduction of `scores`. One kernel computes softmax and PV, starting
 with the zero-logit sink and visiting keys in ascending order. Packing,
 QK, and softmax/PV reuse GPU scratch across visits. This path handles
-attention spans of 64–512 rows in the first 1,024 positions with an
-unwrapped cache, a vector-aligned gate, 128 head channels, 16 relative
-channels, and up to 24 query heads and eight KV heads. Other spans use
-`scores` when eligible and regular attention otherwise.
+attention spans of 64–512 rows with up to 1,024 visible keys per query,
+a vector-aligned gate, 128 head channels, 16 relative channels, and up to
+24 query heads and eight KV heads. Sliding spans pack the KV ring in
+chronological order. Global spans use ordered attention through position
+1,024 (one-based). Other spans use `scores` when eligible and regular
+attention otherwise.
 
 The fixed-depth resident Metal engine also exposes
 `decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.
