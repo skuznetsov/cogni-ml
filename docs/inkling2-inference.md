@@ -121,7 +121,7 @@ pipeline keys.
 ### Tiled FP32 loop controllers
 
 On Apple Silicon, the rank-64 gain/forget pair uses an eight-row,
-32-channel tile for prefill batches of 16 through 512 rows. Four SIMD
+32-channel tile for prefill batches of 16 through 1,024 rows. Four SIMD
 groups share the rank tile and preserve the original FP32 dot-product
 and reduction order. The reduced gain and forget values feed a row-major
 epilogue that updates adjacent channels in parallel.
@@ -143,6 +143,24 @@ Each run matched all 49 full FP32 logit rows and all live KV at
 the checked positions through 48 forced decode inputs. The long fixture
 crosses the 1,024-token boundary. Warming the tiled controller adds one
 pipeline-cache key and uses the same resident scratch allocation.
+
+### Explicit 1,024-row prefill
+
+With the research IQ4_NL GGUF, three passes, ordered attention, and M64
+expert tiles, a warmed A/B on the M2 Max compared two outer tiles of
+512 + 510 rows with one outer tile of 1,022 rows. Both used attention
+spans of 512 + 510 rows. The four quiet, alternating pairs ran on AC
+power and included the final full logit readback in prefill time.
+
+| Outer prefill tiles | Prefill (tok/s) | Warmed scratch (MiB) | Metal pipeline cache entries |
+| --- | ---: | ---: | ---: |
+| 512 + 510 | 440.89 | 314.22 | 35 |
+| 1,022 | 475.21 | 559.51 | 35 |
+
+The median paired gain was 7.78% (range 7.63% to 8.05%). All 49 full
+FP32 logit rows matched bitwise through 48 forced decode inputs.
+The live K/V and raw convolution histories matched at sequence lengths
+1,022, 1,023, 1,024, 1,025, and 1,070.
 
 ### Comparison with llama.cpp
 
@@ -265,9 +283,14 @@ and epilogue. With fixed depth, the CPU submits the work and reads token
 IDs or the requested logit rows.
 
 The resident Metal backend accepts explicit tile sizes from 1 through 128
-and the wider sizes 256 and 512. The default is 32. All sizes use float32
-staging by default. The explicit 256- and 512-row modes keep final tiles
-of fewer than 16 rows at the same boundary as the 128-row mode.
+and the wider sizes 256, 512, and 1,024. The default is 32. All sizes use
+float32 staging by default. The explicit wide modes keep final tiles of
+fewer than 16 rows at the same boundary as the 128-row mode.
+
+With `--prefill-tile 1024`, projections, convolutions, and expert routing
+can use the full tile. Attention works in spans of up to 512 rows and
+commits KV after each span. This bounds the ordered attention score panel
+to 48 MiB on the research checkpoint (512 rows, 24 heads, and 1,024 keys).
 
 Select `--prefill-tile auto` or pass `auto_prefill_tile: true` to
 `Inkling2Engine.new` to use up to 128 rows on a fresh sequence. The same
@@ -278,7 +301,7 @@ calls on the same engine to exercise the wider KV append path. Automatic
 sizing requires resident Metal and is mutually exclusive with an explicit
 tile in the engine constructor.
 
-Tiles from 16 through 512 rows use grouped expert GEMM on Apple Silicon
+Tiles from 16 through 1,024 rows use grouped expert GEMM on Apple Silicon
 when at most 256 experts are present. The GPU groups routes by expert for
 the IQ4_NL and Q8_0 gate/up and down GEMMs. Gate/up applies SiTU in its
 epilogue. The down output returns to the original token and routing rank
@@ -308,7 +331,7 @@ GEMMs. Warming this mode after direct M16 adds one routing pipeline.
 
 The resident path fuses Q/K/V/R preparation. Eligible Q8_0 attention
 projections share a dispatch in scalar decode and block4 verification.
-On Apple Silicon, prefill tiles with 16 to 512 rows can run compatible
+On Apple Silicon, prefill tiles with 16 to 1,024 rows can run compatible
 Q8_0 Q and gate projections in one dispatch with a shared 32-by-32 FP32
 input tile. Each projection keeps its own FP32 accumulation order and
 output buffer binding. Eligible F32 loop controllers compute gain,
@@ -339,11 +362,11 @@ FP32 K and V. On layouts with three query heads per KV head, QK shares
 the packed K loads across all three heads. QK keeps the lane-local additions
 and SIMD reduction of `scores`. One kernel computes softmax and PV, starting
 with the zero-logit sink and visiting keys in ascending order. Packing,
-QK, and softmax/PV reuse GPU scratch across visits. This path handles tiles
-of 64–512 rows in the first 1,024 positions with an unwrapped cache,
-a vector-aligned gate, 128 head channels, 16 relative channels, and up to
-24 query heads and eight KV heads. Other tiles use `scores` when eligible
-and regular attention otherwise.
+QK, and softmax/PV reuse GPU scratch across visits. This path handles
+attention spans of 64–512 rows in the first 1,024 positions with an
+unwrapped cache, a vector-aligned gate, 128 head channels, 16 relative
+channels, and up to 24 query heads and eight KV heads. Other spans use
+`scores` when eligible and regular attention otherwise.
 
 The fixed-depth resident Metal engine also exposes
 `decode_block4(StaticArray[id0, id1, id2, id3])` for forced continuations.

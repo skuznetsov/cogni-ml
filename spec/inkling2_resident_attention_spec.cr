@@ -421,21 +421,21 @@ require "../src/ml/gguf/inkling2_resident_math"
         resident_bits(shared_kv.output).should eq(resident_bits(explicit_regular.output))
       end
 
-      it "matches scores with ordered batches, a partial query group, and sliding fallback" do
+      it "matches scores when ordered prefill spans share a tile, then wrap the sliding window" do
         config = resident_test_config(sliding: true, n_head: 3_i32, n_head_kv: 1_i32,
-          head_dim: 128_i32, rel_dim: 16_i32, window: 129_i32, max_seq: 193_i32)
+          head_dim: 128_i32, rel_dim: 16_i32, window: 577_i32, max_seq: 641_i32)
         weights = resident_attention_weights(config)
         matmul = ML::GGUF::Inkling2CPUMatmul.new
-        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 193_i32))
-        tiles = [{0_i32, 64_i32}, {64_i32, 65_i32}, {129_i32, 64_i32}]
-        retained_positions = [64_i32, 128_i32, 129_i32, 192_i32]
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 641_i32))
+        tiles = [{0_i32, 512_i32}, {512_i32, 65_i32}, {577_i32, 64_i32}]
+        retained_positions = [64_i32, 511_i32, 512_i32, 576_i32, 640_i32]
 
         scores = resident_run_prefill_mode(config, weights, projected, tiles,
-          sliding: true, max_seq: 193_i32, snapshot_positions: retained_positions,
+          sliding: true, max_seq: 641_i32, snapshot_positions: retained_positions,
           prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Scores,
           expected_pipeline: "inkling2_resident_attention_prefill_scores")
-        ordered = resident_run_prefill_mode(config, weights, projected, tiles,
-          sliding: true, max_seq: 193_i32, snapshot_positions: retained_positions,
+        ordered = resident_run_prefill_mode(config, weights, projected, [{0_i32, 577_i32}, {577_i32, 64_i32}],
+          sliding: true, max_seq: 641_i32, snapshot_positions: retained_positions,
           prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Ordered,
           expected_pipeline: "inkling2_prefill_ordered_softmax_pv")
         ML::Metal::PipelineCache.resident_spec_contains?("inkling2_prefill_ordered_qk_gqa3").should be_true
