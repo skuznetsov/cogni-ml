@@ -118,6 +118,31 @@ fixtures, including the 1,024-token boundary on the wide fixture.
 Scratch capacity stayed constant and warming M64 added five Metal
 pipeline keys.
 
+### Tiled FP32 loop controllers
+
+On Apple Silicon, the rank-64 gain/forget pair uses an eight-row,
+32-channel tile for prefill batches of 16 through 512 rows. Four SIMD
+groups share the rank tile and preserve the original FP32 dot-product
+and reduction order. The reduced gain and forget values feed a row-major
+epilogue that updates adjacent channels in parallel.
+
+The three-pass research IQ4_NL A/B ran on a quiet M2 Max. The default
+32-token mode used regular attention and MoE route mode 16 on AC power.
+The wider tiles used ordered attention and MoE route mode 64 on battery
+power. Each row reports four warmed, alternating pairs. The change is
+the median of the within-pair speed ratios.
+
+| Prefill tiles | Four-row pair (tok/s) | Tiled pair (tok/s) | Paired change | Pair range |
+| --- | ---: | ---: | ---: | --- |
+| 5 × 32 + 28 | 126.10 | 128.35 | +1.63% | +1.54% to +2.32% |
+| 128 + 60 | 201.41 | 204.89 | +1.80% | +0.58% to +2.62% |
+| 512 + 510 | 415.78 | 431.54 | +3.77% | +3.46% to +4.13% |
+
+Each run matched all 49 full FP32 logit rows and all live KV at
+the checked positions through 48 forced decode inputs. The long fixture
+crosses the 1,024-token boundary. Warming the tiled controller adds one
+pipeline-cache key and uses the same resident scratch allocation.
+
 ### Comparison with llama.cpp
 
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp

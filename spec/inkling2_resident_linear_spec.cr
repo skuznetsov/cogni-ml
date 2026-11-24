@@ -77,6 +77,14 @@ require "../src/ml/gguf/inkling2_engine"
           io.write(f32_bytes(values))
         end
 
+        2.times do |matrix|
+          offsets["control_#{matrix}"] = io.pos
+          values = Array(Float32).new(64 * 35) do |index|
+            ((index * 17 + matrix * 11) % 71 - 35).to_f32 * 0.0091_f32
+          end
+          io.write(f32_bytes(values))
+        end
+
         q8_projection = q8_bytes(7, 32)
         offsets["q8_projection"] = io.pos
         io.write(q8_projection)
@@ -121,7 +129,7 @@ require "../src/ml/gguf/inkling2_engine"
         offsets["iq4_down"] = io.pos
         io.write(iq4_down)
 
-        io.write(Bytes.new(65_536 - io.pos.to_i, 0_u8))
+        io.write(Bytes.new((-io.pos % 16_384).to_i, 0_u8))
       end
       Model.new(path, offsets)
     end
@@ -216,7 +224,67 @@ require "../src/ml/gguf/inkling2_engine"
     end
   end
 
+  class Inkling2UntiledControlPairSpec < ML::GGUF::Inkling2ResidentLinear
+    private def f32_control_pair_tiled?(_rank_dim : Int32, _rows : Int32) : Bool
+      false
+    end
+  end
+
   describe ML::GGUF::Inkling2ResidentLinear do
+    it "keeps FP32 controller bits across partial row and channel tiles" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+      {% unless flag?(:aarch64) %}
+        pending! "Rank-64 tiling requires Apple Silicon"
+      {% end %}
+
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      reference = Inkling2UntiledControlPairSpec.new(gguf)
+      tiled = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      buffers = [] of ML::MetalBuffer
+      begin
+        in_dim, out_dim, rows = 64, 35, 19
+        weights = {0, 1}.map do |matrix|
+          raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["control_#{matrix}"],
+            in_dim * out_dim * sizeof(Float32))
+          ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::F32, out_dim, in_dim)
+        end
+        elements = rows * out_dim
+        rank = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * in_dim + 1) do |i|
+          ((i * 7) % 331 - 165).to_f32 * 0.028_f32
+        end, buffers).slice(1)
+        input = Inkling2LinearSpecSupport.float_view(Array(Float32).new(elements + 1) do |i|
+          ((i * 13) % 67 - 33).to_f32 * 0.035_f32
+        end, buffers).slice(1)
+        message = Inkling2LinearSpecSupport.float_view(Array(Float32).new(elements + 2) do |i|
+          ((i * 29) % 41 - 20).to_f32 * 0.081_f32
+        end, buffers).slice(2)
+        guards = Array(Float32).new(elements + 2, 123.0_f32)
+        outputs = {reference, tiled}.map do |linear|
+          output = Inkling2LinearSpecSupport.float_view(guards, buffers)
+          ML::Metal::Dispatch.execute_sequence do |command|
+            encoder = ML::Metal::ComputeEncoder.new(command)
+            linear.project_f32_control_pair(encoder, weights, rank, input, message,
+              output.slice(1), out_dim, rows: rows).should be_true
+            encoder.end_encoding
+          end
+          values = Inkling2LinearSpecSupport.read(output, guards.size)
+          values.first.should eq(123.0_f32)
+          values.last.should eq(123.0_f32)
+          values[1, elements].should_not contain(123.0_f32)
+          Inkling2LinearSpecSupport.float_bits(values)
+        end
+        outputs[1].should eq(outputs[0])
+        ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_f32_control_pair_coalesced8").should be_true
+      ensure
+        buffers.each(&.release)
+        reference.close
+        tiled.close
+        gguf.close
+        File.delete?(fixture.path)
+      end
+    end
+
     it "shares a dispatch across three independent F32 projections" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 
