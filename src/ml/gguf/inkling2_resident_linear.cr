@@ -271,7 +271,13 @@ module ML::GGUF
                         view_overlaps?(output, output_elements, message, output_elements)
 
         offsets = StaticArray(UInt64, 2).new { |index| model_offset(weights[index].raw).to_u64 }
-        name = rows == 1 ? "inkling2_resident_f32_control_pair" : "inkling2_resident_f32_control_pair_batch"
+        name, channel_tile, row_tile = if rows == 1
+                                        {"inkling2_resident_f32_control_pair", 4, 1}
+                                      elsif f32_control_pair_tiled?(first.in_dim, rows)
+                                        {"inkling2_resident_f32_control_pair_coalesced8", 32, 8}
+                                      else
+                                        {"inkling2_resident_f32_control_pair_batch", 4, 4}
+                                      end
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
         encoder.set_buffer(@model, 0)
         encoder.set_buffer(rank.buffer, 1, offset: rank.offset)
@@ -281,13 +287,17 @@ module ML::GGUF
         encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 2, 5)
         encoder.set_value(first.in_dim.to_u32, 6)
         encoder.set_value(output_dim.to_u32, 7)
-        if rows == 1
-          encoder.dispatch_threadgroups({(output_dim + 3) // 4, 1, 1}, {128, 1, 1})
-        else
-          encoder.set_value(rows.to_u32, 8)
-          encoder.dispatch_threadgroups({(output_dim + 3) // 4, (rows + 3) // 4, 1}, {128, 1, 1})
-        end
+        encoder.set_value(rows.to_u32, 8) if rows > 1
+        encoder.dispatch_threadgroups({(output_dim + channel_tile - 1) // channel_tile, (rows + row_tile - 1) // row_tile, 1}, {128, 1, 1})
         true
+      end
+
+      private def f32_control_pair_tiled?(rank_dim : Int32, rows : Int32) : Bool
+        {% if flag?(:aarch64) %}
+          rank_dim == 64 && rows.in?(MIN_GROUPED_ROWS..MAX_GROUPED_ROWS)
+        {% else %}
+          false
+        {% end %}
       end
 
       # Encode router, expert up/gate, SiTU activation, expert down, and

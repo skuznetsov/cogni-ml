@@ -124,6 +124,107 @@ kernel void inkling2_resident_f32_control_pair_batch(
     }
 }
 
+static inline float4 inkling2_control_pair_sum(float4 sums) {
+    return float4(simd_sum(sums.x), simd_sum(sums.y), simd_sum(sums.z), simd_sum(sums.w));
+}
+
+// Use the original float4 accumulators and SIMD reduction for every row.
+// The four SIMD groups share the rank tile. They leave reduced values in
+// threadgroup memory so the epilogue can use contiguous output channels.
+kernel void inkling2_resident_f32_control_pair_coalesced8(
+    device const uchar* model          [[buffer(0)]],
+    device const float* rank           [[buffer(1)]],
+    device const float* input          [[buffer(2)]],
+    device const float* message        [[buffer(3)]],
+    device       float* output         [[buffer(4)]],
+    constant ulong* weight_offsets    [[buffer(5)]],
+    constant uint&  in_dim             [[buffer(6)]],
+    constant uint&  out_dim            [[buffer(7)]],
+    constant uint&  rows               [[buffer(8)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint Rank = 64;
+    constexpr uint BatchRows = 8;
+    constexpr uint Channels = 32;
+    constexpr uint ChannelsPerSimd = Channels / 4;
+    constexpr uint RowVectors = BatchRows / 4;
+    if (in_dim != Rank) return;
+    const uint first_batch = group.y * BatchRows;
+    const uint batch_count = min(rows - first_batch, BatchRows);
+    const uint first_channel = group.x * Channels;
+    const uint channel_count = min(out_dim - first_channel, Channels);
+    device const float* gain_weights = (device const float*)(model + weight_offsets[0]);
+    device const float* forget_weights = (device const float*)(model + weight_offsets[1]);
+    device const float* rank_rows = rank + (size_t)first_batch * Rank;
+    threadgroup float rank_tile[BatchRows * Rank];
+    threadgroup float gain_tile[BatchRows * Channels];
+    threadgroup float forget_tile[BatchRows * Channels];
+
+    for (uint i = tid; i < BatchRows * Rank; i += 128) {
+        rank_tile[i] = i < batch_count * Rank ? rank_rows[i] : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float4 rank_values[2][RowVectors];
+    for (uint step = 0; step < 2; ++step) {
+        const uint col = (uint)lane + step * 32;
+        for (uint b = 0; b < BatchRows; ++b) {
+            const uint offset = b * Rank + col;
+            rank_values[step][b / 4][b % 4] = rank_tile[offset];
+        }
+    }
+
+    for (uint i = 0; i < ChannelsPerSimd; ++i) {
+        const uint channel = (uint)simd * ChannelsPerSimd + i;
+        if (channel >= channel_count) break;
+        const uint output_row = first_channel + channel;
+        const size_t weight_base = (size_t)output_row * Rank;
+        float4 gain_sums[RowVectors];
+        float4 forget_sums[RowVectors];
+        for (uint b = 0; b < RowVectors; ++b) {
+            gain_sums[b] = float4(0.0f);
+            forget_sums[b] = float4(0.0f);
+        }
+        for (uint step = 0; step < 2; ++step) {
+            const size_t offset = weight_base + (uint)lane + step * 32;
+            const float gain_weight = gain_weights[offset];
+            const float forget_weight = forget_weights[offset];
+            for (uint b = 0; b < RowVectors; ++b) {
+                gain_sums[b] += rank_values[step][b] * gain_weight;
+                forget_sums[b] += rank_values[step][b] * forget_weight;
+            }
+        }
+        for (uint b = 0; b < RowVectors; ++b) {
+            const float4 gain_values = inkling2_control_pair_sum(gain_sums[b]);
+            const float4 forget_values = inkling2_control_pair_sum(forget_sums[b]);
+            if (lane == 0) {
+                for (uint j = 0; j < 4; ++j) {
+                    const uint batch_row = b * 4 + j;
+                    if (batch_row >= batch_count) break;
+                    const uint offset = batch_row * Channels + channel;
+                    gain_tile[offset] = gain_values[j];
+                    forget_tile[offset] = forget_values[j];
+                }
+            }
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = tid; i < batch_count * Channels; i += 128) {
+        const uint channel = i % Channels;
+        if (channel < channel_count) {
+            const size_t index = (size_t)(first_batch + i / Channels) * out_dim + first_channel + channel;
+            const float source = input[index];
+            const float forgotten = tanh(forget_tile[i]) * source;
+            const float gained = tanh(gain_tile[i]) * message[index];
+            output[index] = source - forgotten + gained;
+        }
+    }
+}
+
 // A simdgroup computes one output row and four adjacent input rows. Each
 // thread loads one weight value and reuses it across the four token rows.
 kernel void inkling2_resident_gemm_f32(
