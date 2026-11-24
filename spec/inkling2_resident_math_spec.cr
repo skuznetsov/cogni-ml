@@ -170,6 +170,61 @@ require "../src/ml/gguf/inkling2_resident_math"
       end
     end
 
+    it "returns the first finite maximum after the same Float32 softcap" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      vocab, stride, rows = 2051, 2064, 4
+      raw = Array(Float32).new(stride * rows, Float32::NAN)
+      rows.times { |row| raw[row * stride + vocab] = 1000_f32 }
+      # Distinct raw scores that round to the same score after softcap.
+      raw[5] = 990.000061_f32
+      raw[1029] = 990.000122_f32
+      raw[stride + 1000] = Float32::INFINITY
+      raw[stride + 2010] = 10_f32
+      raw[2 * stride + 2] = -Float32::INFINITY
+      raw[3 * stride + 6] = -0.0_f32
+      raw[3 * stride + 1024] = 0.0_f32
+      raw[3 * stride + 2049] = 1e-44_f32
+
+      buffers = [] of ML::MetalBuffer
+      scratch = ML::GGUF::Inkling2ResidentScratch.new
+      begin
+        input = Inkling2ResidentMathSpecSupport.float_view(raw, buffers)
+        {0_f32, 30_f32}.each do |cap|
+          capped = Inkling2ResidentMathSpecSupport.float_view(Array(Float32).new(vocab * rows, 0_f32), buffers)
+          ids = Inkling2ResidentMathSpecSupport.token_view(Array(Int32).new(rows + 1, -888), buffers)
+          scratch.reset
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          begin
+            rows.times do |row|
+              ML::GGUF::Inkling2ResidentMath.softcap(encoder, input.slice(row * stride), capped.slice(row * vocab), cap, vocab)
+            end
+            ML::GGUF::Inkling2ResidentMath.greedy_ids(encoder, scratch, input, ids, cap, vocab, stride, rows)
+          ensure
+            encoder.end_encoding
+          end
+          command.commit_and_wait
+
+          scores = Inkling2ResidentMathSpecSupport.read(capped, vocab * rows)
+          expected = Array(Int32).new(rows) do |row|
+            logits = scores[row * vocab, vocab]
+            logits.any?(&.finite?) ? ML::GGUF::Inkling2Engine.greedy_token_id(logits) : -1
+          end
+          if cap.zero?
+            expected.should eq([1029, 2010, -1, 2049])
+          else
+            expected.first.should eq(5)
+          end
+          data = (ids.buffer.contents + ids.offset).as(Int32*)
+          Slice.new(data, rows + 1).to_a.should eq(expected + [-888])
+        end
+      ensure
+        scratch.close
+        buffers.each(&.release)
+      end
+    end
+
     it "decodes offset Q8_0 and IQ4_NL embedding rows" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 
