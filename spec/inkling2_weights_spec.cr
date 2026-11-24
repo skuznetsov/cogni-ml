@@ -53,6 +53,7 @@ private def inkling2_test_metadata(
   rel_dim : Int32 = 2,
   rel_extent : Int32 = 3,
   sliding_window : Int32 = 2,
+  context_length : Int32 = 1024,
   conv_size : Int32 = 2,
   n_expert : Int32 = 2,
   n_expert_used : Int32 = 1,
@@ -71,7 +72,7 @@ private def inkling2_test_metadata(
     {"general.architecture", "inkling2_loop".as(Inkling2TestValue)},
     {"#{prefix}.block_count", n_layer.as(Inkling2TestValue)},
     {"#{prefix}.embedding_length", n_embd.as(Inkling2TestValue)},
-    {"#{prefix}.context_length", 1024_i32.as(Inkling2TestValue)},
+    {"#{prefix}.context_length", context_length.as(Inkling2TestValue)},
     {"#{prefix}.attention.head_count", Array(Int32).new(n_layer, n_head).as(Inkling2TestValue)},
     {"#{prefix}.attention.head_count_kv", Array(Int32).new(n_layer, n_head_kv).as(Inkling2TestValue)},
     {"#{prefix}.attention.key_length", head_dim.as(Inkling2TestValue)},
@@ -200,6 +201,7 @@ private def write_inkling2_test_gguf(
   rel_dim : Int32 = 2,
   rel_extent : Int32 = 3,
   sliding_window : Int32 = 2,
+  context_length : Int32 = 1024,
   conv_size : Int32 = 2,
   n_expert : Int32 = 2,
   n_expert_used : Int32 = 1,
@@ -219,7 +221,8 @@ private def write_inkling2_test_gguf(
 ) : Nil
   entries = inkling2_test_metadata(
     n_layer: n_layer, n_embd: n_embd, n_head: n_head, n_head_kv: n_head_kv, head_dim: head_dim,
-    rel_dim: rel_dim, rel_extent: rel_extent, sliding_window: sliding_window, conv_size: conv_size,
+    rel_dim: rel_dim, rel_extent: rel_extent, sliding_window: sliding_window,
+    context_length: context_length, conv_size: conv_size,
     n_expert: n_expert, n_expert_used: n_expert_used, expert_dim: expert_dim,
     padded_vocab_size: padded_vocab_size, vocab_size: vocab_size, res_block_size: res_block_size,
     core_start: core_start, core_end: core_end, passes: passes, varying: varying,
@@ -341,13 +344,15 @@ describe ML::GGUF::Inkling2Engine do
     path = File.tempname("inkling2-prefill", ".gguf")
     write_inkling2_test_gguf(path, include_all_tensors: true)
     begin
-      [0, 129, 384, 513].each do |tile|
-        expect_raises(ArgumentError, /prefill tile.*1.*128.*256.*512/) do
+      [64, 512, 1024].each do |tile|
+        expect_raises(ArgumentError, /requires resident Metal/) do
           ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: tile)
         end
       end
-      expect_raises(ArgumentError, /requires resident Metal/) do
-        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64)
+      [0, 129, 384, 513, 1025].each do |tile|
+        expect_raises(ArgumentError, /prefill tile.*1.*128.*256.*512.*1024/) do
+          ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: tile)
+        end
       end
       expect_raises(ArgumentError, /requires resident Metal/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, auto_prefill_tile: true)
@@ -673,31 +678,37 @@ describe ML::GGUF::Inkling2Engine do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 
       path = File.tempname("inkling2-prefill-tail", ".gguf")
-      write_inkling2_test_gguf(path, n_embd: 32, expert_dim: 32, sliding_window: 48,
+      write_inkling2_test_gguf(path, n_embd: 32, expert_dim: 32, sliding_window: 48, context_length: 1040,
         include_all_tensors: true, patterned_weights: true, quantized_experts: true)
       begin
-        prompt = Array(Int32).new(642) { |index| (index * 5 + index // 7) % 7 }
-        reference = ML::GGUF::Inkling2Engine.new(path, prompt.size + 1, metal: true, prefill_tile: 128)
-        wide = ML::GGUF::Inkling2Engine.new(path, prompt.size + 1, metal: true, prefill_tile: 512)
-        begin
-          ML::Metal::PipelineCache.clear
-          actual = wide.prefill(prompt)
-          {% if flag?(:aarch64) %}
-            ML::Metal::PipelineCache.get("inkling2_resident_moe_matvec_q8_0") do
-              raise "wide prefill did not dispatch the narrow expert tail"
+        prefix = [5, 1, 3]
+        [{128, 512, 642}, {512, 1024, 130}, {512, 1024, 1033}].each do |reference_tile, wide_tile, rows|
+          prompt = Array(Int32).new(rows) { |index| (index * 5 + index // 7) % 7 }
+          context = prefix.size + prompt.size + 1
+          reference = ML::GGUF::Inkling2Engine.new(path, context, metal: true, prefill_tile: reference_tile)
+          wide = ML::GGUF::Inkling2Engine.new(path, context, metal: true, prefill_tile: wide_tile)
+          begin
+            reference.prefill(prefix)
+            wide.prefill(prefix)
+            ML::Metal::PipelineCache.clear
+            actual = wide.prefill(prompt)
+            {% if flag?(:aarch64) %}
+              ML::Metal::PipelineCache.get("inkling2_resident_moe_matvec_q8_0") do
+                raise "#{wide_tile}-row prefill did not dispatch the narrow expert tail for #{rows} tokens"
+              end
+            {% end %}
+            actual.map(&.unsafe_as(UInt32)).should eq(reference.prefill(prompt).map(&.unsafe_as(UInt32)))
+            wide.forward(2).not_nil!.map(&.unsafe_as(UInt32)).should eq(reference.forward(2).not_nil!.map(&.unsafe_as(UInt32)))
+            wide.layer_visits.times do |visit|
+              wide.kv_count(visit).should eq(reference.kv_count(visit))
+              wide.kv_count(visit).times do |index|
+                expect_inkling2_kv_bits(wide.key_value_at(visit, index), reference.key_value_at(visit, index))
+              end
             end
-          {% end %}
-          actual.map(&.unsafe_as(UInt32)).should eq(reference.prefill(prompt).map(&.unsafe_as(UInt32)))
-          wide.forward(2).not_nil!.map(&.unsafe_as(UInt32)).should eq(reference.forward(2).not_nil!.map(&.unsafe_as(UInt32)))
-          wide.layer_visits.times do |visit|
-            wide.kv_count(visit).should eq(reference.kv_count(visit))
-            wide.kv_count(visit).times do |index|
-              expect_inkling2_kv_bits(wide.key_value_at(visit, index), reference.key_value_at(visit, index))
-            end
+          ensure
+            wide.close
+            reference.close
           end
-        ensure
-          wide.close
-          reference.close
         end
       ensure
         File.delete?(path)

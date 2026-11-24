@@ -99,11 +99,12 @@ module ML::GGUF
   # One causal sequence. An optional threshold selects each token's exit depth.
   # A later token can extend the core history of earlier tokens on demand.
   class Inkling2Engine
-    DEFAULT_PREFILL_TILE  =  32
-    MAX_AUTO_PREFILL_TILE = 128
-    MAX_PREFILL_TILE      = 512
+    DEFAULT_PREFILL_TILE  =   32
+    MAX_AUTO_PREFILL_TILE =  128
+    MAX_PREFILL_TILE      = 1024
 
-    private DEPTH_BLOCK_ROWS = 4
+    private MAX_AUTO_APPEND_PREFILL_TILE = 512
+    private DEPTH_BLOCK_ROWS             =   4
 
     alias LoopTrace = Proc(Int32, Int32, Float32, Nil)
 
@@ -138,8 +139,8 @@ module ML::GGUF
       if prefill_tile && auto_prefill_tile
         raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
       end
-      if prefill_tile && !prefill_tile.in?(1..MAX_AUTO_PREFILL_TILE) && !prefill_tile.in?({256, MAX_PREFILL_TILE})
-        raise ArgumentError.new("Inkling 2 prefill tile must be 1–#{MAX_AUTO_PREFILL_TILE}, 256, or #{MAX_PREFILL_TILE} tokens")
+      if prefill_tile && !prefill_tile.in?(1..MAX_AUTO_PREFILL_TILE) && !prefill_tile.in?({256, 512, MAX_PREFILL_TILE})
+        raise ArgumentError.new("Inkling 2 prefill tile must be 1–#{MAX_AUTO_PREFILL_TILE}, 256, 512, or #{MAX_PREFILL_TILE} tokens")
       end
       @weights = Inkling2Weights.new(path)
       @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile, auto_prefill_tile)
@@ -485,7 +486,7 @@ module ML::GGUF
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
           rows = auto_prefill_tile ? MAX_AUTO_PREFILL_TILE : (prefill_tile || DEFAULT_PREFILL_TILE)
-          append_rows = Inkling2ResidentLinear::MAX_GROUPED_ROWS if auto_prefill_tile
+          append_rows = MAX_AUTO_APPEND_PREFILL_TILE if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
             append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation) ? DEPTH_BLOCK_ROWS : 0,
             depth_speculation: @depth_speculation)

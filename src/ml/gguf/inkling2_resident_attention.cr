@@ -377,6 +377,7 @@ module ML::GGUF
       private SPLIT_PARALLEL_SCORE_LIMIT = 512_i32
       private SPLIT_PARALLEL_THREADS = 128_i32
       private PREFILL_SCORE_LIMIT = 1024_i32
+      private MAX_PREFILL_ATTENTION_ROWS = 512_i32
       private PREFILL_THREADS = 128_i32
       MAX_HEAD_DIM = 256_i32
 
@@ -499,11 +500,22 @@ module ML::GGUF
         encode_prepare_qkvr(encoder, q, key, value, q_rel, q_clip, rel_clip, start, rows)
 
         attended = scratch.take(checked_elements(rows, q_width, "attention output"))
-        # Keep this before the cache commit below: later rows in the block read
-        # earlier block-local K/V from the tile until all queries are done.
-        encode_attention(encoder, scratch, q, key, value, q_rel, gate, sink, relative_bias, attended,
-          start, rows, relative_extent, decode_block)
-        encode_cache_commit(encoder, key, value, start, rows)
+        # Each span reads its local K/V directly. Commit it before the next
+        # span reads that prefix from the cache. The row cap bounds ordered
+        # attention scratch while the projections and convolutions stay wide.
+        row_limit = decode_block ? rows : MAX_PREFILL_ATTENTION_ROWS
+        row_offset = 0
+        while row_offset < rows
+          span_start = start + row_offset
+          span_rows = Math.min(rows - row_offset, row_limit)
+          span_key = key.slice(row_offset * @kv_width)
+          span_value = value.slice(row_offset * @kv_width)
+          encode_attention(encoder, scratch, q.slice(row_offset * q_width), span_key, span_value,
+            q_rel.slice(row_offset * rel_width), gate.slice(row_offset * q_width), sink.slice(row_offset * n_head),
+            relative_bias, attended.slice(row_offset * q_width), span_start, span_rows, relative_extent, decode_block)
+          encode_cache_commit(encoder, span_key, span_value, span_start, span_rows)
+          row_offset += span_rows
+        end
         @last_end_position = start + rows
         @last_encoded_start_position = start
         @last_encoded_end_position = start + rows
@@ -722,7 +734,7 @@ module ML::GGUF
       ) : Nil
         # Bound scratch to the research model's panel sizes. The packed
         # kernel reads the unwrapped cache prefix and a vector-aligned gate.
-        if @prefill_mode.ordered? && !decode_block && (64..512).includes?(rows) &&
+        if @prefill_mode.ordered? && !decode_block && (64..MAX_PREFILL_ATTENTION_ROWS).includes?(rows) &&
            start + rows <= PREFILL_SCORE_LIMIT && (!@sliding || start + rows <= @config.sliding_window) &&
            @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head <= 24 && @config.n_head_kv <= 8 &&
            gate.offset % (4 * sizeof(Float32)) == 0

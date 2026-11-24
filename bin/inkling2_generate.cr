@@ -48,7 +48,7 @@ parser.on("--cpu", "Force CPU inference; Metal is the default on Darwin unless b
 parser.on("--staged-metal", "Use the staged Metal backend with token-by-token prefill") { staged_metal = true }
 parser.on("--raw", "Use --prompt as a raw completion, without the chat template") { raw_prompt = true }
 parser.on("--passes N", "Pass override for variable-loop checkpoints; defaults to checkpoint depth") { |value| passes = parse_cli_integer(value, "--passes") }
-parser.on("--prefill-tile SIZE", "Resident Metal tile: auto, 1–#{ML::GGUF::Inkling2Engine::MAX_AUTO_PREFILL_TILE}, 256, or #{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE} (default: #{ML::GGUF::Inkling2Engine::DEFAULT_PREFILL_TILE})") do |value|
+parser.on("--prefill-tile SIZE", "Resident Metal tile: auto, 1–#{ML::GGUF::Inkling2Engine::MAX_AUTO_PREFILL_TILE}, 256, 512, or #{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE} (default: #{ML::GGUF::Inkling2Engine::DEFAULT_PREFILL_TILE})") do |value|
   auto_prefill_tile = value == "auto"
   prefill_tile = auto_prefill_tile ? nil : parse_cli_integer(value, "--prefill-tile")
 end
