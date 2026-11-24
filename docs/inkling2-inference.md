@@ -63,6 +63,28 @@ and inference setup.
 
 ## Metal throughput on Apple M2 Max
 
+### Tuned native prefill
+
+Warmed cogni-ml runs used the research IQ4_NL GGUF, three passes, and
+FP32 KV. Prefill time includes returning the final full logit row to the
+CPU. Each rate is the median for one arm of a paired benchmark on a quiet
+host.
+
+| Prompt tokens | Prefill tiles | Attention | MoE route mode | Cogni-ml prefill (tok/s) | Quiet intervals |
+| ---: | --- | --- | ---: | ---: | ---: |
+| 188 | 128 + 60 | `scores` | 16 | 250.35 | 3 |
+| 188 | 128 + 60 | `scores` | 32 | 249.03 | 3 |
+| 188 | 128 + 60 | `ordered` | 32 | 208.17 | 4 |
+| 1,022 | 512 + 510 | `ordered` | 32 | 391.35 | 4 |
+
+The `scores` rows come from the MoE route-width sweep for `8fd1ae66`.
+The `ordered` rows come from the batched FP32 controller fusion A/B for
+`5a76103c`. On the 188-token fixture, `ordered` uses the packed
+attention kernel on the first tile and falls back to `scores` for the
+60-token tail.
+
+### Comparison with llama.cpp
+
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
 `e6d624b9` with the same research IQ4_NL GGUF, three passes, FP32 KV,
 the same prompt and 48 forced decode IDs, and the same prefill tile
