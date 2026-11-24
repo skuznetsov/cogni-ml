@@ -127,16 +127,17 @@ and reduction order. The reduced gain and forget values feed a row-major
 epilogue that updates adjacent channels in parallel.
 
 The three-pass research IQ4_NL A/B ran on a quiet M2 Max. The default
-32-token mode used regular attention and MoE route mode 16 on AC power.
-The wider tiles used ordered attention and MoE route mode 64 on battery
-power. Each row reports four warmed, alternating pairs. The change is
+32-token mode used regular attention and MoE route mode 16. The wider
+tiles used ordered attention and MoE route mode 64. Each row reports
+four warmed, alternating pairs from one power state. The change is
 the median of the within-pair speed ratios.
 
-| Prefill tiles | Four-row pair (tok/s) | Tiled pair (tok/s) | Paired change | Pair range |
-| --- | ---: | ---: | ---: | --- |
-| 5 × 32 + 28 | 126.10 | 128.35 | +1.63% | +1.54% to +2.32% |
-| 128 + 60 | 201.41 | 204.89 | +1.80% | +0.58% to +2.62% |
-| 512 + 510 | 415.78 | 431.54 | +3.77% | +3.46% to +4.13% |
+| Prefill tiles | Power | Four-row pair (tok/s) | Tiled pair (tok/s) | Paired change | Pair range |
+| --- | --- | ---: | ---: | ---: | --- |
+| 5 × 32 + 28 | AC | 126.10 | 128.35 | +1.63% | +1.54% to +2.32% |
+| 128 + 60 | Battery | 201.41 | 204.89 | +1.80% | +0.58% to +2.62% |
+| 512 + 510 | Battery | 415.78 | 431.54 | +3.77% | +3.46% to +4.13% |
+| 512 + 510 | AC | 414.21 | 433.00 | +4.54% | +3.61% to +6.57% |
 
 Each run matched all 49 full FP32 logit rows and all live KV at
 the checked positions through 48 forced decode inputs. The long fixture
