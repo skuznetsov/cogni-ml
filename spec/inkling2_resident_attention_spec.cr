@@ -451,6 +451,33 @@ require "../src/ml/gguf/inkling2_resident_math"
         end
       end
 
+      it "keeps global ordered panels bitwise across the cached prefix and a one-row tail" do
+        config = resident_test_config(sliding: false, n_head: 3_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 4_i32, max_seq: 1_088_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 1_088_i32))
+        # The final span starts at key 1023, so its first panel crosses
+        # the cache/tile boundary inside a key group and ends with 32+32+1 rows.
+        tiles = [{0_i32, 511_i32}, {511_i32, 512_i32}, {1_023_i32, 65_i32}]
+        retained_positions = [0_i32, 1_022_i32, 1_023_i32, 1_055_i32, 1_087_i32]
+
+        regular = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 1_088_i32, snapshot_positions: retained_positions,
+          expected_pipeline: "inkling2_resident_attention")
+        ordered = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 1_088_i32, snapshot_positions: retained_positions,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Ordered,
+          expected_pipeline: "inkling2_prefill_global_qk_gqa3")
+        ML::Metal::PipelineCache.resident_spec_contains?("inkling2_prefill_global_softmax_pv").should be_true
+        resident_bits(ordered.output).should eq(resident_bits(regular.output))
+        ordered.snapshots.zip(regular.snapshots).each do |actual, expected|
+          actual[2].should eq(expected[2])
+          resident_bits(actual[0]).should eq(resident_bits(expected[0]))
+          resident_bits(actual[1]).should eq(resident_bits(expected[1]))
+        end
+      end
+
       it "keeps per-head ordered prefill bitwise when four queries have no common keys" do
         config = resident_test_config(sliding: true, n_head: 2_i32, n_head_kv: 1_i32,
           head_dim: 128_i32, rel_dim: 16_i32, window: 3_i32, max_seq: 130_i32)
