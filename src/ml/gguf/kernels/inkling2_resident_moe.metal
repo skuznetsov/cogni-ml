@@ -272,6 +272,39 @@ kernel void inkling2_resident_gemm_f32(
     }
 }
 
+// Specialize the row count before the K loop so each row's accumulator stays
+// directly addressable. The scalar products and SIMD reduction are unchanged.
+template <uint Rows>
+inline void inkling2_resident_gemm_q8_0_rows(
+    device const block_q8_0_56* weights, device const float* x,
+    device float* y, uint in_dim, uint out_dim, uint blocks, ushort lane)
+{
+    float sum0 = 0.0f;
+    float sum1 = 0.0f;
+    float sum2 = 0.0f;
+    float sum3 = 0.0f;
+    for (uint ib = 0; ib < blocks; ++ib) {
+        const float scale = (float)weights[ib].d;
+        const float quant = (float)weights[ib].qs[lane];
+        const uint k = ib * Q8_0_QK + lane;
+        sum0 += scale * x[k] * quant;
+        if (Rows >= 2) sum1 += scale * x[(size_t)in_dim + k] * quant;
+        if (Rows >= 3) sum2 += scale * x[2 * (size_t)in_dim + k] * quant;
+        if (Rows == 4) sum3 += scale * x[3 * (size_t)in_dim + k] * quant;
+    }
+
+    const float total0 = simd_sum(sum0);
+    const float total1 = Rows >= 2 ? simd_sum(sum1) : 0.0f;
+    const float total2 = Rows >= 3 ? simd_sum(sum2) : 0.0f;
+    const float total3 = Rows == 4 ? simd_sum(sum3) : 0.0f;
+    if (lane == 0) {
+        y[0] = total0;
+        if (Rows >= 2) y[out_dim] = total1;
+        if (Rows >= 3) y[2 * (size_t)out_dim] = total2;
+        if (Rows == 4) y[3 * (size_t)out_dim] = total3;
+    }
+}
+
 kernel void inkling2_resident_gemm_q8_0(
     device const uint8_t* w_raw     [[buffer(0)]],
     device const float*   x         [[buffer(1)]],
@@ -286,36 +319,17 @@ kernel void inkling2_resident_gemm_q8_0(
     const uint nb = in_dim / Q8_0_QK;
     const uint row = tgpig.x * INKLING2_RESIDENT_TILE + (uint)sgitg;
     const uint first_batch = tgpig.y * INKLING2_RESIDENT_TILE;
-    if (row >= out_dim) return;
+    if (row >= out_dim || first_batch >= batch) return;
 
-    const uint row_bytes = nb * 34;
-    device const block_q8_0_56* w_row =
-        (device const block_q8_0_56*)(w_raw + (size_t)row * (size_t)row_bytes);
-    float4 sums = float4(0.0f);
-
-    for (uint ib = 0; ib < nb; ++ib) {
-        device const block_q8_0_56* block = w_row + ib;
-        const float scale = (float)block->d;
-        const float quant = (float)block->qs[tiisg];
-        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-            const uint batch_row = first_batch + b;
-            if (batch_row < batch) {
-                const float value = x[(size_t)batch_row * (size_t)in_dim +
-                                      (size_t)ib * Q8_0_QK + tiisg];
-                sums[b] += scale * value * quant;
-            }
-        }
-    }
-
-    const float4 totals = float4(simd_sum(sums.x), simd_sum(sums.y),
-                                 simd_sum(sums.z), simd_sum(sums.w));
-    if (tiisg == 0) {
-        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-            const uint batch_row = first_batch + b;
-            if (batch_row < batch) {
-                output[(size_t)batch_row * (size_t)out_dim + row] = totals[b];
-            }
-        }
+    device const block_q8_0_56* weights =
+        (device const block_q8_0_56*)w_raw + (size_t)row * nb;
+    device const float* input_tile = x + (size_t)first_batch * in_dim;
+    device float* output_tile = output + (size_t)first_batch * out_dim + row;
+    switch (min(batch - first_batch, INKLING2_RESIDENT_TILE)) {
+        case 1: inkling2_resident_gemm_q8_0_rows<1>(weights, input_tile, output_tile, in_dim, out_dim, nb, tiisg); break;
+        case 2: inkling2_resident_gemm_q8_0_rows<2>(weights, input_tile, output_tile, in_dim, out_dim, nb, tiisg); break;
+        case 3: inkling2_resident_gemm_q8_0_rows<3>(weights, input_tile, output_tile, in_dim, out_dim, nb, tiisg); break;
+        case 4: inkling2_resident_gemm_q8_0_rows<4>(weights, input_tile, output_tile, in_dim, out_dim, nb, tiisg); break;
     }
 }
 
@@ -366,6 +380,70 @@ kernel void inkling2_resident_q8_projection_group(
     if (lane == 0) y[row] = total;
 }
 
+// Fixed verifier widths preserve the scalar per-lane Q8_0 accumulation.
+template <uint Rows>
+inline void inkling2_q8_project_fixed_pair(
+    device const block_q8_0_56* weights0, device const block_q8_0_56* weights1,
+    device const float* x, device float* y, uint in_dim, uint out_dim,
+    uint row, uint blocks, ushort lane)
+{
+    float a0 = 0.0f;
+    float a1 = 0.0f;
+    float a2 = 0.0f;
+    float a3 = 0.0f;
+    float b0 = 0.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    float b3 = 0.0f;
+
+    for (uint ib = 0; ib < blocks; ++ib) {
+        const float scale0 = (float)weights0[ib].d;
+        const float scale1 = (float)weights1[ib].d;
+        const float quant0 = (float)weights0[ib].qs[lane];
+        const float quant1 = (float)weights1[ib].qs[lane];
+        const uint k = ib * Q8_0_QK + lane;
+        const float x0 = x[k];
+        const float x1 = x[(size_t)in_dim + k];
+        a0 += scale0 * x0 * quant0;
+        b0 += scale1 * x0 * quant1;
+        a1 += scale0 * x1 * quant0;
+        b1 += scale1 * x1 * quant1;
+        if (Rows >= 3) {
+            const float x2 = x[2 * (size_t)in_dim + k];
+            a2 += scale0 * x2 * quant0;
+            b2 += scale1 * x2 * quant1;
+        }
+        if (Rows == 4) {
+            const float x3 = x[3 * (size_t)in_dim + k];
+            a3 += scale0 * x3 * quant0;
+            b3 += scale1 * x3 * quant1;
+        }
+    }
+
+    const float total_a0 = simd_sum(a0);
+    const float total_b0 = simd_sum(b0);
+    const float total_a1 = simd_sum(a1);
+    const float total_b1 = simd_sum(b1);
+    const float total_a2 = Rows >= 3 ? simd_sum(a2) : 0.0f;
+    const float total_b2 = Rows >= 3 ? simd_sum(b2) : 0.0f;
+    const float total_a3 = Rows == 4 ? simd_sum(a3) : 0.0f;
+    const float total_b3 = Rows == 4 ? simd_sum(b3) : 0.0f;
+    if (lane == 0) {
+        y[row] = total_a0;
+        y[row + 1] = total_b0;
+        y[(size_t)out_dim + row] = total_a1;
+        y[(size_t)out_dim + row + 1] = total_b1;
+        if (Rows >= 3) {
+            y[2 * (size_t)out_dim + row] = total_a2;
+            y[2 * (size_t)out_dim + row + 1] = total_b2;
+        }
+        if (Rows == 4) {
+            y[3 * (size_t)out_dim + row] = total_a3;
+            y[3 * (size_t)out_dim + row + 1] = total_b3;
+        }
+    }
+}
+
 // Two simdgroups each compute a pair of output channels for up to four tokens.
 // The pair shares activation loads and retains a separate reduction per channel.
 kernel void inkling2_resident_q8_projection_group_batch(
@@ -384,38 +462,15 @@ kernel void inkling2_resident_q8_projection_group_batch(
     const uint out_dim = (uint(descriptor.end_group) - first_group) * INKLING2_RESIDENT_TILE;
     const uint row = (group.x - first_group) * INKLING2_RESIDENT_TILE + 2 * (uint)simd;
     const uint nb = in_dim / Q8_0_QK;
-    device const block_q8_0_56* weights0 = (device const block_q8_0_56*)(model + descriptor.weight_offset)
+    device const block_q8_0_56* w0 = (device const block_q8_0_56*)(model + descriptor.weight_offset)
         + (size_t)row * nb;
-    device const block_q8_0_56* weights1 = weights0 + nb;
+    device const block_q8_0_56* w1 = w0 + nb;
     device const float* x = input + descriptor.input_offset;
     device float* y = output + descriptor.output_offset;
-    float4 sums0 = float4(0.0f);
-    float4 sums1 = float4(0.0f);
-    for (uint ib = 0; ib < nb; ++ib) {
-        const float scale0 = (float)weights0[ib].d;
-        const float scale1 = (float)weights1[ib].d;
-        const float quant0 = (float)weights0[ib].qs[lane];
-        const float quant1 = (float)weights1[ib].qs[lane];
-        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-            if (b < rows) {
-                const float value = x[(size_t)b * in_dim + ib * Q8_0_QK + lane];
-                sums0[b] += scale0 * value * quant0;
-                sums1[b] += scale1 * value * quant1;
-            }
-        }
-    }
-    const float4 totals0 = float4(simd_sum(sums0.x), simd_sum(sums0.y),
-                                  simd_sum(sums0.z), simd_sum(sums0.w));
-    const float4 totals1 = float4(simd_sum(sums1.x), simd_sum(sums1.y),
-                                  simd_sum(sums1.z), simd_sum(sums1.w));
-    if (lane == 0) {
-        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
-            if (b < rows) {
-                const size_t index = (size_t)b * out_dim + row;
-                y[index] = totals0[b];
-                y[index + 1] = totals1[b];
-            }
-        }
+    switch (rows) {
+        case 2: inkling2_q8_project_fixed_pair<2>(w0, w1, x, y, in_dim, out_dim, row, nb, lane); break;
+        case 3: inkling2_q8_project_fixed_pair<3>(w0, w1, x, y, in_dim, out_dim, row, nb, lane); break;
+        case 4: inkling2_q8_project_fixed_pair<4>(w0, w1, x, y, in_dim, out_dim, row, nb, lane); break;
     }
 }
 
