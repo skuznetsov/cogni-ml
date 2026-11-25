@@ -23,7 +23,6 @@ with client.chat.completions.create(
     model="inkling-2-mini",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
     reasoning_effort="none",
-    temperature=0,
     max_completion_tokens=256,
     stream=True,
 ) as stream:
@@ -41,12 +40,12 @@ matrix accumulation stay in FP32. The profile uses a different reduction
 order and staging precision from the ordered reference. Select
 `--profile ordered` for the ordered FP32 prefill path.
 
-Temperature defaults to zero. The greedy path uses GPU top-1 and verifies
-exact n-gram drafts when it finds a repeated continuation. The verifier
-commits the prefix accepted by the target and falls back to scalar decode
-after a low-acceptance block. Use `--no-ngram` to force scalar greedy decode.
-A positive temperature uses full target logits and the requested
-`top_p` and optional seed.
+Requests that omit `temperature` use the same greedy path as `temperature=0`.
+On three-pass Metal, this path uses GPU top-1 and verifies exact n-gram drafts
+when it finds a repeated continuation. The verifier commits the prefix
+accepted by the target and falls back to scalar decode after a low-acceptance
+block. Use `--no-ngram` to force scalar greedy decode. A positive temperature
+uses full target logits with the requested `top_p` and optional seed.
 
 ## Memory
 
