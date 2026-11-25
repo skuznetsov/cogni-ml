@@ -26,6 +26,7 @@ module ML::GGUF
       private MAX_DECODE_BLOCK_ROWS = 4_i32
       {% if flag?(:aarch64) %}
         private Q8_MATRIX_TILE = 32_i32
+        private Q8_MATRIX_PAIR64_MIN_ROWS = 512_i32
         private Q8_MATRIX_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_q8_gemm.metal") }}
       {% end %}
 
@@ -203,7 +204,11 @@ module ML::GGUF
           return false unless view_fits?(input, rows.to_i64 * first.in_dim) &&
                               outputs.all? { |output| view_fits?(output, rows.to_i64 * first.out_dim) }
 
-          encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile("inkling2_resident_gemm_q8_0_simd_pair", Q8_MATRIX_SOURCE))
+          pair64 = rows >= Q8_MATRIX_PAIR64_MIN_ROWS
+          tile = pair64 ? 64_i32 : Q8_MATRIX_TILE
+          name = pair64 ? "inkling2_resident_gemm_q8_0_simd_pair64" :
+            "inkling2_resident_gemm_q8_0_simd_pair"
+          encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, Q8_MATRIX_SOURCE))
           weights.each_with_index do |weight, index|
             encoder.set_buffer(@model, index, offset: model_offset(weight.raw))
           end
@@ -214,8 +219,8 @@ module ML::GGUF
           encoder.set_value(first.in_dim.to_u32, 5)
           encoder.set_value(first.out_dim.to_u32, 6)
           encoder.set_value(rows.to_u32, 7)
-          tile = Q8_MATRIX_TILE
-          encoder.dispatch_threadgroups({(first.out_dim + tile - 1) // tile, (rows + tile - 1) // tile, 1}, {256, 1, 1})
+          encoder.dispatch_threadgroups({(first.out_dim + Q8_MATRIX_TILE - 1) // Q8_MATRIX_TILE,
+            (rows + tile - 1) // tile, 1}, {256, 1, 1})
           true
         {% else %}
           false

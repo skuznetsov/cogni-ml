@@ -382,38 +382,47 @@ require "../src/ml/gguf/inkling2_engine"
         linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
         buffers = [] of ML::MetalBuffer
         begin
-          rows, in_dim, out_dim = 35, 64, 39
-          elements = rows * out_dim
+          in_dim, out_dim = 64, 39
+          pair64_pipeline = "inkling2_resident_gemm_q8_0_simd_pair64"
           bytes = out_dim * (in_dim // 32) * 34
           weights = {"q8_tiled_projection", "gate_up"}.map do |name|
             raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets[name], bytes)
             ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, out_dim, in_dim)
           end
-          input = Inkling2LinearSpecSupport.float_view(
-            Array(Float32).new(rows * in_dim + 1) { |index| ((index * 13) % 71 - 35).to_f32 * 0.019_f32 },
-            buffers
-          ).slice(1)
-          guarded = weights.map do
-            Inkling2LinearSpecSupport.float_view(Array(Float32).new(elements + 2, 123_f32), buffers)
-          end
-          outputs = guarded.map(&.slice(1))
-          reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(2 * elements, 0_f32), buffers)
 
-          command = ML::Metal::CommandBuffer.new
-          encoder = ML::Metal::ComputeEncoder.new(command)
-          weights.each_with_index do |weight, i|
-            linear.project(encoder, weight, input, reference.slice(i * elements), rows)
-          end
-          linear.project_q8_prefill_pair(encoder, weights, input, outputs, 15).should be_false
-          linear.project_q8_prefill_pair(encoder, weights, input, outputs, rows).should be_true
-          encoder.end_encoding
-          command.commit_and_wait
+          # 35 and 511 stay on Pair32; 512 crosses the route boundary; 513
+          # exercises Pair64's one-row tail and the 39-column output tail.
+          {35, 511, 512, 513}.each do |rows|
+            elements = rows * out_dim
+            input = Inkling2LinearSpecSupport.float_view(
+              Array(Float32).new(rows * in_dim + 1) { |index| ((index * 13) % 71 - 35).to_f32 * 0.019_f32 },
+              buffers
+            ).slice(1)
+            guarded = weights.map do
+              Inkling2LinearSpecSupport.float_view(Array(Float32).new(elements + 2, 123_f32), buffers)
+            end
+            outputs = guarded.map(&.slice(1))
+            reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(2 * elements, 0_f32), buffers)
 
-          guarded.each_with_index do |view, i|
-            data = Inkling2LinearSpecSupport.read(view, elements + 2)
-            {data.first, data.last}.should eq({123_f32, 123_f32})
-            expected = Inkling2LinearSpecSupport.read(reference.slice(i * elements), elements)
-            Inkling2LinearSpecSupport.float_bits(data[1, elements]).should eq(Inkling2LinearSpecSupport.float_bits(expected))
+            command = ML::Metal::CommandBuffer.new
+            encoder = ML::Metal::ComputeEncoder.new(command)
+            weights.each_with_index do |weight, i|
+              linear.project(encoder, weight, input, reference.slice(i * elements), rows)
+            end
+            linear.project_q8_prefill_pair(encoder, weights, input, outputs, 15).should be_false
+            linear.project_q8_prefill_pair(encoder, weights, input, outputs, rows).should be_true
+            if rows >= 512
+              ML::Metal::PipelineCache.resident_linear_spec_contains?(pair64_pipeline).should be_true
+            end
+            encoder.end_encoding
+            command.commit_and_wait
+
+            guarded.each_with_index do |view, i|
+              data = Inkling2LinearSpecSupport.read(view, elements + 2)
+              {data.first, data.last}.should eq({123_f32, 123_f32})
+              expected = Inkling2LinearSpecSupport.read(reference.slice(i * elements), elements)
+              Inkling2LinearSpecSupport.float_bits(data[1, elements]).should eq(Inkling2LinearSpecSupport.float_bits(expected))
+            end
           end
         ensure
           buffers.each(&.release)
