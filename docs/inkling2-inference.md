@@ -225,6 +225,44 @@ for the global visits of the last 1,024 rows gave bitwise-identical
 final logits, live K/V, and convolution histories. The full regular
 global reference exceeded its 450 s time limit.
 
+### Experimental fast prefill
+
+Isolated benchmark snapshots on the M2 Max used the research IQ4_NL GGUF,
+three passes, and fixed Python token IDs. The fast stack uses FP32 MMA for
+the loop controllers, the standard SIMT router, vector half Flash with
+inline relative bias, and half staging for grouped MoE. Accumulation and
+the persistent KV cache stay FP32. The timer includes the final full logit
+readback.
+
+| Prompt tokens | Experimental configuration | Prefill (tok/s) | Quiet pairs |
+| ---: | --- | ---: | ---: |
+| 1,024 | Fast stack, 1,024-row outer limit | 589.50 | 3 |
+| 8,192 | 2,048-row outer tiles, M64 K32 ping-pong, half SiTU, paged scratch | 651.64 | 2 |
+| 8,192 | Same compute schedule, growable scratch | 643.55 | 1 |
+
+The 1,024-token ordered reference reached 487.48 tok/s in the first campaign.
+The 8,192-token paged and growable scratch arms measured 644.20 and
+643.55 tok/s in one qualified pair from a later campaign. The growable
+arena retained 482 MiB at 2,048 rows. Its growth replay held 724 MiB
+during buffer replacement. These counts cover scratch buffers.
+
+Against ordered FP32, the original fast stack matched 62 of 64
+teacher-forced greedy predictions, changed mean NLL by +0.01120, and
+scored 22/100 versus 20/100 on the local N-Hop set. Within the fast stack,
+the 2,048-row schedule and scratch reuse matched the reference bitwise
+on final logits, live KV, and convolution histories.
+
+Wide GQA3 limited to global Flash also matched the growable fast
+reference bitwise on those outputs at 8,192 tokens. Expert IDs and
+order matched at all 393,216 route rows. Background CPU load
+prevented a qualifying timing pair for this candidate.
+
+The local reproducibility reports are in the Inkling benchmark workspace
+under `fast-prefill-stack-20261125.vYu44dHy`,
+`prefill-ping-outer-20261125.cVXxiD7X`,
+`scratch-rewind-grow-20261125.4rGLaYCt`, and
+`flash-gqa3-global-20261125.StGHpUZT`.
+
 ### Comparison with llama.cpp
 
 The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
