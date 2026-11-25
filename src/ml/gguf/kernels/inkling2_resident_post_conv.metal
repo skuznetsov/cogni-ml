@@ -52,19 +52,21 @@ kernel void inkling2_resident_q8_post_conv_batch(
     const uint nb = in_dim / Q8_0_QK;
     device const block_q8_0_56* w_row =
         (device const block_q8_0_56*)(weights + (size_t)channel * nb * 34);
-    float4 sums = float4(0.0f);
+    // encode_q8_block dispatches exactly four rows. Keep the per-lane FP32
+    // multiply and accumulation order while specializing those accumulators.
+    const size_t input_stride = in_dim;
+    float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
     for (uint ib = 0; ib < nb; ++ib) {
         device const block_q8_0_56* block = w_row + ib;
         const float scale = (float)block->d;
         const float quant = (float)block->qs[lane];
-        for (uint row = 0; row < 4; ++row) {
-            if (row < rows) {
-                const float y = x[(size_t)row * in_dim + (size_t)ib * Q8_0_QK + lane];
-                sums[row] += scale * y * quant;
-            }
-        }
+        const size_t col = (size_t)ib * Q8_0_QK + lane;
+        sum0 += scale * x[col] * quant;
+        sum1 += scale * x[input_stride + col] * quant;
+        sum2 += scale * x[2 * input_stride + col] * quant;
+        sum3 += scale * x[3 * input_stride + col] * quant;
     }
-    const float4 totals = float4(simd_sum(sums.x), simd_sum(sums.y), simd_sum(sums.z), simd_sum(sums.w));
+    const float4 totals = float4(simd_sum(sum0), simd_sum(sum1), simd_sum(sum2), simd_sum(sum3));
     if (lane == 0) {
         inkling2_static_convolution_rows(taps_weights, history, output, totals,
                                         channel, channels, taps, rows, start, history_slots);
