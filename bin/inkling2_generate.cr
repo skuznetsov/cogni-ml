@@ -28,7 +28,8 @@ force_cpu = false
 staged_metal = false
 raw_prompt = false
 print_ids = false
-ngram = false
+ngram = nil.as(Bool?)
+profile = "fast"
 depth_speculation = false
 trace_loops = false
 passes = nil.as(Int32?)
@@ -48,7 +49,8 @@ parser.on("--cpu", "Force CPU inference; Metal is the default on Darwin unless b
 parser.on("--staged-metal", "Use the staged Metal backend with token-by-token prefill") { staged_metal = true }
 parser.on("--raw", "Use --prompt as a raw completion, without the chat template") { raw_prompt = true }
 parser.on("--passes N", "Pass override for variable-loop checkpoints; defaults to checkpoint depth") { |value| passes = parse_cli_integer(value, "--passes") }
-parser.on("--prefill-tile SIZE", "Resident Metal tile: auto, 1–#{ML::GGUF::Inkling2Engine::MAX_AUTO_PREFILL_TILE}, 256, 512, or #{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE} (default: #{ML::GGUF::Inkling2Engine::DEFAULT_PREFILL_TILE})") do |value|
+parser.on("--profile PROFILE", "Prefill profile: fast or ordered (default: fast)") { |value| profile = value }
+parser.on("--prefill-tile SIZE", "Override the prefill profile and tile size: auto, 1–#{ML::GGUF::Inkling2Engine::MAX_AUTO_PREFILL_TILE}, 256, 512, or #{ML::GGUF::Inkling2Engine::MAX_PREFILL_TILE}") do |value|
   auto_prefill_tile = value == "auto"
   prefill_tile = auto_prefill_tile ? nil : parse_cli_integer(value, "--prefill-tile")
 end
@@ -58,6 +60,7 @@ end
 parser.on("--trace-loops", "Write position, completed_pass, and relative_delta records to stderr") { trace_loops = true }
 parser.on("--print-ids", "Write generated token IDs as CSV to stderr") { print_ids = true }
 parser.on("--ngram", "Verify repeated continuations in four-token blocks on fixed-depth resident Metal") { ngram = true }
+parser.on("--no-ngram", "Disable n-gram-assisted greedy verification") { ngram = false }
 parser.on("--depth-speculation", "Draft at 3 passes and verify at 10 on resident Metal with research weights") { depth_speculation = true }
 parser.on("--help", "Show this help") { help = true }
 
@@ -83,6 +86,7 @@ begin
   raise ArgumentError.new("--raw cannot be combined with --token-ids") if raw_prompt && forced_ids
   raise ArgumentError.new("--tokens must be zero or greater") if max_new_tokens < 0
   raise ArgumentError.new("--context must be greater than zero") if context <= 0
+  raise ArgumentError.new("--profile must be fast or ordered") unless profile.in?({"fast", "ordered"})
   if pass_count = passes
     raise ArgumentError.new("--passes must be greater than zero") if pass_count <= 0
   end
@@ -102,16 +106,19 @@ begin
               nil
             end
 
+    fast_prefill = profile == "fast" && !prefill_tile && !auto_prefill_tile
+    verify_ngram = depth_speculation ? (ngram || false) : ngram
+    ENV["INKLING2_PREFILL_ATTENTION"] = "ordered" if profile == "ordered"
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
       passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
-      auto_prefill_tile: auto_prefill_tile, greedy_verifier: ngram, depth_speculation: depth_speculation)
+      auto_prefill_tile: auto_prefill_tile, fast_prefill: fast_prefill, greedy_verifier: verify_ngram,
+      depth_speculation: depth_speculation)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids
                  else
                    text = prompt_text.not_nil!
-                   rendered = raw_prompt ? text : tokenizer.render_user_prompt(text)
-                   tokenizer.encode(rendered)
+                   raw_prompt ? tokenizer.encode(text) : tokenizer.encode_chat([{"user", text}])
                  end
 
     raise ArgumentError.new("prompt token sequence is empty") if prompt_ids.empty?
@@ -126,7 +133,7 @@ begin
     if max_new_tokens > 0
       first_id = ML::GGUF::Inkling2Engine.greedy_token_id(engine.prefill(prompt_ids))
       generated_ids = ML::GGUF::Inkling2GreedyDecode.generate(engine, prompt_ids, first_id,
-        max_new_tokens, tokenizer.eos_id, ngram: ngram, depth_speculation: depth_speculation).ids
+        max_new_tokens, tokenizer.eos_id, ngram: engine.greedy_verifier?, depth_speculation: depth_speculation).ids
     end
 
     STDERR.puts("backfilled_core_passes=#{engine.backfilled_passes}") if trace_loops && stop_delta

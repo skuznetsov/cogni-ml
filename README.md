@@ -35,6 +35,8 @@ src/ml/
 Run the [native Inkling 2 text engine](docs/inkling2-inference.md) with the
 Mini or variable-loop research GGUF. Projections use Metal on Apple Silicon
 or the quantized CPU backend.
+Use the [OpenAI-compatible server](docs/inkling2-serving.md) to connect local
+clients to the three-pass Metal profile.
 
 ## Qwen 3.5 Native Metal
 

@@ -4,9 +4,10 @@ The native Crystal engine supports the [Inkling 2 Mini IQ4_NL GGUF](https://hugg
 and the [TML-d24-varloop-research IQ4_NL GGUF](https://huggingface.co/ggml-org/TML-d24-varloop-research-GGUF).
 It runs one text sequence at a time. The fixed-depth Metal path reads
 quantized weights from the mapped GGUF and keeps intermediate activations,
-attention, convolutions, loop controllers, and MoE on the device. By default,
-prefill runs up to 32 prompt tokens together per layer visit. The same engine
+attention, convolutions, loop controllers, and MoE on the device. The same engine
 reuses its GPU workspace across tiles, generated tokens, and core passes.
+The generator and [OpenAI-compatible server](inkling2-serving.md) select the
+fast profile on supported three-pass Metal configurations.
 
 ```sh
 make build/inkling2_generate
@@ -225,7 +226,7 @@ for the global visits of the last 1,024 rows gave bitwise-identical
 final logits, live K/V, and convolution histories. The full regular
 global reference exceeded its 450 s time limit.
 
-### Experimental fast prefill
+### Fast prefill profile
 
 Isolated benchmark snapshots on the M2 Max used the research IQ4_NL GGUF,
 three passes, and fixed Python token IDs. The fast stack uses FP32 MMA for
@@ -234,7 +235,7 @@ inline relative bias, and half staging for grouped MoE. Accumulation and
 the persistent KV cache stay FP32. The timer includes the final full logit
 readback.
 
-| Prompt tokens | Experimental configuration | Prefill (tok/s) | Quiet pairs |
+| Prompt tokens | Benchmark configuration | Prefill (tok/s) | Quiet pairs |
 | ---: | --- | ---: | ---: |
 | 1,024 | Fast stack, 1,024-row outer limit | 589.50 | 3 |
 | 8,192 | 2,048-row outer tiles, M64 K32 ping-pong, half SiTU, paged scratch | 651.64 | 2 |
@@ -245,6 +246,10 @@ The 8,192-token paged and growable scratch arms measured 644.20 and
 643.55 tok/s in one qualified pair from a later campaign. The growable
 arena retained 482 MiB at 2,048 rows. Its growth replay held 724 MiB
 during buffer replacement. These counts cover scratch buffers.
+
+The CLI and server use the 2,048-row compute schedule and the growable
+arena in the fast profile. Select `--profile ordered` to use the FP32
+reference path.
 
 Against ordered FP32, the original fast stack matched 62 of 64
 teacher-forced greedy predictions, changed mean NLL by +0.01120, and
@@ -270,8 +275,8 @@ The November 23, 2026 comparison used cogni-ml `872baf18` and llama.cpp
 the same prompt and 48 forced decode IDs, and the same prefill tile
 boundaries. Flash Attention was disabled in llama.cpp. Cogni-ml used
 `INKLING2_PREFILL_ATTENTION=ordered` and `INKLING2_MOE_PREFILL_ROUTES=32`
-with explicit prefill tiles. Ordinary CLI defaults are a 32-token tile,
-`regular` attention, and 16 expert routes per tile.
+with explicit prefill tiles. CLI defaults for this historical comparison
+were a 32-token tile, `regular` attention, and 16 expert routes per tile.
 
 Both engines returned one full-vocabulary logit row at the end of
 prefill and one after each scalar decode step. Wall time excludes model
@@ -383,9 +388,9 @@ Intermediate buffers stay on the GPU across the prelude, repeated core,
 and epilogue. With fixed depth, the CPU submits the work and reads token
 IDs or the requested logit rows.
 
-The resident Metal backend accepts explicit tile sizes from 1 through 128
-and the wider sizes 256, 512, and 1,024. The default is 32. All sizes use
-float32 staging by default. The explicit wide modes keep final tiles of
+The resident Metal reference profile accepts explicit tile sizes from 1 through
+128 and the wider sizes 256, 512, and 1,024. Its default is 32 and it uses
+float32 staging. The explicit wide modes keep final tiles of
 fewer than 16 rows at the same boundary as the 128-row mode.
 
 With `--prefill-tile 1024`, projections, convolutions, and expert routing
@@ -447,6 +452,9 @@ range and combines the softmax partials before applying the output gate.
 The optimized split-K kernel computes scores once per partition and reuses
 them for PV. Its sliding-window loop walks contiguous spans of the KV ring
 in logical order, preserving the FP32 summation order across wrap.
+On the supported fast profile, the parallel kernel caches up to 4,096
+scores per partition, covering up to 16,384 global keys with the same
+four partitions and FP32 summation order.
 
 Set `INKLING2_PREFILL_ATTENTION=scores` to cache FP32 scores during
 multirow resident prefill. Set it to `shared_kv` to share each K/V load
@@ -529,11 +537,12 @@ can commit per block.
 
 ## Greedy n-gram verification
 
-Use `inkling2_generate --ngram` with fixed-depth resident Metal to accelerate
-exact repeats. The decoder looks for a matching suffix of six to eight token
-IDs in its history. When the match supplies three candidate IDs, it verifies
-them in one block with the exact pending token. It commits the matching
-prefix and takes the next ID from the target model.
+The Metal generator and server use n-gram verification for greedy generation.
+Use `--no-ngram` to select scalar decode. The decoder looks for a matching
+suffix of six to eight token IDs in its history. When the match supplies
+three candidate IDs, it verifies them in one block with the exact pending
+token. It commits the matching prefix and takes the next ID from the target
+model.
 
 Sliding KV and convolution histories reserve up to four extra physical rows.
 The logical attention window is unchanged. After a mismatch the decoder

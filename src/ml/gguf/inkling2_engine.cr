@@ -102,6 +102,7 @@ module ML::GGUF
     DEFAULT_PREFILL_TILE  =   32
     MAX_AUTO_PREFILL_TILE =  128
     MAX_PREFILL_TILE      = 1024
+    FAST_PREFILL_TILE     = 2048
 
     private MAX_AUTO_APPEND_PREFILL_TILE = 512
     private DEPTH_BLOCK_ROWS             =   4
@@ -117,9 +118,14 @@ module ML::GGUF
     getter max_seq : Int32
     getter backfilled_passes : Int64 = 0_i64
     getter? depth_speculation : Bool
+    getter? fast_prefill : Bool
+    getter? greedy_verifier : Bool
 
     @closed = false
     @failed = false
+    @fast_prefill = false
+    @greedy_verifier = false
+    @greedy_verifier_auto = false
     @attention : Array(Inkling2AttentionState)
     @ffn_conv : Array(Inkling2Convolution)
     @matmul : Inkling2Matmul?
@@ -131,19 +137,23 @@ module ML::GGUF
 
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
-                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, @greedy_verifier : Bool = false,
-                   @depth_speculation : Bool = false)
-      if @greedy_verifier && @depth_speculation
+                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, greedy_verifier : Bool? = false,
+                   @depth_speculation : Bool = false, fast_prefill : Bool = false)
+      if greedy_verifier == true && @depth_speculation
         raise ArgumentError.new("Inkling 2 cannot combine depth speculation and n-gram verification")
       end
+      @greedy_verifier = greedy_verifier == true
+      @greedy_verifier_auto = greedy_verifier.nil?
       if prefill_tile && auto_prefill_tile
         raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
       end
-      if prefill_tile && !prefill_tile.in?(1..MAX_AUTO_PREFILL_TILE) && !prefill_tile.in?({256, 512, MAX_PREFILL_TILE})
-        raise ArgumentError.new("Inkling 2 prefill tile must be 1–#{MAX_AUTO_PREFILL_TILE}, 256, 512, or #{MAX_PREFILL_TILE} tokens")
+      valid_tile = prefill_tile && (prefill_tile.in?(1..MAX_AUTO_PREFILL_TILE) || prefill_tile.in?({256, 512, MAX_PREFILL_TILE}) || (fast_prefill && prefill_tile == FAST_PREFILL_TILE))
+      if prefill_tile && !valid_tile
+        allowed = fast_prefill ? "1–#{MAX_AUTO_PREFILL_TILE}, 256, 512, #{MAX_PREFILL_TILE}, or #{FAST_PREFILL_TILE}" : "1–#{MAX_AUTO_PREFILL_TILE}, 256, 512, or #{MAX_PREFILL_TILE}"
+        raise ArgumentError.new("Inkling 2 prefill tile must be #{allowed} tokens")
       end
       @weights = Inkling2Weights.new(path)
-      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile, auto_prefill_tile)
+      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile, auto_prefill_tile, fast_prefill)
       @core_prefix = Array(Int32).new(@passes, 0) if @stop_delta
     end
 
@@ -465,7 +475,7 @@ module ML::GGUF
       raise IndexError.new("Inkling 2 draft layer visit out of bounds") unless 0 <= visit < draft_layer_visits
     end
 
-    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?, auto_prefill_tile : Bool)
+    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?, auto_prefill_tile : Bool, fast_prefill : Bool)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
@@ -485,11 +495,26 @@ module ML::GGUF
       visits.concat((config.core_end...config.n_layer).to_a)
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
-          rows = auto_prefill_tile ? MAX_AUTO_PREFILL_TILE : (prefill_tile || DEFAULT_PREFILL_TILE)
+          if @greedy_verifier_auto
+            @greedy_verifier = loops == 3 && !@depth_speculation
+          end
+          @fast_prefill = fast_prefill && !@depth_speculation && Inkling2Resident.fast_prefill_supported?(@weights, loops)
+          rows = if auto_prefill_tile
+                   MAX_AUTO_PREFILL_TILE
+                 elsif prefill_tile
+                   prefill_tile
+                 elsif @fast_prefill
+                   FAST_PREFILL_TILE
+                 else
+                   DEFAULT_PREFILL_TILE
+                 end
+          if rows == FAST_PREFILL_TILE && !@fast_prefill
+            raise ArgumentError.new("A 2048-token Inkling 2 prefill tile requires the supported three-pass fast profile")
+          end
           append_rows = MAX_AUTO_APPEND_PREFILL_TILE if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
             append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation) ? DEPTH_BLOCK_ROWS : 0,
-            depth_speculation: @depth_speculation)
+            depth_speculation: @depth_speculation, fast_prefill: @fast_prefill)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}

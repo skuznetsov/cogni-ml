@@ -807,6 +807,44 @@ require "../src/ml/gguf/inkling2_resident_math"
         end
       end
 
+      it "keeps global decode bitwise when the fast profile caches more than 512 scores per partition" do
+        start = 2047_i32
+        block_rows = 4_i32
+        end_position = start + block_rows
+        config = resident_test_config(sliding: false, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 1024_i32, max_seq: end_position)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
+        prefix = Array(ResidentProjectedRow).new(start) { |row| pattern[row % pattern.size] }
+        continuation = pattern.first(block_rows)
+        reference = ML::GGUF::Inkling2ResidentAttention.new(config, false, end_position)
+        fast = ML::GGUF::Inkling2ResidentAttention.new(config, false, end_position,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast)
+        begin
+          resident_run_tile(reference, 0_i32, prefix, weights, config)
+          resident_run_tile(fast, 0_i32, prefix, weights, config)
+
+          ML::Metal::PipelineCache.clear
+          expected = resident_run_tile(reference, start, continuation, weights, config, decode_block: true)
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split").should be_true
+
+          actual = resident_run_tile(fast, start, continuation, weights, config, decode_block: true)
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel").should be_true
+          resident_bits(actual).should eq(resident_bits(expected))
+
+          (start...end_position).each do |position|
+            actual_k, actual_v, _ = fast.key_value_at(position, end_position)
+            expected_k, expected_v, _ = reference.key_value_at(position, end_position)
+            resident_bits(actual_k).should eq(resident_bits(expected_k))
+            resident_bits(actual_v).should eq(resident_bits(expected_v))
+          end
+        ensure
+          reference.close
+          fast.close
+        end
+      end
+
       it "rewinds a speculative sliding block without losing the accepted branch across cache wrap" do
         config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
           head_dim: 1_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 23_i32)

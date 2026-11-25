@@ -223,7 +223,9 @@ inline float inkling2_expert_quant(device const block_iq4_nl_56& block, uint col
 
 // Four SIMD groups each own 16 adjacent output columns. M64 adds a second
 // set of four groups for routes 32–63, sharing the dequantized weights.
-template <typename Block, bool FuseSiTU, bool BlockedWeights = false, uint RouteRows = 16>
+template <typename Block, bool FuseSiTU, bool BlockedWeights = false, uint RouteRows = 16,
+          typename Stage = float, uint TileK = 32, bool IQ4ByteLoads = false,
+          bool InputHalf = false, bool OutputHalf = false, bool PingPong = false>
 kernel void inkling2_resident_moe_gemm(
     device const uint8_t* weights             [[buffer(0)]],
     device const float*   x                   [[buffer(1)]],
@@ -246,7 +248,9 @@ kernel void inkling2_resident_moe_gemm(
     routes += tile.first_route;
 
     constexpr uint OUT = 64;
-    constexpr uint K = 32;
+    constexpr uint K = TileK;
+    constexpr uint QK = 32;
+    constexpr uint QK_BLOCKS_PER_TILE = K / QK;
     constexpr uint PAIRS = OUT / 2;
     constexpr uint FRAGMENT = 8;
     constexpr uint FRAGMENT_SIZE = FRAGMENT * FRAGMENT;
@@ -255,10 +259,16 @@ kernel void inkling2_resident_moe_gemm(
     constexpr uint WEIGHT_LOADERS = THREADS / OUT;
     constexpr uint WEIGHT_COLUMNS = K / WEIGHT_LOADERS;
     constexpr uint FIRST_LOAD_ROWS = THREADS / 8;
+    static_assert(K == 32 || K == 64, "resident MoE tile K must be 32 or 64");
+    static_assert(!IQ4ByteLoads || (M64 && BlockedWeights), "IQ4 byte loads require blocked M64");
+    static_assert(!InputHalf || sizeof(Stage) == sizeof(half), "half input requires an FP16 stage");
+    static_assert(!OutputHalf || (FuseSiTU && sizeof(Stage) == sizeof(half)),
+                  "half output requires fused SiTU and an FP16 stage");
     const uint width = out_dim / 2;
     const uint first_out = group.x * (FuseSiTU ? PAIRS : OUT);
     const uint out_rows = min(out_dim - first_out, OUT);
     const uint k_blocks = in_dim / K;
+    const uint weight_blocks_per_row = in_dim / QK;
 
     // Each weight row is unpacked once, by two or four threads.
     const uint weight_row = tid / WEIGHT_LOADERS;
@@ -269,7 +279,7 @@ kernel void inkling2_resident_moe_gemm(
     const uint model_row = FuseSiTU
         ? first_out + (weight_row % PAIRS) + (weight_row / PAIRS) * width
         : first_out + min(weight_row, out_rows - 1);
-    device const Block* row_weights = expert + (size_t)model_row * k_blocks;
+    device const Block* row_weights = expert + (size_t)model_row * weight_blocks_per_row;
 
     // Eight threads load the 32 activation values for one route.
     const uint route_row = tid / 8;
@@ -277,25 +287,33 @@ kernel void inkling2_resident_moe_gemm(
     const bool valid_route = M64 || route_row < tile.count;
     const uint input_row = valid_route ? routes[route_row] / input_route_divisor : 0;
     device const float* x_row = x + (size_t)input_row * in_dim + input_col;
+    device const half* x_half_row = (device const half*)x + (size_t)input_row * in_dim + input_col;
     const uint second_route_row = route_row + FIRST_LOAD_ROWS;
     const bool valid_second_route = M64 || (RouteRows > FIRST_LOAD_ROWS && second_route_row < tile.count);
-    // Pad partial M64 tiles with the last valid route. The scatter writes
-    // only actual routes and every SIMD group keeps the same MMA loop.
     const uint second_input_row = valid_second_route
         ? routes[M64 ? min(second_route_row, tile.count - 1) : second_route_row] / input_route_divisor : 0;
     device const float* second_x_row = x + (size_t)second_input_row * in_dim + input_col;
+    device const half* second_x_half_row =
+        (device const half*)x + (size_t)second_input_row * in_dim + input_col;
     const bool has_upper = M64 || tile.count > 8;
     const bool has_third = M64 || (RouteRows > INKLING2_EXPERT_TILE_ROUTES && tile.count > 16);
     const bool has_fourth = M64 || (RouteRows > INKLING2_EXPERT_TILE_ROUTES && tile.count > 24);
 
-    threadgroup float4 staging[(OUT + RouteRows) * K / 4];
-    threadgroup float* weight_tile = (threadgroup float*)staging;
-    threadgroup float4* input_vectors = staging + OUT * K / 4;
-    const threadgroup float* input_tile = (const threadgroup float*)input_vectors;
+    constexpr uint STAGE_BYTES = (OUT + RouteRows) * K * sizeof(Stage);
+    constexpr uint OUTPUT_BYTES = RouteRows * OUT * sizeof(float);
+    constexpr uint STAGING_BYTES = STAGE_BYTES > OUTPUT_BYTES ? STAGE_BYTES : OUTPUT_BYTES;
+    alignas(16) threadgroup uchar staging[STAGING_BYTES];
+    threadgroup Stage* weight_tile = (threadgroup Stage*)staging;
+    threadgroup Stage* input_tile =
+        (threadgroup Stage*)(staging + OUT * K * sizeof(Stage));
+    static_assert(STAGING_BYTES >= OUTPUT_BYTES, "FP32 epilogue exceeds shared storage");
+    static_assert(!PingPong || (M64 && K == 32 && sizeof(Stage) == sizeof(half) &&
+                               2 * STAGE_BYTES <= STAGING_BYTES),
+                  "ping-pong requires two half M64 K32 pages in the existing workspace");
     // IQ4_NL unpack writes the transposed 8x8 fragments directly. The MMA
     // loads each fragment at stride eight without gathering strided rows.
     const uint weight_fragment = (weight_column / FRAGMENT) * (OUT / FRAGMENT) + weight_row / FRAGMENT;
-    threadgroup float* weight_dest = BlockedWeights
+    threadgroup Stage* weight_dest = BlockedWeights
         ? weight_tile + weight_fragment * FRAGMENT_SIZE + weight_row % FRAGMENT
         : weight_tile + weight_row * K + weight_column;
 
@@ -310,54 +328,170 @@ kernel void inkling2_resident_moe_gemm(
 
     const uint first_simd_out = (M64 ? simd % 4 : simd) * 16;
     const uint first_simd_route = M64 ? (simd / 4) * 32 : 0;
-    const threadgroup float* simd_inputs = input_tile + first_simd_route * K;
-    for (uint block = 0; block < k_blocks; ++block) {
-        const device Block& packed = row_weights[block];
-        const float scale = (float)packed.d;
-        #pragma unroll
-        for (uint i = 0; i < WEIGHT_COLUMNS; ++i) {
-            const uint index = BlockedWeights ? (i / FRAGMENT) * OUT * FRAGMENT + (i % FRAGMENT) * FRAGMENT : i;
-            weight_dest[index] = scale * inkling2_expert_quant(packed, weight_column + i);
-        }
-        input_vectors[tid] = valid_route
-            ? float4(*(device const packed_float4*)(x_row + block * K)) : float4(0.0f);
-        if (has_third) {
-            input_vectors[tid + FIRST_LOAD_ROWS * K / 4] = valid_second_route
-                ? float4(*(device const packed_float4*)(second_x_row + block * K)) : float4(0.0f);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        #pragma unroll
-        for (uint k = 0; k < K; k += FRAGMENT) {
-            simdgroup_float8x8 a, b0, b1;
-            simdgroup_load(a, simd_inputs + k, K);
-            if (BlockedWeights) {
-                const uint fragment_index = (k / FRAGMENT) * (OUT / FRAGMENT) + first_simd_out / FRAGMENT;
-                const threadgroup float* weights_k = weight_tile + fragment_index * FRAGMENT_SIZE;
-                simdgroup_load(b0, weights_k, FRAGMENT);
-                simdgroup_load(b1, weights_k + FRAGMENT_SIZE, FRAGMENT);
+    const threadgroup Stage* simd_inputs = input_tile + first_simd_route * K;
+    // Step zero fills the first page. Each later step can fill the other
+    // page and consumes the one made visible by the preceding barrier.
+    for (uint step = 0; step < k_blocks + uint(PingPong); ++step) {
+        if (!PingPong || step < k_blocks) {
+            const uint block = step;
+            const uint write_offset = PingPong ? (step & 1u) * (STAGE_BYTES / sizeof(Stage)) : 0;
+            threadgroup Stage* write_weights = weight_tile + write_offset;
+            threadgroup Stage* write_inputs = input_tile + write_offset;
+            if (IQ4ByteLoads) {
+                // Each loader owns eight packed bytes and stages both nibbles,
+                // eliminating the low/high-half duplicate byte reads.
+                const uint qblock_in_tile = weight_column / QK;
+                constexpr uint BYTES_PER_LOADER = WEIGHT_COLUMNS / 2;
+                const uint first_byte = (weight_column % QK) / 2;
+                const device Block& packed = row_weights[block * QK_BLOCKS_PER_TILE + qblock_in_tile];
+                const float scale = (float)packed.d;
+                const uint low_column_base = qblock_in_tile * QK + first_byte;
+                const uint low_fragment = (low_column_base / FRAGMENT) * (OUT / FRAGMENT) + weight_row / FRAGMENT;
+                const uint low_dest = low_fragment * FRAGMENT_SIZE
+                    + (low_column_base % FRAGMENT) * FRAGMENT + weight_row % FRAGMENT;
+                constexpr uint HIGH_NIBBLE_DEST_DELTA = (16 / FRAGMENT) * (OUT / FRAGMENT) * FRAGMENT_SIZE;
+                #pragma unroll
+                for (uint i = 0; i < BYTES_PER_LOADER; ++i) {
+                    const uint packed_byte = (uint)packed.qs[first_byte + i];
+                    write_weights[low_dest + i * FRAGMENT] =
+                        Stage(scale * kvalues_iq4nl_f[packed_byte & 15]);
+                    write_weights[low_dest + HIGH_NIBBLE_DEST_DELTA + i * FRAGMENT] =
+                        Stage(scale * kvalues_iq4nl_f[(packed_byte >> 4) & 15]);
+                }
             } else {
-                simdgroup_load(b0, weight_tile + first_simd_out * K + k, K, 0, true);
-                simdgroup_load(b1, weight_tile + (first_simd_out + FRAGMENT) * K + k, K, 0, true);
+                const uint qblock_in_tile = weight_column / QK;
+                const uint first_qcolumn = weight_column % QK;
+                const device Block& packed = row_weights[block * QK_BLOCKS_PER_TILE + qblock_in_tile];
+                const float scale = (float)packed.d;
+                #pragma unroll
+                for (uint i = 0; i < WEIGHT_COLUMNS; ++i) {
+                    const uint qcolumn = first_qcolumn + i;
+                    const uint index = BlockedWeights
+                        ? (i / FRAGMENT) * OUT * FRAGMENT + (i % FRAGMENT) * FRAGMENT
+                        : i;
+                    (weight_dest + write_offset)[index] = Stage(scale * inkling2_expert_quant(packed, qcolumn));
+                }
             }
-            simdgroup_multiply_accumulate(low0, a, b0, low0);
-            simdgroup_multiply_accumulate(low1, a, b1, low1);
-            if (has_upper) {
-                simdgroup_load(a, simd_inputs + 8 * K + k, K);
-                simdgroup_multiply_accumulate(high0, a, b0, high0);
-                simdgroup_multiply_accumulate(high1, a, b1, high1);
-            }
-            if (has_third) {
-                simdgroup_load(a, simd_inputs + 16 * K + k, K);
-                simdgroup_multiply_accumulate(third0, a, b0, third0);
-                simdgroup_multiply_accumulate(third1, a, b1, third1);
-                if (has_fourth) {
-                    simdgroup_load(a, simd_inputs + 24 * K + k, K);
-                    simdgroup_multiply_accumulate(fourth0, a, b0, fourth0);
-                    simdgroup_multiply_accumulate(fourth1, a, b1, fourth1);
+
+            #pragma unroll
+            for (uint segment = 0; segment < QK_BLOCKS_PER_TILE; ++segment) {
+                const uint input_vector = route_row * (K / 4) + input_col / 4 + segment * (QK / 4);
+                if (InputHalf) {
+                    threadgroup half4* input_vectors = (threadgroup half4*)write_inputs;
+                    input_vectors[input_vector] = valid_route
+                        ? *(device const half4*)(x_half_row + block * K + segment * QK)
+                        : half4(0.0h);
+                    if (has_third) {
+                        const uint second_vector = (route_row + FIRST_LOAD_ROWS) * (K / 4)
+                            + input_col / 4 + segment * (QK / 4);
+                        input_vectors[second_vector] = valid_second_route
+                            ? *(device const half4*)(second_x_half_row + block * K + segment * QK)
+                            : half4(0.0h);
+                    }
+                } else {
+                const float4 input_values = valid_route
+                    ? float4(*(device const packed_float4*)(x_row + block * K + segment * QK))
+                    : float4(0.0f);
+                if (sizeof(Stage) == sizeof(half)) {
+                    threadgroup half4* input_vectors = (threadgroup half4*)write_inputs;
+                    input_vectors[input_vector] = half4(input_values);
+                    if (has_third) {
+                        const uint second_vector = (route_row + FIRST_LOAD_ROWS) * (K / 4)
+                            + input_col / 4 + segment * (QK / 4);
+                        const float4 second_values = valid_second_route
+                            ? float4(*(device const packed_float4*)(second_x_row + block * K + segment * QK))
+                            : float4(0.0f);
+                        input_vectors[second_vector] = half4(second_values);
+                    }
+                } else {
+                    threadgroup float4* input_vectors = (threadgroup float4*)write_inputs;
+                    input_vectors[input_vector] = input_values;
+                    if (has_third) {
+                        const uint second_vector = (route_row + FIRST_LOAD_ROWS) * (K / 4)
+                            + input_col / 4 + segment * (QK / 4);
+                        input_vectors[second_vector] = valid_second_route
+                            ? float4(*(device const packed_float4*)(second_x_row + block * K + segment * QK))
+                            : float4(0.0f);
+                    }
+                }
                 }
             }
         }
+        if (!PingPong) threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (!PingPong || step != 0) {
+            const uint read_offset = PingPong ? ((step - 1u) & 1u) * (STAGE_BYTES / sizeof(Stage)) : 0;
+            const threadgroup Stage* read_inputs = simd_inputs + read_offset;
+            const threadgroup Stage* read_weights = weight_tile + read_offset;
+            #pragma unroll
+            for (uint k = 0; k < K; k += FRAGMENT) {
+                if (sizeof(Stage) == sizeof(half)) {
+                    simdgroup_half8x8 a, b0, b1;
+                    const threadgroup half* half_inputs = (const threadgroup half*)read_inputs;
+                    const threadgroup half* half_weights = (const threadgroup half*)read_weights;
+                    simdgroup_load(a, half_inputs + k, K);
+                    if (BlockedWeights) {
+                        const uint fragment_index = (k / FRAGMENT) * (OUT / FRAGMENT) + first_simd_out / FRAGMENT;
+                        const threadgroup half* weights_k = half_weights + fragment_index * FRAGMENT_SIZE;
+                        simdgroup_load(b0, weights_k, FRAGMENT);
+                        simdgroup_load(b1, weights_k + FRAGMENT_SIZE, FRAGMENT);
+                    } else {
+                        simdgroup_load(b0, half_weights + first_simd_out * K + k, K, 0, true);
+                        simdgroup_load(b1, half_weights + (first_simd_out + FRAGMENT) * K + k, K, 0, true);
+                    }
+                    simdgroup_multiply_accumulate(low0, a, b0, low0);
+                    simdgroup_multiply_accumulate(low1, a, b1, low1);
+                    if (has_upper) {
+                        simdgroup_load(a, half_inputs + 8 * K + k, K);
+                        simdgroup_multiply_accumulate(high0, a, b0, high0);
+                        simdgroup_multiply_accumulate(high1, a, b1, high1);
+                    }
+                    if (has_third) {
+                        simdgroup_load(a, half_inputs + 16 * K + k, K);
+                        simdgroup_multiply_accumulate(third0, a, b0, third0);
+                        simdgroup_multiply_accumulate(third1, a, b1, third1);
+                        if (has_fourth) {
+                            simdgroup_load(a, half_inputs + 24 * K + k, K);
+                            simdgroup_multiply_accumulate(fourth0, a, b0, fourth0);
+                            simdgroup_multiply_accumulate(fourth1, a, b1, fourth1);
+                        }
+                    }
+                } else {
+                    simdgroup_float8x8 a, b0, b1;
+                    const threadgroup float* float_inputs = (const threadgroup float*)read_inputs;
+                    simdgroup_load(a, float_inputs + k, K);
+                    if (BlockedWeights) {
+                        const uint fragment_index = (k / FRAGMENT) * (OUT / FRAGMENT) + first_simd_out / FRAGMENT;
+                        const threadgroup float* weights_k = (const threadgroup float*)read_weights
+                            + fragment_index * FRAGMENT_SIZE;
+                        simdgroup_load(b0, weights_k, FRAGMENT);
+                        simdgroup_load(b1, weights_k + FRAGMENT_SIZE, FRAGMENT);
+                    } else {
+                        const threadgroup float* float_weights = (const threadgroup float*)read_weights;
+                        simdgroup_load(b0, float_weights + first_simd_out * K + k, K, 0, true);
+                        simdgroup_load(b1, float_weights + (first_simd_out + FRAGMENT) * K + k, K, 0, true);
+                    }
+                    simdgroup_multiply_accumulate(low0, a, b0, low0);
+                    simdgroup_multiply_accumulate(low1, a, b1, low1);
+                    if (has_upper) {
+                        simdgroup_load(a, float_inputs + 8 * K + k, K);
+                        simdgroup_multiply_accumulate(high0, a, b0, high0);
+                        simdgroup_multiply_accumulate(high1, a, b1, high1);
+                    }
+                    if (has_third) {
+                        simdgroup_load(a, float_inputs + 16 * K + k, K);
+                        simdgroup_multiply_accumulate(third0, a, b0, third0);
+                        simdgroup_multiply_accumulate(third1, a, b1, third1);
+                        if (has_fourth) {
+                            simdgroup_load(a, float_inputs + 24 * K + k, K);
+                            simdgroup_multiply_accumulate(fourth0, a, b0, fourth0);
+                            simdgroup_multiply_accumulate(fourth1, a, b1, fourth1);
+                        }
+                    }
+                }
+            }
+        }
+        // Protect the next page and the FP32 epilogue's alias of both pages.
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
@@ -384,8 +518,13 @@ kernel void inkling2_resident_moe_gemm(
             const uint row = i / PAIRS;
             const uint col = i % PAIRS;
             const uint offset = row * OUT + col;
-            output[(size_t)routes[row] * width + first_out + col] =
+            const float value =
                 inkling2_resident_situ(results[offset], results[offset + PAIRS], beta, linear_beta);
+            if (OutputHalf) {
+                ((device half*)output)[(size_t)routes[row] * width + first_out + col] = half(value);
+            } else {
+                output[(size_t)routes[row] * width + first_out + col] = value;
+            }
         }
     } else {
         for (uint i = tid; i < tile.count * OUT; i += THREADS) {
@@ -412,3 +551,21 @@ template [[host_name("inkling2_resident_moe_gemm_q8_0_m64")]] kernel inkling2_re
 template [[host_name("inkling2_resident_moe_gemm_iq4_nl_m64")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true, 64>;
 template [[host_name("inkling2_resident_moe_gemm_situ_q8_0_m64")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56, true, false, 64>;
 template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl_m64")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true, 64>;
+typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false, false, 16, half>) inkling2_resident_moe_gemm_m16_fp16_t;
+typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false, false, 32, half>) inkling2_resident_moe_gemm_m32_fp16_t;
+typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false, false, 64, half>) inkling2_resident_moe_gemm_m64_fp16_t;
+
+template [[host_name("inkling2_resident_moe_gemm_situ_q8_0_fp16_situhalf")]] kernel inkling2_resident_moe_gemm_m16_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, true, false, 16, half, 32, false, false, true>;
+template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl_fp16_situhalf")]] kernel inkling2_resident_moe_gemm_m16_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true, 16, half, 32, false, false, true>;
+template [[host_name("inkling2_resident_moe_gemm_q8_0_fp16_inputhalf")]] kernel inkling2_resident_moe_gemm_m16_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, false, false, 16, half, 32, false, true, false>;
+template [[host_name("inkling2_resident_moe_gemm_iq4_nl_fp16_inputhalf")]] kernel inkling2_resident_moe_gemm_m16_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true, 16, half, 32, false, true, false>;
+
+template [[host_name("inkling2_resident_moe_gemm_situ_q8_0_m32_fp16_situhalf")]] kernel inkling2_resident_moe_gemm_m32_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, true, false, 32, half, 32, false, false, true>;
+template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl_m32_fp16_situhalf")]] kernel inkling2_resident_moe_gemm_m32_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true, 32, half, 32, false, false, true>;
+template [[host_name("inkling2_resident_moe_gemm_q8_0_m32_fp16_inputhalf")]] kernel inkling2_resident_moe_gemm_m32_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, false, false, 32, half, 32, false, true, false>;
+template [[host_name("inkling2_resident_moe_gemm_iq4_nl_m32_fp16_inputhalf")]] kernel inkling2_resident_moe_gemm_m32_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true, 32, half, 32, false, true, false>;
+
+template [[host_name("inkling2_resident_moe_gemm_situ_q8_0_m64_fp16_situhalf_ping_pong")]] kernel inkling2_resident_moe_gemm_m64_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, true, false, 64, half, 32, false, false, true, true>;
+template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl_m64_fp16_bytes_situhalf_ping_pong")]] kernel inkling2_resident_moe_gemm_m64_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, true, true, 64, half, 32, true, false, true, true>;
+template [[host_name("inkling2_resident_moe_gemm_q8_0_m64_fp16_inputhalf_ping_pong")]] kernel inkling2_resident_moe_gemm_m64_fp16_t inkling2_resident_moe_gemm<block_q8_0_56, false, false, 64, half, 32, false, true, false, true>;
+template [[host_name("inkling2_resident_moe_gemm_iq4_nl_m64_fp16_inputhalf_ping_pong")]] kernel inkling2_resident_moe_gemm_m64_fp16_t inkling2_resident_moe_gemm<block_iq4_nl_56, false, true, 64, half, 32, false, true, false, true>;

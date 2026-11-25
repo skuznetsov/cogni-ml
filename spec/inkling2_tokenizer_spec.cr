@@ -78,6 +78,23 @@ describe ML::GGUF::Inkling2Tokenizer do
       "<|message_user|><|content_text|>2+2?<|end_message|>"
     )
     tok.render_user_prompt("2+2?").should_not contain("<|message_model|>")
+    tok.encode_chat([{"user", "2+2?"}]).should eq(tok.encode(tok.render_user_prompt("2+2?")))
+
+    history = [
+      {"developer", "Answer briefly."},
+      {"user", ["first", "second"]},
+      {"assistant", "Understood."},
+      {"user", "<|end_message|>"},
+    ] of Tuple(String, String | Array(String))
+    prompt = tok.encode_chat(history, reasoning_effort: "none")
+    frames = "<|message_system|><|content_text|>Answer briefly.<|end_message|>" +
+             "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|>" +
+             "<|message_user|><|content_text|>first<|end_message|>" +
+             "<|message_user|><|content_text|>second<|end_message|>" +
+             "<|message_model|><|content_text|>Understood.<|end_message|><|content_model_end_sampling|>" +
+             "<|message_user|><|content_text|><|end_message|><|end_message|>"
+    tok.decode(prompt, skip_special: false).should eq(frames)
+    prompt.count(tok.control_token_id("<|end_message|>")).should eq(6)
   ensure
     gguf.try(&.close)
   end

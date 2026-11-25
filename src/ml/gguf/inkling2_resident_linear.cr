@@ -17,6 +17,7 @@ module ML::GGUF
     class Inkling2ResidentLinear
       MIN_GROUPED_ROWS =   16
       MAX_GROUPED_ROWS = 1024
+      MAX_FAST_GROUPED_ROWS = 2048
       SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }} + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe.metal") }}
 
       private MAX_ROUTE_SCRATCH_BYTES = 16_384_i32
@@ -28,6 +29,8 @@ module ML::GGUF
         private Q8_MATRIX_TILE = 32_i32
         private Q8_MATRIX_PAIR64_MIN_ROWS = 512_i32
         private Q8_MATRIX_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_q8_gemm.metal") }}
+        private CONTROLLER_DOWN_MMA_SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_resident_controller_down_mma.metal") }}
+        private GAIN_MMA_SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_resident_f32_control_pair64.metal") }}
       {% end %}
 
       private GROUPED_EXPERT_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe_grouped.metal") }}
@@ -44,9 +47,10 @@ module ML::GGUF
       @file_size : UInt64
       @model : ML::MetalBuffer
       @closed : Bool = false
+      @fast_prefill : Bool
 
       def initialize(gguf : GGUFFile, *, @prefill_expert_tile_routes : Int32 = EXPERT_TILE_ROUTES,
-                     @prefill_indirect_dispatch : Bool = false)
+                     @prefill_indirect_dispatch : Bool = false, @fast_prefill : Bool = false)
         unless {EXPERT_TILE_ROUTES, WIDE_EXPERT_TILE_ROUTES, M64_EXPERT_TILE_ROUTES}.includes?(@prefill_expert_tile_routes)
           raise ArgumentError.new("Inkling 2 prefill expert tile must have 16, 32, or 64 routes")
         end
@@ -197,7 +201,7 @@ module ML::GGUF
                                   outputs : {Inkling2View, Inkling2View}, rows : Int32) : Bool
         {% if flag?(:aarch64) %}
           ensure_open!
-          return false unless rows.in?(MIN_GROUPED_ROWS..MAX_GROUPED_ROWS)
+          return false unless rows.in?(MIN_GROUPED_ROWS..(@fast_prefill ? MAX_FAST_GROUPED_ROWS : MAX_GROUPED_ROWS))
           first, second = weights
           return false unless first.in_dim == second.in_dim && first.out_dim == second.out_dim
           return false unless weights.all? { |weight| weight.type.q8_0? && self.class.projection_supported?(weight) }
@@ -283,7 +287,19 @@ module ML::GGUF
                                       else
                                         {"inkling2_resident_f32_control_pair_batch", 4, 4}
                                       end
-        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        source = SOURCE
+        threads = 128
+        {% if flag?(:aarch64) %}
+          if @fast_prefill && rows >= 64 && f32_control_pair_tiled?(first.in_dim, rows) &&
+             offsets.all? { |offset| offset % 16_i64 == 0 } &&
+             {rank, input, message, output}.all? { |view| view.offset % 16_i64 == 0 }
+            name = "inkling2_resident_f32_control_pair64"
+            row_tile = 64
+            threads = 256
+            source = GAIN_MMA_SOURCE
+          end
+        {% end %}
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, source))
         encoder.set_buffer(@model, 0)
         encoder.set_buffer(rank.buffer, 1, offset: rank.offset)
         encoder.set_buffer(input.buffer, 2, offset: input.offset)
@@ -293,13 +309,51 @@ module ML::GGUF
         encoder.set_value(first.in_dim.to_u32, 6)
         encoder.set_value(output_dim.to_u32, 7)
         encoder.set_value(rows.to_u32, 8) if rows > 1
-        encoder.dispatch_threadgroups({(output_dim + channel_tile - 1) // channel_tile, (rows + row_tile - 1) // row_tile, 1}, {128, 1, 1})
+        encoder.dispatch_threadgroups({(output_dim + channel_tile - 1) // channel_tile, (rows + row_tile - 1) // row_tile, 1}, {threads, 1, 1})
         true
       end
 
       private def f32_control_pair_tiled?(rank_dim : Int32, rows : Int32) : Bool
         {% if flag?(:aarch64) %}
-          rank_dim == 64 && rows.in?(MIN_GROUPED_ROWS..MAX_GROUPED_ROWS)
+          rank_dim == 64 && rows.in?(MIN_GROUPED_ROWS..(@fast_prefill ? MAX_FAST_GROUPED_ROWS : MAX_GROUPED_ROWS))
+        {% else %}
+          false
+        {% end %}
+      end
+
+      # Batched controller.down MMA candidate used only by the validated fast
+      # prefill profile. A false return leaves the caller's projection fallback.
+      def project_controller_down_mma(encoder : ML::Metal::ComputeEncoder,
+                                      weight : QuantWeight, input : Inkling2View,
+                                      output : Inkling2View, rows : Int32) : Bool
+        ensure_open!
+        {% if flag?(:aarch64) %}
+          return false unless @fast_prefill && rows.in?(MIN_GROUPED_ROWS..MAX_FAST_GROUPED_ROWS)
+          return false unless weight.type.f32? && self.class.projection_supported?(weight)
+
+          input_elements = rows.to_i64 * weight.in_dim.to_i64
+          output_elements = rows.to_i64 * weight.out_dim.to_i64
+          return false if input_elements > UInt32::MAX.to_i64 || output_elements > UInt32::MAX.to_i64
+          return false unless view_fits?(input, input_elements) && view_fits?(output, output_elements)
+          return false if view_overlaps?(input, input_elements, output, output_elements)
+          return false if input.buffer.handle == @model.handle || output.buffer.handle == @model.handle
+
+          weight_offset = model_offset(weight.raw)
+          return false if weight_offset % 16_i64 != 0 || input.offset % 16_i64 != 0
+
+          encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(
+            "inkling2_resident_f32_controller_down_mma", CONTROLLER_DOWN_MMA_SOURCE,
+          ))
+          encoder.set_buffer(@model, 0, offset: weight_offset)
+          encoder.set_buffer(input.buffer, 1, offset: input.offset)
+          encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+          encoder.set_value(weight.in_dim.to_u32, 3)
+          encoder.set_value(weight.out_dim.to_u32, 4)
+          encoder.set_value(rows.to_u32, 5)
+          out_groups = ((weight.out_dim.to_i64 + 31) // 32).to_i32
+          row_groups = ((rows.to_i64 + 31) // 32).to_i32
+          encoder.dispatch_threadgroups({out_groups, row_groups, 1}, {128, 1, 1})
+          true
         {% else %}
           false
         {% end %}
@@ -330,7 +384,10 @@ module ML::GGUF
         logits = scratch.take(checked_elements(rows, config.n_expert, "router logits"))
         ids = scratch.take(checked_elements(rows, config.n_expert_used, "selected experts"))
         routing_weights = scratch.take(checked_elements(rows, config.n_expert_used, "routing weights"))
-        gated = scratch.take(checked_elements(routed_rows.to_i32, config.expert_dim, "expert activation"))
+        gated_elements = checked_elements(routed_rows.to_i32, config.expert_dim, "expert activation")
+        half_situ = @fast_prefill && !decode_block && grouped_experts?(rows, config.n_expert)
+        raise ArgumentError.new("Inkling 2 half SiTU scratch element count must be even") if half_situ && gated_elements % 2 != 0
+        gated = scratch.take(half_situ ? gated_elements // 2 : gated_elements)
         down = scratch.take(checked_elements(routed_rows.to_i32, config.n_embd, "expert down"))
         output = scratch.take(checked_elements(rows, config.n_embd, "MoE output"))
 
@@ -356,7 +413,7 @@ module ML::GGUF
                    end
         if grouping && !decode_block
           encode_grouped_experts(encoder, layer.gate_up, input, gated, grouping, config.n_expert_used,
-            situ: {config.situ_beta, config.situ_linear_beta})
+            purpose: :gate_up, situ: {config.situ_beta, config.situ_linear_beta})
         elsif (rows == 1 || decode_block) && layer.gate_up.type.iq4_nl? && decode_fused_iq4_gate_up?(decode_block)
           situ = {config.situ_beta, config.situ_linear_beta}
           if grouping
@@ -468,7 +525,8 @@ module ML::GGUF
                                  routed_rows : Int32, grouping : ExpertGrouping?,
                                  *, input_is_routed : Bool) : Nil
         if grouping
-          encode_grouped_experts(encoder, weight, input, output, grouping, input_is_routed ? 1_i32 : top_k)
+          encode_grouped_experts(encoder, weight, input, output, grouping, input_is_routed ? 1_i32 : top_k,
+            purpose: input_is_routed ? :down : :gate_up)
           return
         end
 
@@ -529,7 +587,7 @@ module ML::GGUF
 
       private def grouped_experts?(rows : Int32, n_experts : Int32) : Bool
         {% if flag?(:aarch64) %}
-          MIN_GROUPED_ROWS <= rows <= MAX_GROUPED_ROWS && n_experts <= 256
+          MIN_GROUPED_ROWS <= rows <= (@fast_prefill ? MAX_FAST_GROUPED_ROWS : MAX_GROUPED_ROWS) && n_experts <= 256
         {% else %}
           false
         {% end %}
@@ -585,19 +643,20 @@ module ML::GGUF
 
       private def encode_grouped_experts(encoder : ML::Metal::ComputeEncoder, weight : Inkling2ExpertWeights,
                                          input : Inkling2View, output : Inkling2View, grouping : ExpertGrouping,
-                                         input_route_divisor : Int32, *, situ : {Float32, Float32}? = nil) : Nil
+                                         input_route_divisor : Int32, *, purpose : Symbol = :down,
+                                         situ : {Float32, Float32}? = nil) : Nil
         # The router writes the gate/up and down triples for the narrow map first.
         grid = situ ? 0 : 3
         grids = grouping.grids
         encode_expert_tiles(encoder, weight, input, output, grouping, grouping.tiles, input_route_divisor,
-          situ, tile_routes: EXPERT_TILE_ROUTES, indirect_grid: grids.try(&.slice(grid)))
+          situ, tile_routes: EXPERT_TILE_ROUTES, purpose: purpose, indirect_grid: grids.try(&.slice(grid)))
         if wide_tiles = grouping.wide_tiles
           encode_expert_tiles(encoder, weight, input, output, grouping, wide_tiles, input_route_divisor,
-            situ, tile_routes: WIDE_EXPERT_TILE_ROUTES, indirect_grid: grids.not_nil!.slice(grid + 6))
+            situ, tile_routes: WIDE_EXPERT_TILE_ROUTES, purpose: purpose, indirect_grid: grids.not_nil!.slice(grid + 6))
         end
         if m64_tiles = grouping.m64_tiles
           encode_expert_tiles(encoder, weight, input, output, grouping, m64_tiles, input_route_divisor,
-            situ, tile_routes: M64_EXPERT_TILE_ROUTES, indirect_grid: grids.not_nil!.slice(grid + 12))
+            situ, tile_routes: M64_EXPERT_TILE_ROUTES, purpose: purpose, indirect_grid: grids.not_nil!.slice(grid + 12))
         end
       end
 
@@ -609,7 +668,8 @@ module ML::GGUF
                                       input : Inkling2View, output : Inkling2View, grouping : ExpertGrouping,
                                       tiles : Inkling2View, input_route_divisor : Int32,
                                       situ : {Float32, Float32}?, *,
-                                      tile_routes : Int32, indirect_grid : Inkling2View? = nil) : Nil
+                                      tile_routes : Int32, purpose : Symbol = :down,
+                                      indirect_grid : Inkling2View? = nil) : Nil
         names = case tile_routes
                 when M64_EXPERT_TILE_ROUTES
                   {"inkling2_resident_moe_gemm_q8_0_m64", "inkling2_resident_moe_gemm_situ_q8_0_m64",
@@ -623,6 +683,15 @@ module ML::GGUF
                 end
         base = weight.type.iq4_nl? ? 2 : 0
         name = names[base + (situ ? 1 : 0)]
+        if @fast_prefill
+          name += "_fp16"
+          if tile_routes == M64_EXPERT_TILE_ROUTES && situ && weight.type.iq4_nl?
+            name += "_bytes"
+          end
+          name += "_situhalf" if purpose == :gate_up && situ != nil
+          name += "_inputhalf" if purpose == :down
+          name += "_ping_pong" if tile_routes == M64_EXPERT_TILE_ROUTES
+        end
         encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, GROUPED_EXPERT_SOURCE))
         encoder.set_buffer(@model, 0, offset: model_offset(weight.raw))
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
