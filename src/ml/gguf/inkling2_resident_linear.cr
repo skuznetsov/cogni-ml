@@ -544,11 +544,11 @@ module ML::GGUF
         max_tiles = Math.min(routed_rows, n_experts + (routed_rows - 1) // tile_routes)
         split = tile_routes > EXPERT_TILE_ROUTES
         m64 = tile_routes == M64_EXPERT_TILE_ROUTES
-        # Each tail uses at most one M16 tile. An M64 tail can also use
-        # up to two M32 tiles.
+        # M64 takes tails wider than M32. Each expert needs at most one
+        # tail descriptor across the M16, M32 and M64 maps.
         tiles = scratch.take(1 + 3 * (split ? n_experts : max_tiles))
-        wide_tiles = scratch.take(1 + 3 * (m64 ? 2 * n_experts : max_tiles)) if split
-        m64_tiles = scratch.take(1 + 3 * (routed_rows // M64_EXPERT_TILE_ROUTES)) if m64
+        wide_tiles = scratch.take(1 + 3 * (m64 ? n_experts : max_tiles)) if split
+        m64_tiles = scratch.take(1 + 3 * (routed_rows // M64_EXPERT_TILE_ROUTES + n_experts)) if m64
         grids = scratch.take(m64 ? 18 : (split ? 12 : 6)) if split || indirect
 
         name = if m64

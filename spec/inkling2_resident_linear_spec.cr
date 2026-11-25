@@ -730,9 +730,9 @@ require "../src/ml/gguf/inkling2_engine"
           ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_moe_group_routes_split").should be_true
         {% end %}
 
-        # Exercise both sides of the M64 boundary, mixed-size tails and
-        # multiple full M64 tiles. Expert 2 is empty or receives one route.
-        prefill_moe_cases = {16, 17, 25, 33, 63, 64, 65, 97, 145}.flat_map do |rows|
+        # Exercise both sides of the M64 boundary and all eight-row fragments
+        # of a partial M64 tile. Expert 2 is empty or receives one route.
+        prefill_moe_cases = {16, 17, 25, 33, 63, 64, 65, 97, 105, 113, 121, 127, 145}.flat_map do |rows|
           input = Array(Float32).new(rows * 32) do |index|
             row, column = index.divmod(32)
             case column
