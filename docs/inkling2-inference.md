@@ -118,6 +118,21 @@ fixtures, including the 1,024-token boundary on the wide fixture.
 Scratch capacity stayed constant and warming M64 added five Metal
 pipeline keys.
 
+The M64 bucket also handles expert remainders of 33–63 routes.
+Repeating the last valid activation row for unused rows keeps the
+MMA loop uniform. The scatter writes exactly the routes in the descriptor.
+
+On the research IQ4_NL GGUF with a 1,024-token Python prefix, three
+passes, and a 1,024-row outer tile, this reduced the expert tile count
+from 11,580 to 9,528. Across three quiet alternating pairs on the M2 Max,
+median prefill rose from 462.76 to 476.42 tok/s. The median paired gain
+was 2.95% and the median paired wall-time saving was 63.45 ms.
+All five completed 8,192-token pairs also improved, with a median paired
+gain of 2.57% under background load. The 1,024- and 8,192-token captures
+matched full logits, live KV, convolution histories and expert order
+bitwise. The native candidate used the same 37 Metal pipelines and
+561 MiB of resident scratch as the baseline.
+
 ### Tiled FP32 loop controllers
 
 On Apple Silicon, the rank-64 gain/forget pair uses an eight-row,

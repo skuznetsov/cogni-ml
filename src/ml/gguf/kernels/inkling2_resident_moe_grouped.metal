@@ -102,8 +102,8 @@ kernel void inkling2_resident_moe_group_routes_indirect(
     }
 }
 
-// Bucket routes once. M64 consumes full pairs of M32 chunks, followed by the
-// same M32 and M16 tail layout.
+// Bucket routes once. M64 takes full tiles and tails wider than M32.
+// The remaining routes use the M32 and M16 tail layout.
 template <bool UseM64>
 kernel void inkling2_resident_moe_group_routes_split(
     device const uint* ids                [[buffer(0)]],
@@ -146,13 +146,15 @@ kernel void inkling2_resident_moe_group_routes_split(
     if (tid < n_experts) {
         const uint count = atomic_load_explicit(counts + tid, memory_order_relaxed);
         if (count != 0) {
-            const uint m64_tiles = UseM64 ? count / M64_ROUTES : 0;
-            const uint consumed = m64_tiles * M64_ROUTES;
+            // Prefer one M64 tile over two narrower tiles for a tail above 32.
+            const uint m64_tiles = UseM64 ? (count + WIDE_ROUTES - 1) / M64_ROUTES : 0;
+            const uint consumed = min(count, m64_tiles * M64_ROUTES);
             if (UseM64 && m64_tiles != 0) {
                 const uint base = atomic_fetch_add_explicit(&next_m64_tile, m64_tiles, memory_order_relaxed);
                 device Inkling2ExpertTile* descs = (device Inkling2ExpertTile*)(m64_tile_map + 1);
                 for (uint i = 0; i < m64_tiles; ++i) {
-                    descs[base + i] = {tid, tid * rows + i * M64_ROUTES, M64_ROUTES};
+                    const uint start = i * M64_ROUTES;
+                    descs[base + i] = {tid, tid * rows + start, min(M64_ROUTES, count - start)};
                 }
             }
 
@@ -277,8 +279,10 @@ kernel void inkling2_resident_moe_gemm(
     device const float* x_row = x + (size_t)input_row * in_dim + input_col;
     const uint second_route_row = route_row + FIRST_LOAD_ROWS;
     const bool valid_second_route = M64 || (RouteRows > FIRST_LOAD_ROWS && second_route_row < tile.count);
+    // Pad partial M64 tiles with the last valid route. The scatter writes
+    // only actual routes and every SIMD group keeps the same MMA loop.
     const uint second_input_row = valid_second_route
-        ? routes[second_route_row] / input_route_divisor : 0;
+        ? routes[M64 ? min(second_route_row, tile.count - 1) : second_route_row] / input_route_divisor : 0;
     device const float* second_x_row = x + (size_t)second_input_row * in_dim + input_col;
     const bool has_upper = M64 || tile.count > 8;
     const bool has_third = M64 || (RouteRows > INKLING2_EXPERT_TILE_ROUTES && tile.count > 16);
