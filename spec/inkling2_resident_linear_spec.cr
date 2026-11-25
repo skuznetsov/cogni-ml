@@ -607,15 +607,20 @@ require "../src/ml/gguf/inkling2_engine"
           linear.project(encoder, f32_projection, f32_decode_view.slice(row * 3), f32_rowwise_output.slice(row * 5), 1_i32)
         end
 
-        q8_decode_input = Array(Float32).new(4 * 64) do |index|
+        # Cover every small Q8_0 decode width and every partial final tile.
+        q8_decode_input = Array(Float32).new(7 * 64) do |index|
           ((index % 29) - 14).to_f32 * 0.00625_f32
         end
         q8_decode_view = Inkling2LinearSpecSupport.float_view(q8_decode_input, buffers)
-        q8_decode_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 39, 0_f32), buffers)
-        q8_rowwise_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(4 * 39, 0_f32), buffers)
-        linear.project(encoder, q8_tiled_projection, q8_decode_view, q8_decode_output, 4_i32, decode_block: true)
-        4.times do |row|
+        q8_rowwise_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(7 * 39, 0_f32), buffers)
+        7.times do |row|
           linear.project(encoder, q8_tiled_projection, q8_decode_view.slice(row * 64), q8_rowwise_output.slice(row * 39), 1_i32)
+        end
+        q8_decode_batches = (2..7).map do |rows|
+          guarded_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(rows * 39 + 2, 123_f32), buffers)
+          linear.project(encoder, q8_tiled_projection, q8_decode_view, guarded_output.slice(1), rows,
+            decode_block: rows <= 4)
+          {rows, guarded_output}
         end
 
         moe_input = Array(Float32).new(3 * 32) { |index| ((index % 13) - 6).to_f32 * 0.015_f32 }
@@ -767,8 +772,13 @@ require "../src/ml/gguf/inkling2_engine"
         end
         Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(f32_decode_output, 20_i32)).should eq(
           Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(f32_rowwise_output, 20_i32)))
-        Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_decode_output, 4 * 39)).should eq(
-          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_rowwise_output, 4 * 39)))
+        q8_decode_batches.each do |rows, guarded_output|
+          entries = rows * 39
+          data = Inkling2LinearSpecSupport.read(guarded_output, entries + 2)
+          {data.first, data.last}.should eq({123_f32, 123_f32})
+          Inkling2LinearSpecSupport.float_bits(data[1, entries]).should eq(
+            Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_rowwise_output, entries)))
+        end
         expected_moe = Inkling2LinearSpecSupport.moe_expected(layer, config, moe_input, 3_i32)
         Inkling2LinearSpecSupport.read(moe_readback, 96_i32).zip(expected_moe).each do |actual, expected|
           actual.should be_close(expected, 2e-3_f32)
