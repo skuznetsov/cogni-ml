@@ -13,10 +13,14 @@ module ML::GGUF
     EOS_TOKEN_ID      = 200006
     PAD_TOKEN_ID      = 199999
 
-    # The model template's renderer output is admitted by digest so a changed
-    # template cannot silently keep using this small, intentionally scoped
-    # single-user-text renderer.
+    # A changed template must be reviewed before it can use the native
+    # text-message renderer.
     SUPPORTED_CHAT_TEMPLATE_SHA256 = "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc"
+
+    private THINKING_EFFORT = {
+      "none" => "0", "minimal" => "0.1", "low" => "0.2", "medium" => "0.7",
+      "high" => "0.9", "xhigh" => "0.99", "max" => "0.99",
+    }
 
     getter vocab : Array(String)
     getter token_types : Array(Int32)
@@ -140,6 +144,11 @@ module ML::GGUF
       decode([id], skip_special: skip_special)
     end
 
+    def control_token_id(piece : String) : Int32?
+      id = @token_to_id[piece]?
+      id if id && special_type?(@token_types[id])
+    end
+
     def chat_template_supported? : Bool
       template = @chat_template
       return false unless template
@@ -158,6 +167,51 @@ module ML::GGUF
 
       "<|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|>" +
         "<|message_user|><|content_text|>#{text}<|end_message|>"
+    end
+
+    # Encode the pinned text-only chat template. Keep the control IDs
+    # separate from literal message text, even if the text names a delimiter.
+    def encode_chat(messages : Enumerable(Tuple(String, T)), *, reasoning_effort : String? = nil) : Array(Int32) forall T
+      unless chat_template_supported?
+        raise ArgumentError.new("unsupported Inkling 2 chat template")
+      end
+      effort = reasoning_effort || "high"
+      level = THINKING_EFFORT[effort]? || raise ArgumentError.new("unknown reasoning_effort #{effort.inspect}")
+      ids = [] of Int32
+      system = @token_to_id["<|message_system|>"]
+      user = @token_to_id["<|message_user|>"]
+      model = @token_to_id["<|message_model|>"]
+      text = @token_to_id["<|content_text|>"]
+      ending = @token_to_id["<|end_message|>"]
+      effort_emitted = false
+
+      messages.each do |role, content|
+        header = case role
+                 when "system", "developer" then system
+                 when "user"                then user
+                 when "assistant"           then model
+                 else
+                   raise ArgumentError.new("unsupported Inkling 2 chat role #{role.inspect}")
+                 end
+        if !effort_emitted && header != system
+          encode_text_message(system, text, ending, "Thinking effort level: #{level}", ids)
+          effort_emitted = true
+        end
+        if content.is_a?(String)
+          encode_text_message(header, text, ending, content, ids)
+        else
+          content.each { |part| encode_text_message(header, text, ending, part, ids) }
+        end
+        ids << @eos_id if header == model
+      end
+      encode_text_message(system, text, ending, "Thinking effort level: #{level}", ids) unless effort_emitted
+      ids
+    end
+
+    private def encode_text_message(header : Int32, text : Int32, ending : Int32, content : String, ids : Array(Int32)) : Nil
+      ids << header << text
+      encode_text_fragment(content, ids)
+      ids << ending
     end
 
     private def encode_text_fragment(text : String, ids : Array(Int32)) : Nil

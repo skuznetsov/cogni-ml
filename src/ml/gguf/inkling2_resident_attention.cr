@@ -338,6 +338,18 @@ module ML::GGUF
         value_dynamic_heads : UInt32
       end
 
+      # Matches Inkling2FlashParams in inkling2_prefill_flash.metal.
+      struct FlashParams
+        start : UInt32
+        rows : UInt32
+        query_heads : UInt32
+        kv_heads : UInt32
+        relative_extent : UInt32
+        sliding_window : UInt32
+        cache_capacity : UInt32
+        relative_stride : UInt32
+      end
+
       # Matches Inkling2PrefillOrderedParams in inkling2_prefill_ordered.metal.
       struct PrefillOrderedParams
         start : UInt32
@@ -375,12 +387,14 @@ module ML::GGUF
     class Inkling2ResidentAttention
       SOURCE = Inkling2ResidentConvolution::SOURCE
       private ORDERED_PREFILL_SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_prefill_ordered.metal") }}
+      private FLASH_PREFILL_SOURCE = {{ read_file("#{__DIR__}/kernels/inkling2_prefill_flash.metal") }}
       private MAX_GRID_ELEMENTS = 16_777_216_i32
       private INITIAL_CACHE_ROWS = 256_i32
       private SPLIT_KEY_THRESHOLD = 64_i32
       private SPLIT_KEY_PARTITIONS = 4_i32
       private SPLIT_SCORE_CACHE_LIMIT = 256_i32
       private SPLIT_PARALLEL_SCORE_LIMIT = 512_i32
+      private FAST_SPLIT_PARALLEL_SCORE_LIMIT = 4096_i32
       private SPLIT_PARALLEL_THREADS = 128_i32
       private PREFILL_SCORE_LIMIT = 1024_i32
       private MAX_PREFILL_ATTENTION_ROWS = 512_i32
@@ -394,6 +408,7 @@ module ML::GGUF
         Scores
         SharedKV
         Ordered
+        Fast
 
         def self.from_env : self
           case ENV["INKLING2_PREFILL_ATTENTION"]?
@@ -740,6 +755,13 @@ module ML::GGUF
         relative_extent : Int32,
         decode_block : Bool,
       ) : Nil
+        if @prefill_mode.fast? && !decode_block && rows.in?(64..MAX_PREFILL_ATTENTION_ROWS) &&
+           @config.head_dim == 128 && @config.rel_dim == 16 && @config.n_head == 3 * @config.n_head_kv
+          encode_prefill_flash(encoder, q, k, v, q_rel, gate, sink, relative_bias, output,
+            start, rows, relative_extent)
+          return
+        end
+
         visible_keys = @sliding ? Math.min(start + rows, @config.sliding_window) : start + rows
         # The packed path bounds scores by the visible window; the global
         # path bounds them by the query panel size.
@@ -788,6 +810,48 @@ module ML::GGUF
             split_gate, split_sink, relative_bias, split_output, start, split_rows,
             row_offset, relative_extent)
         end
+      end
+
+      private def encode_prefill_flash(
+        encoder : ML::Metal::ComputeEncoder,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        rows : Int32,
+        relative_extent : Int32,
+      ) : Nil
+        if k.offset % 16 != 0 || v.offset % 16 != 0
+          raise "vector Flash requires aligned K and V"
+        end
+
+        params = LibInkling2Attention::FlashParams.new(
+          start: start.to_u32,
+          rows: rows.to_u32,
+          query_heads: @config.n_head.to_u32,
+          kv_heads: @config.n_head_kv.to_u32,
+          relative_extent: relative_extent.to_u32,
+          sliding_window: @sliding ? @config.sliding_window.to_u32 : 0_u32,
+          cache_capacity: @cache_capacity.to_u32,
+          relative_stride: 0_u32,
+        )
+        pipeline = ML::Metal::PipelineCache.get_or_compile("inkling2_flash_f16_vec", FLASH_PREFILL_SOURCE)
+        raise "incompatible Flash SIMD width" unless pipeline.thread_execution_width == 32
+        encoder.set_pipeline(pipeline)
+        {q, k, v, q_rel, relative_bias, gate, sink}.each_with_index do |view, index|
+          encoder.set_buffer(view.buffer, index, offset: view.offset)
+        end
+        encoder.set_buffer(@k_cache.not_nil!, 7)
+        encoder.set_buffer(@v_cache.not_nil!, 8)
+        encoder.set_buffer(output.buffer, 9, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(pointerof(params).as(Void*), sizeof(LibInkling2Attention::FlashParams), 10)
+        encoder.set_buffer(relative_bias.buffer, 11, offset: relative_bias.offset)
+        encoder.dispatch_threadgroups({(rows + 31) // 32, @config.n_head, 1}, {128, 1, 1})
       end
 
       private def encode_prefill_ordered(
@@ -1040,7 +1104,10 @@ module ML::GGUF
         partition_size = (keys - 1) // SPLIT_KEY_PARTITIONS + 1
 
         # Four SIMD groups score disjoint keys, then cover one channel per lane.
-        parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= SPLIT_PARALLEL_SCORE_LIMIT
+        # The Apple Silicon fast profile can cache a 16K context's four FP32
+        # score partitions instead of recomputing QK in the value pass.
+        parallel_limit = @prefill_mode.fast? ? FAST_SPLIT_PARALLEL_SCORE_LIMIT : SPLIT_PARALLEL_SCORE_LIMIT
+        parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= parallel_limit
         if parallel
           split_pipeline = "inkling2_resident_attention_split_parallel"
           threads = SPLIT_PARALLEL_THREADS

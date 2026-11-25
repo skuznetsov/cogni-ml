@@ -86,7 +86,7 @@ module ML::GGUF
     @logits : ML::MetalBuffer
     @block_logits : ML::MetalBuffer? = nil
     @greedy_ids : ML::MetalBuffer? = nil
-    @scratch = Inkling2ResidentScratch.new
+    @scratch : Inkling2ResidentScratch
     @visits = [] of Visit
     @draft_epilogue_visits = [] of Visit
     @float_offsets = {} of UInt64 => Int64
@@ -118,6 +118,24 @@ module ML::GGUF
       end
     end
 
+    # The growable 241 KiB-per-row arena and half/M64 fast kernels are bounded
+    # to the measured Mini layout. Other resident-compatible checkpoints keep
+    # the paged allocator and their existing kernel fallbacks.
+    def self.fast_prefill_supported?(weights : Inkling2Weights, passes : Int32) : Bool
+      {% if flag?(:aarch64) %}
+        config = weights.config
+        return false unless passes == 3
+        return false unless config.n_layer == 24 && config.n_embd == 2304 && config.res_block_size == 6
+        return false unless config.core_start == 6 && config.core_end == 18 && config.gate_rank == 64
+        return false unless config.n_head == 24 && config.n_head_kv == 8 && config.head_dim == 128 && config.rel_dim == 16
+        return false unless config.n_expert == 128 && config.n_expert_used == 8 && config.expert_dim == 1152
+        return false unless config.n_embd % 32 == 0 && config.expert_dim % 32 == 0
+        supported?(weights)
+      {% else %}
+        false
+      {% end %}
+    end
+
     private def self.controller_supported?(controller : Inkling2LoopWeights) : Bool
       {controller.down, controller.gain, controller.forget}.all? do |matrices|
         matrices.all? { |matrix| Inkling2ResidentLinear.projection_supported?(matrix) }
@@ -126,9 +144,10 @@ module ML::GGUF
 
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
                    max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil,
-                   rollback_rows : Int32 = 0, @depth_speculation : Bool = false)
+                   rollback_rows : Int32 = 0, @depth_speculation : Bool = false, @fast_prefill : Bool = false)
       @config = @weights.config
       @max_seq = max_seq
+      @scratch = Inkling2ResidentScratch.new(@fast_prefill)
       @prelude_blocks = @config.core_start // @config.res_block_size
       @core_blocks = (@config.core_end - @config.core_start) // @config.res_block_size
       @block_slots = (@config.n_layer - 1) // @config.res_block_size + 1
@@ -137,18 +156,30 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 depth speculation requires four rollback rows") unless rollback_rows == 4
         raise ArgumentError.new("Inkling 2 depth speculation requires at least one core block") unless @core_blocks > 0
       end
-      prefill_mode = Inkling2ResidentAttention::PrefillMode.from_env
-      tile_routes, indirect_dispatch = case ENV["INKLING2_MOE_PREFILL_ROUTES"]?
-                                       when nil, "16"     then {16, false}
-                                       when "16_indirect" then {16, true}
-                                       when "32"          then {32, false}
-                                       when "64"          then {64, false}
+      prefill_mode = @fast_prefill ? Inkling2ResidentAttention::PrefillMode::Fast : Inkling2ResidentAttention::PrefillMode.from_env
+      tile_routes, indirect_dispatch = if @fast_prefill
+                                         {64, false}
                                        else
-                                         raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, 32, or 64")
+                                         case ENV["INKLING2_MOE_PREFILL_ROUTES"]?
+                                         when nil, "16"     then {16, false}
+                                         when "16_indirect" then {16, true}
+                                         when "32"          then {32, false}
+                                         when "64"          then {64, false}
+                                         else
+                                           raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, 32, or 64")
+                                         end
                                        end
       @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: tile_routes,
-        prefill_indirect_dispatch: indirect_dispatch)
+        prefill_indirect_dispatch: indirect_dispatch, fast_prefill: @fast_prefill)
       @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
+    end
+
+    def fast_prefill? : Bool
+      @fast_prefill
+    end
+
+    def reserved_scratch_bytes : Int64
+      @scratch.reserved_bytes
     end
 
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
@@ -530,14 +561,14 @@ module ML::GGUF
         ensure_ordinary_mode!
         raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
       end
-      submit_command do |encoder|
+      submit_command(rows) do |encoder|
         encode_tile(encoder, position, rows, logits, decode_block, greedy)
       end
       @depth_frontier = position + rows if @depth_speculation
     end
 
-    private def submit_command(& : ML::Metal::ComputeEncoder -> Nil) : Nil
-      @scratch.reset
+    private def submit_command(rows : Int32 = 0, & : ML::Metal::ComputeEncoder -> Nil) : Nil
+      @scratch.prepare_command(rows)
       command = ML::Metal::CommandBuffer.new
       begin
         encoder = ML::Metal::ComputeEncoder.new(command)
@@ -561,7 +592,11 @@ module ML::GGUF
                             logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool) : Nil
       tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
       prelude = tile.hidden if @passes > 1
-      banks = StaticArray[@scratch.take(@core_blocks * tile.elements), @scratch.take(@core_blocks * tile.elements)] if @passes > 1
+      banks = if @passes > 1
+                first = @scratch.take(@core_blocks * tile.elements)
+                second = @fast_prefill && !decode_block && !@depth_speculation && rows > 1 ? first : @scratch.take(@core_blocks * tile.elements)
+                StaticArray[first, second]
+              end
 
       visit = encode_prelude(tile, prelude)
 
@@ -710,6 +745,8 @@ module ML::GGUF
       encoder = tile.encoder
       mark = @scratch.mark
       residual = tile.hidden
+      reuse_moe_input = @fast_prefill && !tile.decode_block? && !@depth_speculation && tile.rows > 1
+      moe_input_mark = @scratch.mark if reuse_moe_input
       controller = previous_bank ? layer.controller.not_nil! : nil
       messages = if bank = previous_bank
                    output = @scratch.take(4 * tile.elements)
@@ -719,25 +756,28 @@ module ML::GGUF
                  end
 
       attention_mark = @scratch.mark
-      sliding = @config.sliding?(physical)
-      query_count = sliding ? 1 : 3
-      queries = layer.attn_res_query
-      mixed = queries ? mix(tile, tile.current, queries, query_count) : tile.current
-      q = mixed
-      distinct_inputs = query_count == 3 && !queries.nil?
-      k = distinct_inputs ? mixed.slice(tile.elements) : mixed
-      v = distinct_inputs ? mixed.slice(2 * tile.elements) : mixed
-      if controller && messages
-        q, k, v = control_attention(tile, controller, {q, k, v}, messages)
+      recycle_attention_inputs = @fast_prefill && !tile.decode_block? && !@depth_speculation && tile.rows > 1
+      attended = attend(tile, layer.attention, visit, recycle_attention_inputs) do
+        sliding = @config.sliding?(physical)
+        query_count = sliding ? 1 : 3
+        queries = layer.attn_res_query
+        mixed = queries ? mix(tile, tile.current, queries, query_count) : tile.current
+        q = mixed
+        distinct_inputs = query_count == 3 && !queries.nil?
+        k = distinct_inputs ? mixed.slice(tile.elements) : mixed
+        v = distinct_inputs ? mixed.slice(2 * tile.elements) : mixed
+        if controller && messages
+          q, k, v = control_attention(tile, controller, {q, k, v}, messages)
+        end
+        q_in = normalize(tile, q, layer.q_norm)
+        if sliding && !messages
+          k_in = v_in = q_in
+        else
+          k_in = normalize(tile, k, layer.k_norm)
+          v_in = normalize(tile, v, layer.v_norm)
+        end
+        {q_in, k_in, v_in}
       end
-      q_in = normalize(tile, q, layer.q_norm)
-      if sliding && !messages
-        k_in = v_in = q_in
-      else
-        k_in = normalize(tile, k, layer.k_norm)
-        v_in = normalize(tile, v, layer.v_norm)
-      end
-      attended = attend(tile, layer.attention, visit, q_in, k_in, v_in)
       if physical % @config.res_block_size == 0
         block = tile.blocks.slice(tile.block_count * tile.elements)
         MathOps.rms(encoder, tile.current, block, nil, tile.width, tile.rows, DEPTH_EPS)
@@ -752,7 +792,14 @@ module ML::GGUF
       if controller && messages
         ffn = control(tile, controller, 3, ffn, messages.slice(3 * tile.elements))
       end
-      ffn_in = normalize(tile, ffn, layer.ffn_norm)
+      ffn_in = if input_mark = moe_input_mark
+                 output = tile.next_state
+                 MathOps.rms(encoder, ffn, output, constant(layer.ffn_norm), tile.width, tile.rows, @config.rms_eps)
+                 @scratch.rewind(input_mark)
+                 output
+               else
+                 normalize(tile, ffn, layer.ffn_norm)
+               end
       bias = layer.router_bias.try { |array| constant(array) }
       routed = @linear.moe(encoder, @scratch, layer, @config, ffn_in, bias, tile.rows, decode_block: tile.decode_block?)
       convolved = visit.ffn_conv.encode(encoder, @scratch, tile.start, tile.rows, routed, constant(layer.ffn_post_conv))
@@ -762,10 +809,15 @@ module ML::GGUF
     end
 
     private def attend(tile : Tile, weight : Inkling2AttentionWeights, visit : Visit,
-                       q_in : Inkling2View, k_in : Inkling2View, v_in : Inkling2View) : Inkling2View
+                       recycle_inputs : Bool, & : -> Tuple(Inkling2View, Inkling2View, Inkling2View)) : Inkling2View
       matrices = {weight.q, weight.k, weight.v, weight.rel_proj, weight.gate, weight.sink, weight.k_conv_proj, weight.v_conv_proj}
+      if recycle_inputs
+        outputs = matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
+        inputs_mark = @scratch.mark
+      end
+      q_in, k_in, v_in = yield
       inputs = {q_in, k_in, v_in, q_in, q_in, q_in, k_in, v_in}
-      outputs = matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
+      outputs ||= matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
       q, k, v, q_rel, gate, sink, dynamic_k, dynamic_v = outputs
       unless (tile.rows == 1 || tile.decode_block?) && decode_grouped_attention_projections? &&
              @linear.project_q8_group(tile.encoder, matrices, inputs, outputs, tile.rows)
@@ -780,6 +832,9 @@ module ML::GGUF
               decode_block: tile.decode_block?)
           end
         end
+      end
+      if input_mark = inputs_mark
+        @scratch.rewind(input_mark)
       end
       context = visit.attention.encode(tile.encoder, @scratch, tile.start, tile.rows,
         q.not_nil!, k.not_nil!, v.not_nil!, q_rel.not_nil!, gate.not_nil!, sink.not_nil!,
@@ -905,7 +960,13 @@ module ML::GGUF
       mark = @scratch.mark
       features = @scratch.take(2 * tile.elements)
       MathOps.rms_concat(tile.encoder, input, message, features, tile.width, tile.rows, DEPTH_EPS)
-      rank = project(tile, controller.down[index], features)
+      rank = @scratch.take(controller.down[index].out_dim * tile.rows)
+      unless @linear.project_controller_down_mma(
+               tile.encoder, controller.down[index], features, rank, tile.rows,
+             )
+        @linear.project(tile.encoder, controller.down[index], features, rank, tile.rows,
+          decode_block: tile.decode_block?)
+      end
       apply_control(tile, controller, index, input, message, rank, result)
       @scratch.rewind(mark)
       result

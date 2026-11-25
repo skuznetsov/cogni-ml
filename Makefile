@@ -42,12 +42,14 @@ spec: $(BRIDGE_OBJ)
 	$(CRYSTAL) spec \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
-$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench: $(BUILD_DIR)/%: bin/%.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
+$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench $(BUILD_DIR)/inkling2_serve: $(BUILD_DIR)/%: bin/%.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
 		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/reader.cr \
 		src/ml/gguf/ngram_draft.cr src/ml/gguf/kernels/gemm_q56k.metal \
 		$(wildcard src/ml/gguf/kernels/inkling2_*.metal) $(BRIDGE_OBJ)
 	$(CRYSTAL) build --release $< -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
+
+$(BUILD_DIR)/inkling2_serve: $(wildcard src/ml/serve/*.cr)
 
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
@@ -150,6 +152,7 @@ help:
 	@echo "  build - compile library entrypoint"
 	@echo "  spec_cpu  - run specs in CPU-only mode"
 	@echo "  build_cpu - build in CPU-only mode"
+	@echo "  $(BUILD_DIR)/inkling2_serve - build the local Inkling 2 HTTP server"
 	@echo "  profile_nomic - run native Metal stage profiler for nomic GGUF"
 	@echo "  profile_nomic_layers - run per-layer native Metal profiler for nomic GGUF"
 	@echo "  profile_nomic_vs_llama - compare native Metal embeddings against llama.cpp"
