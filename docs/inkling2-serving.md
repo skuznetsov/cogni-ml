@@ -23,6 +23,7 @@ with client.chat.completions.create(
     model="inkling-2-mini",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
     reasoning_effort="none",
+    temperature=0,
     max_completion_tokens=256,
     stream=True,
 ) as stream:
@@ -98,6 +99,25 @@ Mini IQ4_NL GGUF, default settings, and 49 generated tokens.
 Time to first token includes the HTTP request and prompt evaluation. These
 are loopback observations under normal host load. Engine prefill benchmarks
 are in [Inkling 2 inference](inkling2-inference.md#fast-prefill-profile).
+
+### Greedy decode with n-gram drafts
+
+On the same M2 Max, the Mini IQ4_NL GGUF ran at three passes with fast
+prefill. The OpenAI SDK streamed completions at `temperature=0` with and
+without `--no-ngram`. These are medians of four requests per setting with
+one warm server at a time. Decode timing starts at the first visible token
+and runs through the finish event, including any verification and fallback.
+
+| Continuation | Prompt tokens | Generated tokens | `--no-ngram` | Default n-gram |
+| --- | ---: | ---: | ---: | ---: |
+| Prose | 81 | 49 | 33.91 tok/s | 33.79 tok/s |
+| Repeated text | 104 | 97 | 33.86 tok/s | 53.65 tok/s |
+| Repeated text across the 1,024-token window | 1,022 | 97 | 29.99 tok/s | 50.68 tok/s |
+
+For each prompt, both settings returned identical text, completion token
+counts, and finish reasons. The repeated-text pairs ran under normal host
+load. The two prose pairs that passed the quiet-host check also ran at
+about 34 tok/s in both settings.
 
 ## Verification gates
 
