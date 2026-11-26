@@ -38,6 +38,18 @@ or the quantized CPU backend.
 Use the [OpenAI-compatible server](docs/inkling2-serving.md) to connect local
 clients to the three-pass Metal profile.
 
+## Qwen-Image 2.1
+
+The local text-to-image package combines the official Qwen3-VL text encoder
+and VAE (currently through Python) with the native Metal GGUF denoiser. It is
+a hybrid prototype, not a fully native or standalone image engine. Setup,
+generation, pinned model revision, and verification boundaries are documented
+in [the Qwen-Image 2.1 frontier](docs/qwen-image21-gguf-frontier.md).
+
+Qwen-Image 2.1 weights are governed by the
+[upstream Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE);
+consult it before redistribution or commercial use.
+
 ## Qwen 3.5 Native Metal
 
 The native Qwen path targets `Qwen3.5-9B-Q4_K_M.gguf` on Apple Silicon. The code supports:
