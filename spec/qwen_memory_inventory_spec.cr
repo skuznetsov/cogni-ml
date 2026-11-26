@@ -73,20 +73,21 @@ end
 describe "Qwen lazy F32 FFN fallback" do
   # Source-order guard supplements selection behavior; it is not GPU parity.
   it "keeps all three exact-tag allocations inside lazy setup before command encoding" do
-    source = File.read(File.expand_path("../src/ml/models/qwen35/metal/engine.cr", __DIR__))
+    metal_dir = File.expand_path("../src/ml/models/qwen35/metal", __DIR__)
+    sources = Dir.glob(File.join(metal_dir, "*.cr")).to_h { |path| {File.basename(path), File.read(path)} }
     [
-      {"recurrent_layer_chunk_project_many", "ffn", "rec_chunk_many_ffn_comb", "ffn_dim"},
-      {"full_attn_then_recurrent_chunk_project_many", "full_ffn", "frec_full_ffn_comb", "full_ffn_dim"},
-      {"full_attn_then_recurrent_chunk_project_many", "rec_ffn", "frec_rec_ffn_comb", "rec_ffn_dim"},
-    ].each do |method_name, prefix, tag, dimension|
-      route = source.split("def self.#{method_name}(", 2)[1].split("\n        def self.", 2)[0]
+      {"recurrent.cr", "recurrent_layer_chunk_project_many", "ffn", "rec_chunk_many_ffn_comb", "ffn_dim"},
+      {"engine.cr", "full_attn_then_recurrent_chunk_project_many", "full_ffn", "frec_full_ffn_comb", "full_ffn_dim"},
+      {"engine.cr", "full_attn_then_recurrent_chunk_project_many", "rec_ffn", "frec_rec_ffn_comb", "rec_ffn_dim"},
+    ].each do |filename, method_name, prefix, tag, dimension|
+      route = sources[filename].split("def self.#{method_name}(", 2)[1].split("\n        def self.", 2)[0]
       command_parts = route.split("cmd = append_command_buffer", 2)
       command_parts.size.should eq(2)
       setup = command_parts[0]
       pattern = Regex.new("#{prefix}_act_buf = prefill_ffn_activation_buffer\\(#{prefix}_up_buf\\) do\\s+Scratch.get\\(:#{tag}, \\(n_tokens \\* #{dimension}\\).to_i64 \\* sizeof\\(Float32\\)\\)\\s+end")
       setup.should match(pattern)
       route.scan(/prefill_ffn_activation_buffer\(#{prefix}_up_buf\)/).size.should eq(1)
-      source.scan(/Scratch.get\(:#{tag},/).size.should eq(1)
+      sources.values.sum { |source| source.scan(/Scratch.get\(:#{tag},/).size }.should eq(1)
     end
   end
 
