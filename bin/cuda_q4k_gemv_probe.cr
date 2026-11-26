@@ -36,7 +36,7 @@ lib LibCUDAQ4K
   fun cuCtxSynchronize : Int32
 end
 
-PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
 
 DEFAULT_MODEL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 DEFAULT_TENSOR = "blk.0.ssm_alpha.weight"

@@ -14,7 +14,7 @@ require "../src/ml/cuda/driver"
 
 DEFAULT_MODEL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 DEFAULT_TENSOR = "blk.0.ffn_up.weight"
-Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+Q4K_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
 Q4K_SCALE_REGS_PTX = Q4K_PTX
   .gsub("q4_k_gemv_warp4_f32", "q4_k_gemv_scale_regs_warp4_f32")
   .gsub(<<-PTX, <<-PTX)

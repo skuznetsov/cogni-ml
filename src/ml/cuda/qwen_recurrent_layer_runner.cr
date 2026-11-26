@@ -10,13 +10,13 @@ module ML::CUDA
   class QwenRecurrentLayerRunner
     @profile_runner : ResidentSequenceRunner?
 
-    DN_PTX  = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-    Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-    Q4K_DUAL_PTX = {{ read_file("src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx") }}
-    Q4K_RAW_Q8_PTX = {{ read_file("src/ml/cuda/kernels/q4k_raw_q8_dp4a_probe.ptx") }}
-    PCA_UPDOWN_PTX = {{ read_file("src/ml/cuda/kernels/pca_updown_probe.ptx") }}
-    Q5K_PTX = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
-    Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+    DN_PTX  = {{ read_file("#{__DIR__}/kernels/shared/deltanet_step_probe.ptx") }}
+    Q4K_PTX = {{ read_file("#{__DIR__}/kernels/shared/q4k_gemv_probe.ptx") }}
+    Q4K_DUAL_PTX = {{ read_file("#{__DIR__}/kernels/qwen35/q4k_dual_gemv_probe.ptx") }}
+    Q4K_RAW_Q8_PTX = {{ read_file("#{__DIR__}/kernels/qwen35/q4k_raw_q8_dp4a_probe.ptx") }}
+    PCA_UPDOWN_PTX = {{ read_file("#{__DIR__}/kernels/qwen35/pca_updown_probe.ptx") }}
+    Q5K_PTX = {{ read_file("#{__DIR__}/kernels/qwen35/q5k_gemv_probe.ptx") }}
+    Q6K_PTX = {{ read_file("#{__DIR__}/kernels/shared/q6k_gemv_probe.ptx") }}
 
     class Weights
       getter h_k : Int32

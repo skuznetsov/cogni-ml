@@ -5,9 +5,9 @@ module ML::CUDA
   # Reusable CUDA runner for a Qwen full-attention layer's input projection
   # bundle: attn_q, attn_k, attn_v from the same hidden vector sequence.
   class QwenFullAttnProjectionRunner
-    DN_PTX  = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-    Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-    Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+    DN_PTX  = {{ read_file("#{__DIR__}/kernels/shared/deltanet_step_probe.ptx") }}
+    Q4K_PTX = {{ read_file("#{__DIR__}/kernels/shared/q4k_gemv_probe.ptx") }}
+    Q6K_PTX = {{ read_file("#{__DIR__}/kernels/shared/q6k_gemv_probe.ptx") }}
 
     class Weights
       getter hidden : Int32

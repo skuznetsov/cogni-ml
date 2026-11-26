@@ -10,8 +10,8 @@ require "../src/ml/gguf/gemma4_meta"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/cuda/driver"
 
-Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+Q4K_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
+Q6K_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q6k_gemv_probe.ptx") }}
 
 DEFAULT_MODEL = ENV["GEMMA4_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 

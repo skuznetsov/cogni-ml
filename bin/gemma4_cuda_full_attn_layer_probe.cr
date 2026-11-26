@@ -8,9 +8,9 @@ require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/cuda/driver"
 require "../src/ml/cuda/gemma4_swa_context_ptx"
 
-NORM_PTX = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-Q6K_PTX  = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+NORM_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/deltanet_step_probe.ptx") }}
+Q4K_PTX  = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
+Q6K_PTX  = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q6k_gemv_probe.ptx") }}
 ROPE_PTX = <<-PTX
 .version 8.0
 .target sm_80

@@ -8,7 +8,7 @@ module ML::CUDA
   # records may be BF16 or block-INT8 and are decoded directly into device state;
   # KV records are expected to be raw Float32 records and are copied as-is.
   class QwenStateArtifactRestorer
-    PTX = {{ read_file("src/ml/cuda/kernels/recurrent_int8_codec_probe.ptx") }}
+    PTX = {{ read_file("#{__DIR__}/kernels/qwen35/recurrent_int8_codec_probe.ptx") }}
 
     private record Segment,
       layer : Int32,

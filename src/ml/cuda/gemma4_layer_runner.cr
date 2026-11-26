@@ -13,9 +13,9 @@ module ML::CUDA
   # exposes device-resident input/output pointers so a mixed-stack probe can
   # validate handoff before we optimize scheduling and scratch reuse.
   class Gemma4LayerRunner
-    NORM_PTX = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-    Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-    Q6K_PTX  = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+    NORM_PTX = {{ read_file("#{__DIR__}/kernels/shared/deltanet_step_probe.ptx") }}
+    Q4K_PTX  = {{ read_file("#{__DIR__}/kernels/shared/q4k_gemv_probe.ptx") }}
+    Q6K_PTX  = {{ read_file("#{__DIR__}/kernels/shared/q6k_gemv_probe.ptx") }}
 
     ROPE_PTX = <<-PTX
 .version 8.0

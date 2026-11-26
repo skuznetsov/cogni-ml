@@ -270,7 +270,7 @@ class RecurrentBf16CodecBench
 end
 
 class CudaRecurrentInt8CodecRestorer
-  PTX = {{ read_file("src/ml/cuda/kernels/recurrent_int8_codec_probe.ptx") }}
+  PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/recurrent_int8_codec_probe.ptx") }}
 
   getter h2d_ms : Float64 = 0.0
   getter kv_ms : Float64 = 0.0
@@ -410,7 +410,7 @@ class CudaRecurrentInt8CodecRestorer
 end
 
 class CudaRecurrentBf16CodecRestorer
-  PTX = {{ read_file("src/ml/cuda/kernels/recurrent_int8_codec_probe.ptx") }}
+  PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/recurrent_int8_codec_probe.ptx") }}
 
   getter h2d_ms : Float64 = 0.0
   getter kv_ms : Float64 = 0.0
@@ -898,7 +898,7 @@ def upload_active_embeddings(stack : ML::CUDA::QwenMixedStackRunner,
 end
 
 class CudaQ4KTokenEmbedder
-  EMBED_Q4K_PTX = {{ read_file("src/ml/cuda/kernels/embed_q4k_probe.ptx") }}
+  EMBED_Q4K_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/embed_q4k_probe.ptx") }}
 
   def initialize(token_embd : ML::GGUF::QuantWeight,
                  @token_ids_device_ptr : ML::CUDA::DevicePtr,

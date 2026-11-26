@@ -8,8 +8,8 @@ require "option_parser"
 require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/cuda/driver"
 
-Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-NORM_PTX = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
+Q4K_PTX  = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
+NORM_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/deltanet_step_probe.ptx") }}
 
 DEFAULT_MODEL = ENV["GEMMA4_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 

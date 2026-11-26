@@ -5,7 +5,7 @@
 # attention start.
 
 module ML::CUDA::Gemma4SWAContextPTX
-  FULL_ATTN_PTX               = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
+  FULL_ATTN_PTX               = {{ read_file("#{__DIR__}/kernels/shared/fullattn_post_probe.ptx") }}
   GATED_ATTENTION_START       = "// Correctness-first gated GQA attention decode over a resident KV cache."
   GATED_ATTENTION_END         = "// Split-K long-context GQA attention decode, stage 1."
   GATED_ATTENTION_START_INDEX = FULL_ATTN_PTX.index(GATED_ATTENTION_START) || raise "gated attention kernel start not found"

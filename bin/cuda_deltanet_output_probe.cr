@@ -38,8 +38,8 @@ lib LibCUDADeltaOut
   fun cuCtxSynchronize : Int32
 end
 
-DN_PTX        = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-Q4K_PTX       = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+DN_PTX        = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/deltanet_step_probe.ptx") }}
+Q4K_PTX       = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 def cuda!(code : Int32, what : String) : Nil

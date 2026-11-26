@@ -8,9 +8,9 @@ module ML::CUDA
   class QwenOutputHeadRunner
     @profile_runner : ResidentSequenceRunner?
 
-    DN_PTX   = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-    Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-    Q6K_PTX  = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+    DN_PTX   = {{ read_file("#{__DIR__}/kernels/shared/deltanet_step_probe.ptx") }}
+    Q4K_PTX  = {{ read_file("#{__DIR__}/kernels/shared/q4k_gemv_probe.ptx") }}
+    Q6K_PTX  = {{ read_file("#{__DIR__}/kernels/shared/q6k_gemv_probe.ptx") }}
     TOP1_PTX = <<-PTX
     .version 8.0
     .target sm_80

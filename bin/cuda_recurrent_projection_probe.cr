@@ -35,9 +35,9 @@ lib LibCUDARecProj
   fun cuCtxSynchronize : Int32
 end
 
-Q4K_PTX       = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-Q4K_DUAL_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx") }}
-Q5K_PTX       = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
+Q4K_PTX       = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}
+Q4K_DUAL_PTX  = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/q4k_dual_gemv_probe.ptx") }}
+Q5K_PTX       = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/q5k_gemv_probe.ptx") }}
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 def cuda!(code : Int32, what : String) : Nil

@@ -1,7 +1,7 @@
 require "option_parser"
 require "../src/ml/cuda/driver"
 
-PCA_UPDOWN_PTX = {{ read_file("src/ml/cuda/kernels/pca_updown_probe.ptx") }}
+PCA_UPDOWN_PTX = {{ read_file("#{__DIR__}/../src/ml/cuda/kernels/qwen35/pca_updown_probe.ptx") }}
 
 hidden = 4096
 rank = 32

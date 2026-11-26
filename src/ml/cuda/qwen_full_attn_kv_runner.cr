@@ -9,10 +9,10 @@ module ML::CUDA
     @profile_runner : ResidentSequenceRunner?
     @increment_start_pos : Proc(Nil)?
 
-    FULL_ATTN_POST_PTX = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
-    DN_PTX             = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
-    Q4K_PTX            = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
-    Q6K_PTX            = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+    FULL_ATTN_POST_PTX = {{ read_file("#{__DIR__}/kernels/shared/fullattn_post_probe.ptx") }}
+    DN_PTX             = {{ read_file("#{__DIR__}/kernels/shared/deltanet_step_probe.ptx") }}
+    Q4K_PTX            = {{ read_file("#{__DIR__}/kernels/shared/q4k_gemv_probe.ptx") }}
+    Q6K_PTX            = {{ read_file("#{__DIR__}/kernels/shared/q6k_gemv_probe.ptx") }}
 
     class Weights
       getter attn_norm : Array(Float32)
