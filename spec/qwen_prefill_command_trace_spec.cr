@@ -138,7 +138,7 @@ describe ML::GGUF::QwenPrefillCommandTrace do
   end
 
   it "wraps only the ordinary routed full-layer call after the existing flush" do
-    source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
+    source = File.read(File.join(__DIR__, "../src/ml/models/qwen35/cpu/engine.cr"))
     source.scan("trace.observe_full_layer(").size.should eq(1)
     observe = source.index("trace.observe_full_layer(start_pos, n_tokens, il)").not_nil!
     boundary = source.rindex("flush_prefill_cmd.call if read_output", observe).not_nil!
@@ -153,7 +153,7 @@ describe ML::GGUF::QwenPrefillCommandTrace do
   end
 
   it "wraps only ordinary submit/wait and does not claim an encoded layer interval" do
-    source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
+    source = File.read(File.join(__DIR__, "../src/ml/models/qwen35/cpu/engine.cr"))
     source.scan("trace.observe(").size.should eq(1)
     ordinary = source.index("elsif cmd = append_prefill_cmd\n            begin").not_nil!
     observe = source.index("gpu_elapsed_ms = trace.observe(").not_nil!
