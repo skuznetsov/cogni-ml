@@ -42,7 +42,7 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
+      SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/qwen_image21/qwen_image21.metal") }}
 
       def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
         return nil unless qw.type.bf16? && rows > 0
@@ -262,7 +262,7 @@ module ML::GGUF
         false
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
+      SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/qwen_image21/qwen_image21.metal") }}
 
       def self.encode_matmul_to_buffer(
         encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
@@ -974,7 +974,7 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
+      SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/qwen_image21/qwen_image21.metal") }}
 
       private def self.phase_boundary(
         probe : QwenImage21MetalPhaseRecorder?,

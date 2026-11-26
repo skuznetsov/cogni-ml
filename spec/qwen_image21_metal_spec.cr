@@ -100,7 +100,7 @@ describe ML::GGUF::QwenImage21MetalAttentionPolicy do
   end
 
   it "preserves NaN and infinity in the staged kernel's BF16 conversion guard" do
-    source = File.read(File.expand_path("../src/ml/gguf/kernels/qwen_image21.metal", __DIR__))
+    source = File.read(File.expand_path("../src/ml/metal/kernels/qwen_image21/qwen_image21.metal", __DIR__))
 
     source.should contain("if (!isfinite(value)) return value;")
     source.should contain("attention_stages_valid")
@@ -162,7 +162,7 @@ describe "QwenImage21MetalAttentionBF16StagesRuntime" do
     pending!("set QWEN_IMAGE21_STAGE_RUNTIME=1 to compile and dispatch the tiny Metal probe") unless ENV["QWEN_IMAGE21_STAGE_RUNTIME"]? == "1"
     pending!("Metal is unavailable") unless ML::Metal::Device.init!
 
-    source = File.read(File.expand_path("../src/ml/gguf/kernels/qwen_image21.metal", __DIR__))
+    source = File.read(File.expand_path("../src/ml/metal/kernels/qwen_image21/qwen_image21.metal", __DIR__))
     staged_name = ML::GGUF::QwenImage21MetalAttentionPolicy.kernel_name(
       128, 1254, 1, setting: nil, bf16_stages_setting: "1", query_offset: 230)
     staged_name.should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL)
