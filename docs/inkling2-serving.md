@@ -69,11 +69,19 @@ cost of two scalar steps. Only target-confirmed tokens are emitted.
 Prefill and accepted decode tokens supply up to 1,023 recent context
 positions to the draft model.
 
-In quiet-host engine measurements on M2 Max, DSpark moved short Python
-(104 prompt tokens) from 34.65 to 41.62 tok/s and short prose (81 prompt
-tokens) from 34.71 to 32.66 tok/s against scalar decode. Both cases used
-49 greedy output tokens and matched the scalar token IDs. Decode timing
-excludes prefill and includes rejected work and fallback.
+Quiet-host M2 Max measurements used three passes, the research IQ4_NL
+target, and 49 greedy output tokens per run. All DSpark runs produced the
+same token IDs as scalar decode. Decode timing excludes prefill and
+includes rejected work and fallback.
+
+| Prompt | Tokens | Scalar (tok/s) | DSpark (tok/s) |
+| --- | ---: | ---: | ---: |
+| Python | 104 | 34.82 | 44.00 |
+| Python | 1,022 | 30.38 | 32.22 |
+| Prose | 81 | 34.66 | 32.48 |
+
+The short prompts report medians from two quiet pairs each. The long
+Python result comes from one quiet pair.
 
 ## Memory
 

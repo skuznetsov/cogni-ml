@@ -212,6 +212,45 @@ require "../src/ml/gguf/inkling2_engine"
 
   alias Inkling2LinearSpecSupport = Inkling2ResidentLinearSpecSupport
 
+  describe ML::GGUF::Inkling2DSparkDense do
+    it "matches the generic BF16 projection for an eight-row tile" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      in_dim = 67
+      out_dim = 13
+      values = Array(Float32).new(9 * in_dim) { |i| ((i * 7) % 31 - 15).to_f32 * 0.019_f32 }
+      weights = Array(UInt16).new(in_dim * out_dim) do |i|
+        value = ((i * 11) % 41 - 20).to_f32 * 0.031_f32
+        (value.unsafe_as(UInt32) >> 16).to_u16
+      end
+      buffers = [] of ML::MetalBuffer
+      begin
+        weight_bytes = weights.size * sizeof(UInt16)
+        weight_buffer = ML::MetalBuffer.new(weight_bytes)
+        buffers << weight_buffer
+        weight_buffer.write_bytes(weights.to_unsafe.as(UInt8*), weight_bytes)
+        weight = ML::GGUF::Inkling2View.new(weight_buffer)
+        input = Inkling2LinearSpecSupport.float_view([123_f32] + values, buffers).slice(1)
+        reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(9 * out_dim, 0_f32), buffers)
+        guarded = Inkling2LinearSpecSupport.float_view(Array(Float32).new(8 * out_dim + 2, 123_f32), buffers)
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        ML::GGUF::Inkling2DSparkDense.project(encoder, weight, input, reference, 9, in_dim, out_dim)
+        ML::GGUF::Inkling2DSparkDense.project(encoder, weight, input, guarded.slice(1), 8, in_dim, out_dim)
+        encoder.end_encoding
+        command.commit_and_wait
+
+        actual = Inkling2LinearSpecSupport.read(guarded, 8 * out_dim + 2)
+        actual.first.should eq(123_f32)
+        actual.last.should eq(123_f32)
+        expected = Inkling2LinearSpecSupport.read(reference, 8 * out_dim)
+        Inkling2LinearSpecSupport.float_bits(actual[1, 8 * out_dim]).should eq(Inkling2LinearSpecSupport.float_bits(expected))
+      ensure
+        buffers.each(&.release)
+      end
+    end
+  end
+
   class ML::Metal::PipelineCache
     def self.resident_linear_spec_contains?(name : String) : Bool
       @@cache.has_key?(name)

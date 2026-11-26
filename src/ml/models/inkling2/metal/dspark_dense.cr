@@ -43,13 +43,14 @@ require "../../../core/buffer"
         reject_overlap!(weight, weight_bytes, output, output_bytes, "weight", "output")
         reject_overlap!(input, input_bytes, output, output_bytes, "input", "output")
 
-        encoder.set_pipeline(pipeline("inkling2_dspark_dense"))
+        full_tile = rows == ROW_TILE
+        encoder.set_pipeline(pipeline(full_tile ? "inkling2_dspark_dense_rows8" : "inkling2_dspark_dense"))
         encoder.set_buffer(weight.buffer, 0, offset: weight.offset)
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
         encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
         encoder.set_value(in_dim.to_u32, 3)
         encoder.set_value(out_dim.to_u32, 4)
-        encoder.set_value(rows.to_u32, 5)
+        encoder.set_value(rows.to_u32, 5) unless full_tile
         encoder.dispatch_threadgroups(
           {
             ((out_dim.to_i64 + ROW_TILE - 1) // ROW_TILE).to_i32,
