@@ -1,4 +1,5 @@
 require "./weights"
+require "./loopcd"
 require "./matmul"
 require "./cpu/attention"
 
@@ -138,7 +139,14 @@ module ML::GGUF
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
                    prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, greedy_verifier : Bool? = false,
-                   @depth_speculation : Bool = false, fast_prefill : Bool = false)
+                   @depth_speculation : Bool = false, fast_prefill : Bool = false, loopcd : Inkling2LoopCD? = nil)
+      @loopcd = loopcd if loopcd && loopcd.strength > 0_f32
+      if @loopcd
+        raise ArgumentError.new("Inkling 2 LoopCD requires resident Metal") unless metal && resident
+        if greedy_verifier == true || @depth_speculation || @stop_delta || @trace
+          raise ArgumentError.new("Inkling 2 LoopCD requires fixed-depth scalar decode without loop tracing")
+        end
+      end
       if greedy_verifier == true && @depth_speculation
         raise ArgumentError.new("Inkling 2 cannot combine depth speculation and n-gram verification")
       end
@@ -255,6 +263,7 @@ module ML::GGUF
 
     private def evaluate_block4(tokens : StaticArray(Int32, 4), &)
       validate_active!
+      raise ArgumentError.new("Inkling 2 LoopCD supports only scalar decode") if @loopcd
       raise ArgumentError.new("Inkling 2 decode block exceeds the context of #{@max_seq} tokens") if tokens.size > @max_seq - @position
       tokens.each { |token| validate_token!(token) }
 
@@ -480,6 +489,9 @@ module ML::GGUF
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
       loops = self.class.resolve_passes(config.passes, config.varying?, passes)
+      if @loopcd && loops != 3
+        raise ArgumentError.new("Inkling 2 LoopCD requires exactly three passes")
+      end
       if @depth_speculation && (!config.varying? || loops != 10)
         raise ArgumentError.new("Inkling 2 depth speculation requires the variable-loop research checkpoint at 10 passes")
       end
@@ -496,7 +508,7 @@ module ML::GGUF
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
           if @greedy_verifier_auto
-            @greedy_verifier = loops == 3 && !@depth_speculation
+            @greedy_verifier = loops == 3 && !@depth_speculation && @loopcd.nil?
           end
           @fast_prefill = fast_prefill && !@depth_speculation && Inkling2Resident.fast_prefill_supported?(@weights, loops)
           rows = if auto_prefill_tile
@@ -514,12 +526,13 @@ module ML::GGUF
           append_rows = MAX_AUTO_APPEND_PREFILL_TILE if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
             append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation) ? DEPTH_BLOCK_ROWS : 0,
-            depth_speculation: @depth_speculation, fast_prefill: @fast_prefill)
+            depth_speculation: @depth_speculation, fast_prefill: @fast_prefill, loopcd: @loopcd)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
       raise ArgumentError.new("Inkling 2 greedy verification requires fixed-depth resident Metal") if @greedy_verifier
       raise ArgumentError.new("Inkling 2 depth speculation requires fixed-depth resident Metal") if @depth_speculation
+      raise ArgumentError.new("Inkling 2 LoopCD requires a supported resident Metal checkpoint") if @loopcd
       if prefill_tile || auto_prefill_tile
         raise ArgumentError.new("Setting the Inkling 2 prefill tile requires resident Metal")
       end

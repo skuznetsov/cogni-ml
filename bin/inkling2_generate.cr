@@ -31,6 +31,8 @@ print_ids = false
 ngram = nil.as(Bool?)
 profile = "fast"
 depth_speculation = false
+loopcd_mode = nil.as(ML::GGUF::Inkling2LoopCD::Mode?)
+loopcd_strength = nil.as(Float32?)
 trace_loops = false
 passes = nil.as(Int32?)
 prefill_tile = nil.as(Int32?)
@@ -62,6 +64,18 @@ parser.on("--print-ids", "Write generated token IDs as CSV to stderr") { print_i
 parser.on("--ngram", "Verify repeated continuations in four-token blocks on fixed-depth resident Metal") { ngram = true }
 parser.on("--no-ngram", "Disable n-gram-assisted greedy verification") { ngram = false }
 parser.on("--depth-speculation", "Draft at 3 passes and verify at 10 on resident Metal with research weights") { depth_speculation = true }
+parser.on("--loopcd MODE", "LoopCD on three-pass resident Metal (logits, hidden, hidden-blocks)") do |value|
+  loopcd_mode = case value
+                when "logits"        then ML::GGUF::Inkling2LoopCD::Mode::Logits
+                when "hidden"        then ML::GGUF::Inkling2LoopCD::Mode::Hidden
+                when "hidden-blocks" then ML::GGUF::Inkling2LoopCD::Mode::HiddenBlocks
+                else
+                  raise ArgumentError.new("--loopcd must be logits, hidden, or hidden-blocks")
+                end
+end
+parser.on("--loopcd-strength FLOAT", "LoopCD guidance weight (default: 0.25, zero disables it)") do |value|
+  loopcd_strength = value.to_f32? || raise ArgumentError.new("--loopcd-strength expects a number, got #{value.inspect}")
+end
 parser.on("--help", "Show this help") { help = true }
 
 begin
@@ -91,6 +105,14 @@ begin
     raise ArgumentError.new("--passes must be greater than zero") if pass_count <= 0
   end
 
+  strength = loopcd_strength
+  if strength && !loopcd_mode
+    raise ArgumentError.new("--loopcd-strength requires --loopcd")
+  end
+  loopcd = if mode = loopcd_mode
+             ML::GGUF::Inkling2LoopCD.new(mode, strength || ML::GGUF::Inkling2LoopCD::DEFAULT_STRENGTH)
+           end
+
   engine = nil.as(ML::GGUF::Inkling2Engine?)
   begin
     use_metal = false
@@ -112,7 +134,7 @@ begin
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
       passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
       auto_prefill_tile: auto_prefill_tile, fast_prefill: fast_prefill, greedy_verifier: verify_ngram,
-      depth_speculation: depth_speculation)
+      depth_speculation: depth_speculation, loopcd: loopcd)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids

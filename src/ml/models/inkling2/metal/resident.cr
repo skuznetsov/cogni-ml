@@ -1,6 +1,7 @@
 require "./attention"
 require "./linear"
 require "./math"
+require "../loopcd"
 
 module ML::GGUF
   # One command per decode token, known continuation block, or causal prefill
@@ -88,10 +89,11 @@ module ML::GGUF
     @greedy_ids : ML::MetalBuffer? = nil
     @scratch : Inkling2ResidentScratch
     @visits = [] of Visit
-    @draft_epilogue_visits = [] of Visit
+    @reference_epilogue_visits = [] of Visit
     @float_offsets = {} of UInt64 => Int64
     @shared = [] of ML::MetalBuffer
     @depth_checkpoint : ML::MetalBuffer? = nil
+    @loopcd_reference_logits : ML::MetalBuffer? = nil
     @depth_speculation : Bool
     @depth_frontier = 0_i32
     @depth_block_start : Int32? = nil
@@ -144,7 +146,8 @@ module ML::GGUF
 
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
                    max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil,
-                   rollback_rows : Int32 = 0, @depth_speculation : Bool = false, @fast_prefill : Bool = false)
+                   rollback_rows : Int32 = 0, @depth_speculation : Bool = false, @fast_prefill : Bool = false,
+                   @loopcd : Inkling2LoopCD? = nil)
       @config = @weights.config
       @max_seq = max_seq
       @scratch = Inkling2ResidentScratch.new(@fast_prefill)
@@ -184,13 +187,13 @@ module ML::GGUF
 
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
       @ids.contents.as(Int32*).value = token
-      evaluate(position, 1, with_logits)
+      evaluate(position, 1, with_logits, decode_step: true)
     end
 
     def forward_greedy(token : Int32, position : Int32) : Int32
       @ids.contents.as(Int32*).value = token
       output = greedy_ids_buffer
-      submit_tile(position, 1, output, greedy: true)
+      submit_tile(position, 1, output, greedy: true, guide_hidden: true)
       output.contents.as(Int32*).value
     end
 
@@ -220,7 +223,7 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 resident rewind end is outside the current frontier") unless 0 <= end_position <= @depth_frontier
       end
       @visits.each(&.rewind(end_position))
-      @draft_epilogue_visits.each(&.rewind(end_position))
+      @reference_epilogue_visits.each(&.rewind(end_position))
       @depth_frontier = end_position if @depth_speculation
     end
 
@@ -284,7 +287,7 @@ module ML::GGUF
 
       begin
         @visits.each(&.begin_speculation(position))
-        @draft_epilogue_visits.each(&.begin_speculation(position))
+        @reference_epilogue_visits.each(&.begin_speculation(position))
         @depth_block_start = position
         @depth_draft_rows = 0
         @depth_verified = false
@@ -332,7 +335,7 @@ module ML::GGUF
 
       begin
         @visits.each(&.finish_speculation(end_position))
-        @draft_epilogue_visits.each(&.finish_speculation(end_position))
+        @reference_epilogue_visits.each(&.finish_speculation(end_position))
         @depth_frontier = end_position
         clear_depth_block
       rescue ex
@@ -343,7 +346,7 @@ module ML::GGUF
 
     def reset : Nil
       @visits.each(&.reset)
-      @draft_epilogue_visits.each(&.reset)
+      @reference_epilogue_visits.each(&.reset)
       @depth_frontier = 0 if @depth_speculation
       @depth_failed = false
       clear_depth_block
@@ -352,12 +355,14 @@ module ML::GGUF
     def close : Nil
       @visits.each(&.close)
       @visits.clear
-      @draft_epilogue_visits.each(&.close)
-      @draft_epilogue_visits.clear
+      @reference_epilogue_visits.each(&.close)
+      @reference_epilogue_visits.clear
       @shared.each(&.release)
       @shared.clear
       @depth_checkpoint.try(&.release)
       @depth_checkpoint = nil
+      @loopcd_reference_logits.try(&.release)
+      @loopcd_reference_logits = nil
       @scratch.close
       @linear.close
     end
@@ -372,17 +377,17 @@ module ML::GGUF
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
         )
       end
-      if @depth_speculation
+      if @depth_speculation || @loopcd.try(&.mode.logits?)
         (@config.core_end...@config.n_layer).each do |physical|
           sliding = @config.sliding?(physical)
-          @draft_epilogue_visits << Visit.new(
+          @reference_epilogue_visits << Visit.new(
             Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode),
             Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
             Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
           )
         end
-        @depth_checkpoint = allocate_private(checkpoint_bytes)
       end
+      @depth_checkpoint = allocate_private(checkpoint_bytes) if @depth_speculation
       id_rows = Math.max(4, @append_prefill_rows || @prefill_rows)
       {upload_constants, allocate_shared(id_rows.to_i64 * sizeof(Int32)),
        allocate_shared(@config.vocab_size.to_i64 * sizeof(Float32))}
@@ -450,8 +455,8 @@ module ML::GGUF
       Inkling2View.new(@constants, @float_offsets[array.object_id])
     end
 
-    private def evaluate(position : Int32, rows : Int32, with_logits : Bool) : Array(Float32)?
-      submit_tile(position, rows, with_logits ? @logits : nil)
+    private def evaluate(position : Int32, rows : Int32, with_logits : Bool, *, decode_step : Bool = false) : Array(Float32)?
+      submit_tile(position, rows, with_logits ? @logits : nil, guide_hidden: with_logits || decode_step)
       @logits.read(@config.vocab_size) if with_logits
     end
 
@@ -498,7 +503,7 @@ module ML::GGUF
         end
       end
 
-      encode_epilogue_branch(tile, @draft_epilogue_visits, with_logits ? @logits : nil)
+      encode_epilogue_branch(tile, @reference_epilogue_visits, with_logits ? @logits : nil)
     end
 
     private def submit_depth_verification(position : Int32) : StaticArray(Array(Float32), 4)
@@ -556,13 +561,14 @@ module ML::GGUF
     end
 
     private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *,
-                            decode_block : Bool = false, greedy : Bool = false) : Nil
+                            decode_block : Bool = false, greedy : Bool = false, guide_hidden : Bool = false) : Nil
+      raise ArgumentError.new("Inkling 2 LoopCD supports only scalar decode") if decode_block && @loopcd
       if @depth_speculation
         ensure_ordinary_mode!
         raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
       end
       submit_command(rows) do |encoder|
-        encode_tile(encoder, position, rows, logits, decode_block, greedy)
+        encode_tile(encoder, position, rows, logits, decode_block, greedy, guide_hidden)
       end
       @depth_frontier = position + rows if @depth_speculation
     end
@@ -584,12 +590,12 @@ module ML::GGUF
       ensure
         command.discard unless command.committed?
         @visits.each(&.finish)
-        @draft_epilogue_visits.each(&.finish)
+        @reference_epilogue_visits.each(&.finish)
       end
     end
 
     private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32,
-                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool) : Nil
+                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool, guide_hidden : Bool) : Nil
       tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
       prelude = tile.hidden if @passes > 1
       banks = if @passes > 1
@@ -601,6 +607,8 @@ module ML::GGUF
       visit = encode_prelude(tile, prelude)
 
       previous_bank = nil
+      reference_logits = nil
+      loopcd = @loopcd
       @passes.times do |pass|
         visit = encode_core_pass(tile, visit, prelude, previous_bank, restore_prelude: pass > 0)
         if pass + 1 < @passes
@@ -613,18 +621,50 @@ module ML::GGUF
         if @depth_speculation && pass + 1 == DEPTH_DRAFT_PASSES
           # Pass 4 restores the saved prelude and block count before it resumes
           # the target path, so the shallow epilogue can reuse this tile.
-          encode_epilogue_branch(tile, @draft_epilogue_visits, nil)
+          encode_epilogue_branch(tile, @reference_epilogue_visits, nil)
+        elsif loopcd && loopcd.mode.logits? && pass + 1 == 2
+          if logits
+            reference_logits = @loopcd_reference_logits ||= allocate_private(@config.vocab_size.to_i64 * sizeof(Float32))
+          end
+          # Keep the reference convolution and KV history contiguous across
+          # prefill tiles, including tiles where no logit row is requested.
+          encode_epilogue_branch(tile, @reference_epilogue_visits, reference_logits)
         end
+      end
+
+      if loopcd && !loopcd.mode.logits? && guide_hidden
+        encode_hidden_guidance(tile, previous_bank.not_nil!, loopcd)
       end
 
       (@config.core_end...@config.n_layer).each do |physical|
         encode_layer(physical, visit, tile, nil)
         visit += 1
       end
-      encode_logits(tile, logits, greedy: greedy) if logits
+      encode_logits(tile, logits, greedy: greedy, reference_logits: reference_logits) if logits
     end
 
-    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false) : Nil
+    private def encode_hidden_guidance(tile : Tile, previous_bank : Inkling2View, loopcd : Inkling2LoopCD) : Nil
+      # Guide the final prompt row and each decode step. The next-state buffer
+      # is available until the epilogue starts.
+      row_offset = tile.elements - tile.width
+      previous_terminal = previous_bank.slice((@core_blocks - 1) * tile.elements + row_offset)
+      terminal = tile.current.slice(row_offset)
+      normalized = tile.next_state.slice(row_offset)
+      MathOps.rms(tile.encoder, terminal, normalized, nil, tile.width, 1, DEPTH_EPS)
+      MathOps.extrapolate(tile.encoder, normalized, previous_terminal, terminal, tile.width, loopcd.strength)
+
+      if loopcd.mode.hidden_blocks?
+        # Passes share the prelude, including the first core block's input.
+        (@core_blocks - 1).times do |block|
+          final = tile.blocks.slice((@prelude_blocks + 1 + block) * tile.elements + row_offset)
+          reference = previous_bank.slice(block * tile.elements + row_offset)
+          MathOps.extrapolate(tile.encoder, final, reference, final, tile.width, loopcd.strength)
+        end
+      end
+    end
+
+    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false,
+                              reference_logits : ML::MetalBuffer? = nil) : Nil
       encoder = tile.encoder
       rows = tile.decode_block? ? tile.rows : 1
       mixed = mix(tile, tile.current, @weights.output_res_query, 1)
@@ -636,7 +676,14 @@ module ML::GGUF
       logits = @scratch.take(rows * padded_vocab)
       @linear.project(encoder, @weights.output, normalized, logits, rows, decode_block: tile.decode_block?)
       output = Inkling2View.new(buffer)
-      if greedy
+      if reference_logits
+        scores = greedy ? logits : output
+        MathOps.extrapolate(encoder, logits, Inkling2View.new(reference_logits), scores, vocab,
+          @loopcd.not_nil!.strength, cap: @config.logit_softcap)
+        if greedy
+          MathOps.greedy_ids(encoder, @scratch, scores, output, 0_f32, vocab, padded_vocab, 1)
+        end
+      elsif greedy
         MathOps.greedy_ids(encoder, @scratch, logits, output, @config.logit_softcap, vocab, padded_vocab, rows)
       else
         rows.times do |row|
@@ -649,10 +696,10 @@ module ML::GGUF
       ensure_depth_enabled!
       ensure_depth_healthy!
       raise ArgumentError.new("Inkling 2 draft history end position is out of bounds") unless end_position.in?(0..@max_seq)
-      unless visit.in?(0...@draft_epilogue_visits.size)
+      unless visit.in?(0...@reference_epilogue_visits.size)
         raise IndexError.new("Inkling 2 draft layer visit out of bounds")
       end
-      @draft_epilogue_visits[visit]
+      @reference_epilogue_visits[visit]
     end
 
     private def active_depth_start : Int32

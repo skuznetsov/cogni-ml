@@ -326,6 +326,20 @@ kernel void inkling2_resident_softcap(
     output[tid] = inkling2_logit_softcap(input[tid], cap);
 }
 
+kernel void inkling2_resident_extrapolate(
+    device const float* target    [[buffer(0)]],
+    device const float* reference [[buffer(1)]],
+    device       float* output    [[buffer(2)]],
+    constant     uint&  count     [[buffer(3)]],
+    constant     float& strength  [[buffer(4)]],
+    constant     float& cap       [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= count) return;
+    const float value = inkling2_logit_softcap(target[tid], cap);
+    output[tid] = value + strength * (value - reference[tid]);
+}
+
 struct Inkling2GreedyCandidate {
     uint score_key;
     uint id;

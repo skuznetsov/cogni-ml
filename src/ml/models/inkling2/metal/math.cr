@@ -211,6 +211,25 @@ require "./scratch"
       encoder.dispatch_1d(vocab, THREADS)
     end
 
+    # The reference is already in the target's score space. Output may alias target.
+    def self.extrapolate(
+      encoder : ML::Metal::ComputeEncoder, target : Inkling2View, reference : Inkling2View, output : Inkling2View,
+      count : Int32, strength : Float32, *, cap : Float32 = 0_f32,
+    ) : Nil
+      validate_count!(count)
+      validate_view_extent!(target, count, "LoopCD target")
+      validate_view_extent!(reference, count, "LoopCD reference")
+      validate_view_extent!(output, count, "LoopCD output")
+      encoder.set_pipeline(pipeline("inkling2_resident_extrapolate"))
+      encoder.set_buffer(target.buffer, 0, offset: target.offset)
+      encoder.set_buffer(reference.buffer, 1, offset: reference.offset)
+      encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(count.to_u32, 3)
+      encoder.set_value(strength, 4)
+      encoder.set_value(cap, 5)
+      encoder.dispatch_1d(count, THREADS)
+    end
+
     # Reduce only the unpadded vocabulary, applying the same softcap as the
     # full-logit path before selecting the first finite maximum. A row without
     # a finite score returns -1, which the greedy caller handles when consumed.

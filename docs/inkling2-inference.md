@@ -62,6 +62,40 @@ depths scored 14, 13, 12, and 12 correct. These runs measure sensitivity
 to the local prompt formats. The published evaluation uses its own tasks
 and inference setup.
 
+## Experimental LoopCD guidance
+
+The generator exposes three opt-in LoopCD modes on three-pass resident Metal.
+They contrast pass three with pass two at fixed strength (0.25 by default).
+Active guidance uses scalar decode. A strength of zero selects ordinary
+inference, including automatic n-gram verification when applicable.
+
+| Mode | Guidance | State updated |
+| --- | --- | --- |
+| `logits` | `z3 + strength * (z3 - z2)` on the two softcapped output rows | A separate pass-two epilogue keeps its own KV and convolution history. For identical input IDs, the target KV matches ordinary three-pass inference. |
+| `hidden` | The same extrapolation on the two unit-RMS terminal states before the epilogue | The final row of each prefill call and each decode input can change the target epilogue KV. |
+| `hidden-blocks` | Terminal guidance plus extrapolation on the corresponding nonshared normalized core blocks | The same prediction rows as `hidden`. |
+
+The logit combination uses only the unpadded vocabulary and applies the model
+softcap once per branch, before combining. Hidden modes draw their reference
+from the existing core bank. Group a prompt into a single prefill call when
+comparing quality, because each prefill call guides its final row.
+
+On 30 fresh N-Hop prompts with the research IQ4_NL checkpoint, `logits` at
+strength 0.25 corrected one answer (15/30 to 16/30). Both hidden modes produced
+the same answers as ordinary three-pass inference. On a matched 1022-token
+prefix and 192 forced decode inputs on an M2 Max, scalar greedy throughput
+was 30.03 tok/s with ordinary inference, 25.55 tok/s with `logits`, and about
+30 tok/s with either hidden mode. These rates are a single warmed measurement
+per mode. Broader quality and free-generation evidence is needed for a preset.
+
+```sh
+./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
+  --passes 3 --loopcd logits --loopcd-strength 0.25 --prompt 'Your prompt'
+```
+
+This preset is a cogni-ml experiment inspired by [LoopCD](https://arxiv.org/html/2610.02185v1).
+Its reference pass and fixed weighting are part of the experimental setup.
+
 ## Metal throughput on Apple M2 Max
 
 ### Tuned native prefill
