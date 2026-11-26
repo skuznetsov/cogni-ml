@@ -1,0 +1,1225 @@
+{
+  "schema": "cogni_ml.pixelumm_ffn_f32_evidence/v1",
+  "created_at": "2026-10-27T14:55:26.890953+00:00",
+  "base_revision": "1c2c81a387d8a6a1f0ea1809a89cd074dc8862c8",
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in F32 FFN graph operands on pretrained PixelUMM block0, saved seeded synthetic inputs; strict BF16 stage parity and prepared-request latency at J21120.",
+    "verdict": "ROBUST within saved-fixture block0 numerical gates and balanced prepared-request latency; no default-on, decoder/generation, exclusive-kernel, physical-arithmetic or independent-replication claim.",
+    "decay_trigger": "Refresh on source, fixture/weights, device/OS/toolchain/backend, geometry, precision, captures, ownership, guards or lost evidence."
+  },
+  "contract": {
+    "risk": "CAUTION",
+    "reason": "Prior full-J profile identifies FFN matrix work as the main candidate; qualify dense arithmetic before enabling an alternative.",
+    "baseline": "BF16 resident feeds to existing MPSGraph gate/up/down matmul",
+    "candidate": "Only gate/up/down input and weight graph feeds cast to F32; matmul retains existing BF16 output boundary. BF16 storage and handoffs remain unchanged.",
+    "falsifier": "Nonfinite or any saved-upstream stage failure at unchanged atol=rtol=2e-5; no timing result overrides it.",
+    "default": "false; new option ffn_f32: true / --ffn-f32 is fixed at Plan preparation",
+    "rollback": "Omit the option; original C plan-create ABI forwards to mode zero. No native F16 candidate is selectable by a decoder Plan.",
+    "next_gate": "Sequential shared-workspace blocks with saved upstream outputs and admitted process memory before default promotion; prior eight-block BF16 qualification does not qualify the new mode."
+  },
+  "path_policy": {
+    "default": "deny",
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "examples/pixelumm_decoder_block_probe.cr",
+      "examples/pixelumm_ffn_projection_probe.cr",
+      "examples/support/pixelumm_block_probe.cr",
+      "examples/support/pixelumm_ffn_projection_probe.cr",
+      "examples/support/pixelumm_ffn_projection_bridge.mm",
+      "examples/support/pixelumm_ffn_dense.metal",
+      "src/ml/video/pixelumm_decoder_block_mps.cr",
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "spec/pixelumm_ffn_precision_spec.cr",
+      "spec/pixelumm_ffn_projection_spec.cr",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-f32.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "examples/pixelumm_decoder_block_probe.cr",
+      "examples/pixelumm_ffn_projection_probe.cr",
+      "examples/support/pixelumm_block_probe.cr",
+      "examples/support/pixelumm_ffn_projection_probe.cr",
+      "examples/support/pixelumm_ffn_projection_bridge.mm",
+      "examples/support/pixelumm_ffn_dense.metal",
+      "src/ml/video/pixelumm_decoder_block_mps.cr",
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "spec/pixelumm_ffn_precision_spec.cr",
+      "spec/pixelumm_ffn_projection_spec.cr",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-f32.json"
+    ],
+    "preserved_untracked": [
+      "examples/support/__pycache__/",
+      "spec/__pycache__/",
+      "spec/support/__pycache__/"
+    ]
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "model_py_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "oracle": "Saved adapted upstream-semantics PyTorch MPS captures, not rerun this slice; not compiled CUDA Flex or real decoder latents.",
+    "trusted_fixture_anchor": ".landmark/evidence/2026-10-26-hy-nomas-pixelumm-block.json",
+    "fixtures": {
+      "block0-small-v4": {
+        "metadata": {
+          "path": "results/block0-small-v4.json",
+          "bytes": 12504,
+          "sha256": "65f6cf4513951d42088743f3cca7bafb5b1d450de196c9154a63ed11e0b2fa5e"
+        },
+        "payload": {
+          "path": "results/block0-small-v4.bin",
+          "bytes": 871653888,
+          "sha256": "de2c4c90df4fab80c47fc0c1a32eb9ef6608ada89ef4ae8686c93c7fef11feba"
+        }
+      },
+      "block0-full-v1": {
+        "metadata": {
+          "path": "results/block0-full-v1.json",
+          "bytes": 5981,
+          "sha256": "ecec716b1204cf7aae12827164ab9af31122c073f55749505cab934bd64575ca"
+        },
+        "payload": {
+          "path": "results/block0-full-v1.bin",
+          "bytes": 926564864,
+          "sha256": "fc5882f0cbb6379f5695a068e55d9b7e29480e0c986d07587f8f69c305d402f5"
+        }
+      }
+    }
+  },
+  "source_lineage": {
+    "current_sources": {
+      "examples/support/pixelumm_block_probe.cr": {
+        "bytes": 12357,
+        "sha256": "beb23f38285cc74929e6e1ea29c8f14be8dea658b1efc9048b4075b588c59016"
+      },
+      "examples/support/hy_nomas_probe_instrumentation.cr": {
+        "bytes": 931,
+        "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48"
+      },
+      "examples/support/wan_memory_guard.py": {
+        "bytes": 37589,
+        "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+      },
+      "src/ml/video/pixelumm_decoder_block_mps.cr": {
+        "bytes": 50783,
+        "sha256": "77b69c730c71aa7af4bf208afcb385f543a1f174212c9a140364ae63b431bc65"
+      },
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+        "bytes": 85730,
+        "sha256": "0347878391b910bf2c6b113bcdc2a73d397dc365682c74ccf7497417d72d233d"
+      },
+      "src/ml/video/pixelumm_block_profile.cr": {
+        "bytes": 14465,
+        "sha256": "2be1cd4678bd526f1df9c9475959102817e67bcc8ba329a4a4ce43708c111a0b"
+      },
+      "src/ml/video/metal_mps_command_chain.cr": {
+        "bytes": 23232,
+        "sha256": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893"
+      },
+      "src/ml/video/metal_mps_command_chain.mm": {
+        "bytes": 63544,
+        "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf"
+      },
+      "src/ml/video/mps_api_profile.h": {
+        "bytes": 6230,
+        "sha256": "4d90ae317f000fa591beeeb6d64402d3647485468fd6a8f14b284a634ccdf0ea"
+      },
+      "src/ml/video/mps_api_profile.cr": {
+        "bytes": 9790,
+        "sha256": "df5233497b1ea1f923e0c677a29f6046ab9cbf1d5651a1eb7b9f6c18df18b31f"
+      },
+      "src/ml/video/mps_command_phase_profile.cr": {
+        "bytes": 5688,
+        "sha256": "8c02047451511fb3832f5c740def27b0390200f998fca4a8411e1ba43c0dfd75"
+      },
+      "src/ml/video/mps_continuation_trace.cr": {
+        "bytes": 8205,
+        "sha256": "dd85946332ec6a3fe6a1c51bc36e8dbb390a822e0469cd6540c587edee8d0557"
+      },
+      "Makefile": {
+        "bytes": 37449,
+        "sha256": "4baf8906b5e83c152ebe3c910777c8163e6c1861188ce5bbd49c113c1fba0921"
+      },
+      "examples/pixelumm_decoder_block_probe.cr": {
+        "bytes": 10429,
+        "sha256": "d21b2bafdcf4f5416a0ecdbb51ffa4bf1793ed8f312a65f71e3d628a937a2ab8"
+      },
+      "examples/pixelumm_ffn_projection_probe.cr": {
+        "bytes": 9846,
+        "sha256": "33812196a7653bc14611e6b50407619fe71f040b54a99576a3f288a2a212354a"
+      },
+      "examples/support/pixelumm_ffn_projection_probe.cr": {
+        "bytes": 10748,
+        "sha256": "0a81920ea6fb5b11276b2aa3f2c8b40039e4ed2513017eab5f23fcf9f6105c39"
+      },
+      "examples/support/pixelumm_ffn_projection_bridge.mm": {
+        "bytes": 11841,
+        "sha256": "198a35a869e41a6132fefcf88c4699dd61d438cf25fbc95655bf66feac607c19"
+      },
+      "examples/support/pixelumm_ffn_dense.metal": {
+        "bytes": 11985,
+        "sha256": "a1a4733b9eb2592125f9b7225bdb7ecda6669d315e1a39520fa1ce9cf4f9dfd1"
+      },
+      "spec/pixelumm_ffn_precision_spec.cr": {
+        "bytes": 1876,
+        "sha256": "f198d9c9cbf1ca7e31aea90cda27bdebfa223adab21ac2153d0ad7e5839ee464"
+      },
+      "spec/pixelumm_ffn_projection_spec.cr": {
+        "bytes": 1802,
+        "sha256": "37d9854c095166f8a7b53463900b6806f70232e24d71df6a995b156759770398"
+      }
+    },
+    "all_matrix_neural_sources_match_receipts": true,
+    "preserved_binaries": {
+      "pixelumm_decoder_block_probe-ffn-v1": {
+        "path": "build/pixelumm_decoder_block_probe-ffn-v1",
+        "bytes": 1331056,
+        "sha256": "d5bccd03fee4c6a7aa36f09c1a6a3ee6323f804b305fc459eb34e45fc6508573"
+      },
+      "pixelumm_decoder_block_probe-ffn-final-v1": {
+        "path": "build/pixelumm_decoder_block_probe-ffn-final-v1",
+        "bytes": 1331168,
+        "sha256": "34ecb82c72a3d71c8f799c7a000a84ec6b4d3b2b5df2357bd3014ccd6294bdad"
+      },
+      "pixelumm_ffn_projection_probe-ffn-v1": {
+        "path": "build/pixelumm_ffn_projection_probe-ffn-v1",
+        "bytes": 1278544,
+        "sha256": "88103dda830829c85d422d5ae30db81ecc21e481581edab80e6eb09f4ec108d4"
+      },
+      "pixelumm_ffn_projection_probe-ffn-final-v1": {
+        "path": "build/pixelumm_ffn_projection_probe-ffn-final-v1",
+        "bytes": 1278544,
+        "sha256": "88103dda830829c85d422d5ae30db81ecc21e481581edab80e6eb09f4ec108d4"
+      }
+    },
+    "metadata_evolution": "Four timed full-J reports predate only the decoder CLI precision wording; one also predates a Makefile spec-target edit. Native arithmetic/support sources match all matrix receipts. Final binary separately repeats small/full numerical gates.",
+    "projection_receipt_exception": {
+      "run": "ffn-gate-small-final-v1",
+      "file": "examples/pixelumm_decoder_block_probe.cr",
+      "reason": "unrelated decoder CLI precision metadata evolved; projection sources and archived/final projection binaries are equal"
+    },
+    "historical_diagnostic": "ffn-gate-full-v1 predates the connected-mode edits; pins retained but current runtime-source identity is not claimed for this rejected timing result",
+    "limitation": "Pre-execution pins and byte identity are not hermetic source-to-binary build attestation. The original test receipt omitted the new precision spec; a targeted 15-example rerun binds its current hash before execution and passes."
+  },
+  "numerical": {
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "block_requests": 24,
+    "compared_tensors": 72,
+    "all_compared_words_exact_and_finite": true,
+    "matrix_comparison_scope": "Only numerical gate and last timed request compare attention/output on CPU; intervening requests still capture GPU buffers.",
+    "small_final": "Both requests compare all 26 saved stages, 52 comparisons.",
+    "full_final": "Both requests compare attention/output, four comparisons.",
+    "projection_samples": 60,
+    "three_mps_arms_exact": true,
+    "cpu_gpu_metrics_agree": true,
+    "positive_controls": "Injected NaN rejected; coverage counts checked; F16 operand counters detect seeded underflow and overflow."
+  },
+  "timing": {
+    "order": [
+      "BF16",
+      "F32",
+      "F32",
+      "BF16"
+    ],
+    "method": "Separate serial processes, one resident block0 plan each, one numerical gate, one warmup and three measured requests. Balanced order, not same-process pairs.",
+    "includes": [
+      "native command encoding",
+      "existing terminal wait",
+      "GPU diagnostic capture copies",
+      "per-request graph operand casts"
+    ],
+    "excludes": [
+      "preparation/compilation/weight upload",
+      "postterminal CPU comparison"
+    ],
+    "pairs": [
+      {
+        "bf16": "ffn-block-full-bf16-a1",
+        "f32": "ffn-block-full-f32-b1",
+        "latency_reduction_percent": 29.395485573158,
+        "speed_factor": 1.4163400288464076
+      },
+      {
+        "bf16": "ffn-block-full-bf16-a2",
+        "f32": "ffn-block-full-f32-b2",
+        "latency_reduction_percent": 25.027480955209512,
+        "speed_factor": 1.3338220627248427
+      }
+    ],
+    "reports": {
+      "ffn-block-full-bf16-a1": {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "ffn_f32_graph_tensors": false,
+        "requests": 5,
+        "compared_tensors": 4,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 1.7095227080000002,
+        "timed_seconds": [
+          1.7095227080000002,
+          1.7120107500000001,
+          1.707256959
+        ],
+        "command_segments": 122,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 3223313892,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 5257087544,
+          "minimum_sampled_cache_aware_headroom_bytes": 31591743488,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 8589934592,
+          "returncode": 0
+        }
+      },
+      "ffn-block-full-f32-b1": {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "ffn_f32_graph_tensors": true,
+        "requests": 5,
+        "compared_tensors": 4,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 1.207000207,
+        "timed_seconds": [
+          1.197136959,
+          1.211102375,
+          1.207000207
+        ],
+        "command_segments": 128,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 3223313892,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 6913608128,
+          "minimum_sampled_cache_aware_headroom_bytes": 30979637248,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 8589934592,
+          "returncode": 0
+        }
+      },
+      "ffn-block-full-f32-b2": {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "ffn_f32_graph_tensors": true,
+        "requests": 5,
+        "compared_tensors": 4,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 1.194168,
+        "timed_seconds": [
+          1.194168,
+          1.187586375,
+          1.215354875
+        ],
+        "command_segments": 128,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 3223313892,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 6914886056,
+          "minimum_sampled_cache_aware_headroom_bytes": 29722755072,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 8589934592,
+          "returncode": 0
+        }
+      },
+      "ffn-block-full-bf16-a2": {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "ffn_f32_graph_tensors": false,
+        "requests": 5,
+        "compared_tensors": 4,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 1.5928076249999998,
+        "timed_seconds": [
+          1.5973486669999999,
+          1.588011001,
+          1.5928076249999998
+        ],
+        "command_segments": 122,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 3223313892,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 5153704384,
+          "minimum_sampled_cache_aware_headroom_bytes": 32202768384,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 8589934592,
+          "returncode": 0
+        }
+      },
+      "ffn-block-small-f32-final-v1": {
+        "grid": [
+          2,
+          32,
+          32
+        ],
+        "ffn_f32_graph_tensors": true,
+        "requests": 2,
+        "compared_tensors": 52,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 0.112176376,
+        "timed_seconds": [
+          0.112176376
+        ],
+        "command_segments": 16,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 1128907396,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 2061322040,
+          "minimum_sampled_cache_aware_headroom_bytes": 34656157696,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 4294967296,
+          "returncode": 0
+        }
+      },
+      "ffn-block-full-f32-final-v1": {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "ffn_f32_graph_tensors": true,
+        "requests": 2,
+        "compared_tensors": 4,
+        "all_compared_words_exact_and_finite": true,
+        "median_prepared_request_seconds": 1.195995416,
+        "timed_seconds": [
+          1.195995416
+        ],
+        "command_segments": 128,
+        "waits_per_request": 1,
+        "named_encode_allocations": 0,
+        "preterminal_reads": 0,
+        "named_bytes": 3223313892,
+        "guard": {
+          "maximum_sampled_group_footprint_bytes": 6870288784,
+          "minimum_sampled_cache_aware_headroom_bytes": 28551184384,
+          "maximum_sampled_swap_growth_bytes": 0,
+          "cap_bytes": 8589934592,
+          "returncode": 0
+        }
+      }
+    },
+    "limitation": "Retain BF16 drift. No exclusive FFN shader time, physical arithmetic, complete decoder or video speed claim."
+  },
+  "projection_diagnostics": {
+    "ffn-gate-small-final-v1": {
+      "geometry": {
+        "projection": "gate",
+        "m": 2048,
+        "k": 4096,
+        "n": 12288,
+        "input_origin": "saved seeded upstream J2048 capture; cyclic rows repeated on GPU, including at J21120"
+      },
+      "measured_rounds": 4,
+      "arms": [
+        {
+          "arm": "mps.bf16",
+          "median_root_union_seconds": 0.031103895817068405,
+          "min_root_union_seconds": 0.031081583321793005,
+          "max_root_union_seconds": 0.0316189166624099,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f32",
+          "median_root_union_seconds": 0.018755979181150906,
+          "min_root_union_seconds": 0.018471250019501895,
+          "max_root_union_seconds": 0.019502791634295136,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f16-rounded-f32",
+          "median_root_union_seconds": 0.01874166665947996,
+          "min_root_union_seconds": 0.018419250001898035,
+          "max_root_union_seconds": 0.018803708342602476,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "native.f16-mma",
+          "median_root_union_seconds": 0.023903395849629305,
+          "min_root_union_seconds": 0.023827375000109896,
+          "max_root_union_seconds": 0.02394625000306405,
+          "gate_passed": false,
+          "isolated_timings": true,
+          "maximum_failures": 149,
+          "maximum_different_words": 470
+        }
+      ],
+      "operand_roundtrip": {
+        "counter_order": [
+          "different_f32_values",
+          "nonzero_to_zero",
+          "finite_to_infinity"
+        ],
+        "counters": {
+          "input": [
+            2791,
+            2,
+            0
+          ],
+          "weight": [
+            5308,
+            38,
+            0
+          ],
+          "positive": [
+            2,
+            1,
+            1
+          ]
+        }
+      },
+      "guard": {
+        "maximum_sampled_group_footprint_bytes": 949323000,
+        "minimum_sampled_cache_aware_headroom_bytes": 36257284096,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "cap_bytes": 4294967296,
+        "returncode": 0
+      }
+    },
+    "ffn-up-small-final-v1": {
+      "geometry": {
+        "projection": "up",
+        "m": 2048,
+        "k": 4096,
+        "n": 12288,
+        "input_origin": "saved seeded upstream J2048 capture; cyclic rows repeated on GPU, including at J21120"
+      },
+      "measured_rounds": 4,
+      "arms": [
+        {
+          "arm": "mps.bf16",
+          "median_root_union_seconds": 0.032351270827348344,
+          "min_root_union_seconds": 0.03205866666394286,
+          "max_root_union_seconds": 0.03258391667623073,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f32",
+          "median_root_union_seconds": 0.01949045834771823,
+          "min_root_union_seconds": 0.019259916647570208,
+          "max_root_union_seconds": 0.01968825000221841,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f16-rounded-f32",
+          "median_root_union_seconds": 0.019723395831533708,
+          "min_root_union_seconds": 0.01934120833175257,
+          "max_root_union_seconds": 0.020018583338242024,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "native.f16-mma",
+          "median_root_union_seconds": 0.024668229176313616,
+          "min_root_union_seconds": 0.02449487498961389,
+          "max_root_union_seconds": 0.024972249986603856,
+          "gate_passed": false,
+          "isolated_timings": true,
+          "maximum_failures": 108,
+          "maximum_different_words": 447
+        }
+      ],
+      "operand_roundtrip": {
+        "counter_order": [
+          "different_f32_values",
+          "nonzero_to_zero",
+          "finite_to_infinity"
+        ],
+        "counters": {
+          "input": [
+            2791,
+            2,
+            0
+          ],
+          "weight": [
+            5580,
+            34,
+            0
+          ],
+          "positive": [
+            2,
+            1,
+            1
+          ]
+        }
+      },
+      "guard": {
+        "maximum_sampled_group_footprint_bytes": 949798088,
+        "minimum_sampled_cache_aware_headroom_bytes": 36193550336,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "cap_bytes": 4294967296,
+        "returncode": 0
+      }
+    },
+    "ffn-down-small-final-v1": {
+      "geometry": {
+        "projection": "down",
+        "m": 2048,
+        "k": 12288,
+        "n": 4096,
+        "input_origin": "saved seeded upstream J2048 capture; cyclic rows repeated on GPU, including at J21120"
+      },
+      "measured_rounds": 4,
+      "arms": [
+        {
+          "arm": "mps.bf16",
+          "median_root_union_seconds": 0.03172068748972379,
+          "min_root_union_seconds": 0.03168241668026894,
+          "max_root_union_seconds": 0.03180999998585321,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f32",
+          "median_root_union_seconds": 0.01952149998396635,
+          "min_root_union_seconds": 0.019370208319742233,
+          "max_root_union_seconds": 0.019619458325905725,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "mps.f16-rounded-f32",
+          "median_root_union_seconds": 0.019624291657237336,
+          "min_root_union_seconds": 0.019442208344116807,
+          "max_root_union_seconds": 0.019785874988883734,
+          "gate_passed": true,
+          "isolated_timings": true,
+          "maximum_failures": 0,
+          "maximum_different_words": 0
+        },
+        {
+          "arm": "native.f16-mma",
+          "median_root_union_seconds": 0.024454687503748573,
+          "min_root_union_seconds": 0.024409125006059185,
+          "max_root_union_seconds": 0.024554958334192634,
+          "gate_passed": false,
+          "isolated_timings": true,
+          "maximum_failures": 288,
+          "maximum_different_words": 748
+        }
+      ],
+      "operand_roundtrip": {
+        "counter_order": [
+          "different_f32_values",
+          "nonzero_to_zero",
+          "finite_to_infinity"
+        ],
+        "counters": {
+          "input": [
+            88396,
+            868,
+            0
+          ],
+          "weight": [
+            5800,
+            29,
+            0
+          ],
+          "positive": [
+            2,
+            1,
+            1
+          ]
+        }
+      },
+      "guard": {
+        "maximum_sampled_group_footprint_bytes": 813089848,
+        "minimum_sampled_cache_aware_headroom_bytes": 36426711040,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "cap_bytes": 4294967296,
+        "returncode": 0
+      }
+    }
+  },
+  "refutations": [
+    {
+      "route": "Native F16-operand K8 MMA replaces the strict BF16 path",
+      "falsifier_result": "149 gate / 108 up / 288 down tolerance failures at J2048; finite failures independently matched by CPU comparator.",
+      "decision": "Diagnostic only, tolerance unchanged."
+    },
+    {
+      "route": "Use repeated-row M21120 BF16/F32 root times for an exclusive ranking",
+      "falsifier_result": "Observed root lifetimes overlap diagnostic work in historical ffn-gate-full-v1.",
+      "decision": "Retain the historical report, disqualify its exclusive ranking; use the real connected block for latency."
+    },
+    {
+      "route": "Require current-core identity for every historical auxiliary record",
+      "falsifier_result": "Index validators v1/v2 rejected overbroad source assumptions: unrelated decoder CLI metadata, then pre-integration historical diagnostic core.",
+      "decision": "Final validator asserts exact known evolution sets and requires current-core identity for all qualified reports; no current-source claim for the historical disqualified timing report."
+    }
+  ],
+  "memory_and_execution": {
+    "physical_reserve_pct": 10,
+    "cache_accounting": "free plus file-backed once, including speculative; reclaimability estimate, not reservation",
+    "full_process_cap_gib": 8,
+    "small_process_cap_gib": 4,
+    "swap_growth_stop_mib": 64,
+    "deadlines_seconds": 180,
+    "serial_gpu": true,
+    "full_named_bytes": 3223313892,
+    "paired_sampled_process_footprint_gib": {
+      "bf16": "4.80-4.90",
+      "f32": "6.44"
+    },
+    "terminal_waits_per_connected_request": 1,
+    "named_encode_allocations": 0,
+    "preterminal_activation_readbacks": 0,
+    "full_command_segments": {
+      "bf16": 122,
+      "f32": 128
+    },
+    "small_command_segments": {
+      "bf16": 13,
+      "f32": 16
+    },
+    "submission_sites": "Unchanged; MPS backend topology differs.",
+    "limitation": "Named counts exclude opaque MPS allocations; process polling does not bound between-sample peaks."
+  },
+  "verification": {
+    "release_build": "Passed ffn-build-final-v1; preserved decoder and projection binaries.",
+    "specs": {
+      "examples": 62,
+      "failures": 0,
+      "groups": [
+        15,
+        15,
+        28,
+        4
+      ]
+    },
+    "commands_from_receipts": {
+      "ffn-build-final-v1": [
+        "make",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build",
+        "pixelumm_decoder_block_probe",
+        "pixelumm_ffn_projection_probe"
+      ],
+      "ffn-spec-final-v1": [
+        "make",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build",
+        "spec_pixelumm_decoder_block",
+        "spec_pixelumm_two_block_probe",
+        "spec_pixelumm_block_profile",
+        "spec_pixelumm_ffn_projection"
+      ],
+      "ffn-block-small-f32-final-v1": [
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/build/pixelumm_decoder_block_probe-ffn-final-v1",
+        "--reference",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-small-v4.json",
+        "--reference-sha256",
+        "65f6cf4513951d42088743f3cca7bafb5b1d450de196c9154a63ed11e0b2fa5e",
+        "--report",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/ffn-block-small-f32-final-v1.json",
+        "--max-named-bytes",
+        "2147483648",
+        "--warmups",
+        "0",
+        "--repeats",
+        "1",
+        "--ffn-f32"
+      ],
+      "ffn-block-full-f32-final-v1": [
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/build/pixelumm_decoder_block_probe-ffn-final-v1",
+        "--reference",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-full-v1.json",
+        "--reference-sha256",
+        "ecec716b1204cf7aae12827164ab9af31122c073f55749505cab934bd64575ca",
+        "--report",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/ffn-block-full-f32-final-v1.json",
+        "--max-named-bytes",
+        "4294967296",
+        "--warmups",
+        "0",
+        "--repeats",
+        "1",
+        "--ffn-f32"
+      ]
+    },
+    "external_index": {
+      "analysis": {
+        "path": "results/ffn-qualification-summary-v3.json",
+        "bytes": 31627,
+        "sha256": "a36ee19aec82fe8edbb25a4ef05811f6bd7446b54c41f999f3fe4a6f37dc43a2"
+      },
+      "script": {
+        "path": "tmp/validate_ffn_qualification_v3.py",
+        "bytes": 12771,
+        "sha256": "980b36a5f2bebf5f0bfc1f167c18d68f73eea7d16f01cc8a05b929172cd816db"
+      },
+      "receipt": {
+        "path": "results/ffn-qualification-index-v3.pre-execution.json",
+        "bytes": 5301,
+        "sha256": "41e3f575d63e8bedb88fd233bdb7deeabd90388c3863be4fda2cad97de955cd7"
+      },
+      "out": {
+        "path": "logs/ffn-qualification-index-v3.out",
+        "bytes": 306,
+        "sha256": "803c83bd54575d1a60c36e8cd609415109791547aa46f081ef5c9c3f5f71e7d3"
+      },
+      "argv.json": {
+        "path": "logs/ffn-qualification-index-v3.argv.json",
+        "bytes": 674,
+        "sha256": "dcf8990fa28a3db062c44e3c262cb8b4d1237547db7b212b973bef0e0a2400cc"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-qualification-index-v3.guard.jsonl",
+        "bytes": 2591,
+        "sha256": "2586ac7e3c35ef3417603b0264bf7040c4efcebce56bc84da4e200b9715b8455"
+      }
+    },
+    "index_observed": "Exit 0; recomputed trusted fixture metadata/payload hashes, report stage hashes, source/binary identity, all sampled guard limits and balanced medians.",
+    "structural_fallback": "scripts/validate-landmark-graph.sh is absent. Use explicit path/schema/source/artifact/numerical/guard checks; do not treat packet presence as runtime proof.",
+    "diff_check": "git diff --check and git diff --cached --check passed; repeat final staged check immediately before commit.",
+    "precision_spec_binding_refresh": {
+      "command": [
+        "make",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build",
+        "spec_pixelumm_decoder_block"
+      ],
+      "observed": "15 admission/precision examples pass, no GPU resources created; repeated only to close the missing new-spec pre-execution hash.",
+      "source": {
+        "spec/pixelumm_ffn_precision_spec.cr": {
+          "bytes": 1876,
+          "sha256": "f198d9c9cbf1ca7e31aea90cda27bdebfa223adab21ac2153d0ad7e5839ee464"
+        }
+      },
+      "receipt": {
+        "path": "results/ffn-precision-receipt-final-v1.pre-execution.json",
+        "bytes": 5306,
+        "sha256": "904bc49cd206da0e8fe74779ea03ce47fd496716bf182ae02784d035f48ba4a6"
+      }
+    }
+  },
+  "artifacts": {
+    "ffn-block-full-bf16-a1": {
+      "receipt": {
+        "path": "results/ffn-block-full-bf16-a1.pre-execution.json",
+        "bytes": 5770,
+        "sha256": "9f0096e8e2e07cc536f82d98c0c65ce6a875826071cb3cdaf8934f38c8499421"
+      },
+      "out": {
+        "path": "logs/ffn-block-full-bf16-a1.out",
+        "bytes": 768,
+        "sha256": "0db0b084636c7a87f20e2070ef2cf27d1aac21998491eef523aac306792438f5"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-full-bf16-a1.argv.json",
+        "bytes": 1057,
+        "sha256": "bdf3b3121070083450a4bcd334c0acc5158fa8cf0fb356410415e69fdd553bf9"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-full-bf16-a1.guard.jsonl",
+        "bytes": 9404,
+        "sha256": "8a2ff2b4bbfc5b32d06659fb8f789bbb8a29bf5293bcd6efa0594e32c4d3fc7a"
+      },
+      "report": {
+        "path": "results/ffn-block-full-bf16-a1.json",
+        "bytes": 6859,
+        "sha256": "4dc5e95e61238fc27ba2737765d4fe294c7e9631803b69e7f0ccf13d0fbe8f40"
+      }
+    },
+    "ffn-block-full-f32-b1": {
+      "receipt": {
+        "path": "results/ffn-block-full-f32-b1.pre-execution.json",
+        "bytes": 5785,
+        "sha256": "c77473f376c8f0096611825e5a005a0473596ead3550c6fe176d1886266a0830"
+      },
+      "out": {
+        "path": "logs/ffn-block-full-f32-b1.out",
+        "bytes": 746,
+        "sha256": "73a33d068ea16bd4fbb8859a5eb889e6493ab41850b4d89abd009f7ccf8f6c85"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-full-f32-b1.argv.json",
+        "bytes": 1070,
+        "sha256": "c9ca07d278a0d88e2723989a1fcd2ee5e8131040cde75f6b341feb08a3be4767"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-full-f32-b1.guard.jsonl",
+        "bytes": 7549,
+        "sha256": "6d4200907ecc4728e39ce3e2c773a1eee9a08056b5ecb52db858e30f1d8fafd7"
+      },
+      "report": {
+        "path": "results/ffn-block-full-f32-b1.json",
+        "bytes": 6821,
+        "sha256": "3b200405a0b65eff512e157d927305c15015b354aa9326641673ddfc76aabb6d"
+      }
+    },
+    "ffn-block-full-f32-b2": {
+      "receipt": {
+        "path": "results/ffn-block-full-f32-b2.pre-execution.json",
+        "bytes": 5785,
+        "sha256": "59e7c2cace5a95b85c32130eb24fedb4ecd5d199c8bc68b5c42e6aec9ecd7307"
+      },
+      "out": {
+        "path": "logs/ffn-block-full-f32-b2.out",
+        "bytes": 743,
+        "sha256": "449acac86c1afebfe34136005da6eafa13acbe5d9f9ffec873d9302091d9f271"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-full-f32-b2.argv.json",
+        "bytes": 1070,
+        "sha256": "44519cd42dda113baf681ce0a875d92e1f1d98ee7edc91dfc5b63644443c8f0c"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-full-f32-b2.guard.jsonl",
+        "bytes": 7555,
+        "sha256": "94e12a03eed76723f474803332d7e3c5b6077a9ea158e74af88adf04350ba0ee"
+      },
+      "report": {
+        "path": "results/ffn-block-full-f32-b2.json",
+        "bytes": 6820,
+        "sha256": "caeba5f444f8068618f7da62893b62b3d9e8d5fff2c5ce78b7c8b601fe14abc3"
+      }
+    },
+    "ffn-block-full-bf16-a2": {
+      "receipt": {
+        "path": "results/ffn-block-full-bf16-a2.pre-execution.json",
+        "bytes": 5770,
+        "sha256": "045669bf653500a5b42b71a2598c236bf9df9b822b0380785a528412e378d1f1"
+      },
+      "out": {
+        "path": "logs/ffn-block-full-bf16-a2.out",
+        "bytes": 760,
+        "sha256": "5072a5915a96ab479eceb2656b7d4855f7959b4ba9101126d9044aa0c2446264"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-full-bf16-a2.argv.json",
+        "bytes": 1057,
+        "sha256": "4eeeef8a03bebe3ada7f7f4fd339e15573a8f82bfca7409fb3a476fdcef0e4a6"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-full-bf16-a2.guard.jsonl",
+        "bytes": 8786,
+        "sha256": "b38a0df5ac93849747b3282e7e3c9392c49cf013d7fb9fcc0296f57af8bf312c"
+      },
+      "report": {
+        "path": "results/ffn-block-full-bf16-a2.json",
+        "bytes": 6827,
+        "sha256": "3e333f33e7084c4cc2ad905ef0740ce2a1a57eb3c0b9a172bb1cba211538fb28"
+      }
+    },
+    "ffn-block-small-f32-final-v1": {
+      "receipt": {
+        "path": "results/ffn-block-small-f32-final-v1.pre-execution.json",
+        "bytes": 5994,
+        "sha256": "f6727086addf1d14be0a25cb66a8c515e9dbe8e29bce7f51d30bcd265ea93792"
+      },
+      "out": {
+        "path": "logs/ffn-block-small-f32-final-v1.out",
+        "bytes": 613,
+        "sha256": "f7136e02c4bc3391ea1ebaefdb20e40e103ff86aa5ab69629fc7cde93a26c94a"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-small-f32-final-v1.argv.json",
+        "bytes": 1110,
+        "sha256": "85c4f6913691de89ca4a20a164ef9b7fa3d4e2a22cb9b5d4f3f69871223283fd"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-small-f32-final-v1.guard.jsonl",
+        "bytes": 4756,
+        "sha256": "bb7d82269dd9e2c285935de3c70bf925dd84f41bd6d1ee45237426e1e1bdedc4"
+      },
+      "report": {
+        "path": "results/ffn-block-small-f32-final-v1.json",
+        "bytes": 25052,
+        "sha256": "c1bb0231633d7ef35791fd9f5d56a1a19895cc0d5a19288c0126ee4acf8c8481"
+      }
+    },
+    "ffn-block-full-f32-final-v1": {
+      "receipt": {
+        "path": "results/ffn-block-full-f32-final-v1.pre-execution.json",
+        "bytes": 5991,
+        "sha256": "978f694c62670871b46af7debb8eb8dce17750affe35fc89085e2fd8c57b85f6"
+      },
+      "out": {
+        "path": "logs/ffn-block-full-f32-final-v1.out",
+        "bytes": 612,
+        "sha256": "9f6340fbccb756ba9e640544c7d2757b1763a20fcccf1282c960b726b34160f4"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-full-f32-final-v1.argv.json",
+        "bytes": 1107,
+        "sha256": "36071665c7047567df467312e97102e19bf4378eb432c81c8e422af2f504b5e3"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-full-f32-final-v1.guard.jsonl",
+        "bytes": 5384,
+        "sha256": "8129fb229c8efc37fc9bcc4a26fb01b6e38d8d41179cc76cf0a5023b5567ea03"
+      },
+      "report": {
+        "path": "results/ffn-block-full-f32-final-v1.json",
+        "bytes": 4935,
+        "sha256": "92508457e30eb733aa3024db1ec4a8e2413b3112e06ec1a6ec546a9f787e702b"
+      }
+    },
+    "ffn-gate-small-final-v1": {
+      "receipt": {
+        "path": "results/ffn-gate-small-final-v1.pre-execution.json",
+        "bytes": 5763,
+        "sha256": "1233af3ebf5c2bca09938a0ba45c428b423e397927aaa79125e3c6c571f120f3"
+      },
+      "out": {
+        "path": "logs/ffn-gate-small-final-v1.out",
+        "bytes": 355,
+        "sha256": "639c028a1031ca6b56f563c6b5db3e1511c12c5e20306590150804e18c81697c"
+      },
+      "argv.json": {
+        "path": "logs/ffn-gate-small-final-v1.argv.json",
+        "bytes": 1049,
+        "sha256": "f9bc0d35496f2ae019718d8b0a6aa2067b2bc117a3c96516a705067c8f5992f2"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-gate-small-final-v1.guard.jsonl",
+        "bytes": 2589,
+        "sha256": "0f9e3912c8e85f0e4ad1842a9a183bf12ed82e941c9040dbb1d1671b55676954"
+      },
+      "report": {
+        "path": "results/ffn-gate-small-final-v1.json",
+        "bytes": 21811,
+        "sha256": "716449f669775a99b69b3661bd2ddfb8146b581a2af2a95a11bcd75ec7a233e8"
+      }
+    },
+    "ffn-up-small-final-v1": {
+      "receipt": {
+        "path": "results/ffn-up-small-final-v1.pre-execution.json",
+        "bytes": 5951,
+        "sha256": "57a72592fb71b246ce8f95c4e5b4fda0b7bdfd42869a07e079ac069af6d14b91"
+      },
+      "out": {
+        "path": "logs/ffn-up-small-final-v1.out",
+        "bytes": 383,
+        "sha256": "7cdf06d4484cf6591cde245bb4c83ce6985c33db168ae1fd519f849b576c6e6d"
+      },
+      "argv.json": {
+        "path": "logs/ffn-up-small-final-v1.argv.json",
+        "bytes": 1068,
+        "sha256": "dac375bad47eb9e03beec163a6c51c0c68a6c4bedb9f755ed61109cb0e65d688"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-up-small-final-v1.guard.jsonl",
+        "bytes": 2590,
+        "sha256": "aeb4461e4aae5037652851b41a66ed13a9c3513b275afb8f09487bfd37417914"
+      },
+      "report": {
+        "path": "results/ffn-up-small-final-v1.json",
+        "bytes": 21805,
+        "sha256": "9bd2b3b37e8bfa109a2cdcd060b86559bfe3b4ec63334852ca7778b977d07ab6"
+      }
+    },
+    "ffn-down-small-final-v1": {
+      "receipt": {
+        "path": "results/ffn-down-small-final-v1.pre-execution.json",
+        "bytes": 5957,
+        "sha256": "fa134955157b1d73eae5484571f899c9ff3ad99b6be6fd46470b9f15134729fc"
+      },
+      "out": {
+        "path": "logs/ffn-down-small-final-v1.out",
+        "bytes": 383,
+        "sha256": "28b01f590c711b135807034fca139937d2c40faddfa78fbcfbeaed93db0868a5"
+      },
+      "argv.json": {
+        "path": "logs/ffn-down-small-final-v1.argv.json",
+        "bytes": 1074,
+        "sha256": "4b09c65ac52cf9070cf7ed9f69cee586a054332f8a7c1f89e069628056756818"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-down-small-final-v1.guard.jsonl",
+        "bytes": 2285,
+        "sha256": "66861b0601ae16fe85c56330cf48d81f608da2e860c82e74282a6b16ed538200"
+      },
+      "report": {
+        "path": "results/ffn-down-small-final-v1.json",
+        "bytes": 21519,
+        "sha256": "ab9c5071ae350a00af72cfafa761ef1328b4480b3cda4ee117e9c26fb1fb6dc4"
+      }
+    },
+    "ffn-gate-full-v1": {
+      "receipt": {
+        "path": "results/ffn-gate-full-v1.pre-execution.json",
+        "bytes": 5367,
+        "sha256": "7e32c55a79eb3cc9edaeaec275a5f29aa4d6934a35705f91f1bcda7bf37dcd55"
+      },
+      "out": {
+        "path": "logs/ffn-gate-full-v1.out",
+        "bytes": 357,
+        "sha256": "b1769a8d113fd164f4ae078c1ca1881fcbb9aaac1670dfca05a8735bea66688c"
+      },
+      "argv.json": {
+        "path": "logs/ffn-gate-full-v1.argv.json",
+        "bytes": 1036,
+        "sha256": "da19a61354b13dcabd192bc42eb6c0a9e58e1bb79d32d5b6cc35bc86f10bb96e"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-gate-full-v1.guard.jsonl",
+        "bytes": 4143,
+        "sha256": "c8b02c08e4398c3547a34b9087ec8ca9b18a8febf8110b7324feb41f8c9301b4"
+      },
+      "report": {
+        "path": "results/ffn-gate-full-v1.json",
+        "bytes": 16104,
+        "sha256": "f3f9523687583de15b1b1c63bda5d2281d10345c8515a8538c3a50b59cbbf853"
+      }
+    },
+    "ffn-block-build-v1": {
+      "receipt": {
+        "path": "results/ffn-block-build-v1.pre-execution.json",
+        "bytes": 4794,
+        "sha256": "3afce71d89935878ea1e7a240f576c46cca733e486cb0d950383c8cd583c9ae2"
+      },
+      "out": {
+        "path": "logs/ffn-block-build-v1.out",
+        "bytes": 2988,
+        "sha256": "a36e4654b1ab8bbeb02b52183267dd8bdf2320f00123dd910142a0f9134ee9c6"
+      },
+      "argv.json": {
+        "path": "logs/ffn-block-build-v1.argv.json",
+        "bytes": 703,
+        "sha256": "5419a03e93e378e21e69e8c9e3cd87051cb3383dfa505ca8ae89f85e7c176e75"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-block-build-v1.guard.jsonl",
+        "bytes": 10917,
+        "sha256": "3253c01a1438eefc3ad930e740451ebd4818db8cd0d7d97d9f35a88db9efd6b1"
+      }
+    },
+    "ffn-build-final-v1": {
+      "receipt": {
+        "path": "results/ffn-build-final-v1.pre-execution.json",
+        "bytes": 5332,
+        "sha256": "9b3c763e1765318187e806e7261bad1d06f511f0da765827902d0a57da99d7ae"
+      },
+      "out": {
+        "path": "logs/ffn-build-final-v1.out",
+        "bytes": 622,
+        "sha256": "6d2498d7ec1d3376f208a9438d7fd3450a6db9304e8ff12e53f7af690e470d50"
+      },
+      "argv.json": {
+        "path": "logs/ffn-build-final-v1.argv.json",
+        "bytes": 703,
+        "sha256": "a02e3d9473411bb9e7263ae576c881119f5e3e52340a746d8f873c3804de00be"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-build-final-v1.guard.jsonl",
+        "bytes": 5682,
+        "sha256": "e08ea41b0124005adb237c96c4c753f0590974c580277630f3ef543d4de16955"
+      }
+    },
+    "ffn-spec-final-v1": {
+      "receipt": {
+        "path": "results/ffn-spec-final-v1.pre-execution.json",
+        "bytes": 5245,
+        "sha256": "b9c9fbd252876f9507921debb423e0a4079b32e1376e00684c93c4072446c8a1"
+      },
+      "out": {
+        "path": "logs/ffn-spec-final-v1.out",
+        "bytes": 1564,
+        "sha256": "3396ac081b36c1668e52f8bb4ebf847ef0bce167350a4782544853b837f802a7"
+      },
+      "argv.json": {
+        "path": "logs/ffn-spec-final-v1.argv.json",
+        "bytes": 768,
+        "sha256": "60715eb2cb043e3e84a645742b4a2d92822a053b9e5029c8428d51505514c721"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-spec-final-v1.guard.jsonl",
+        "bytes": 6296,
+        "sha256": "4e36d2ebd02b2d1d209dd473d9521ba4157b60a4106159f03379982442bf3a48"
+      }
+    },
+    "ffn-precision-receipt-final-v1": {
+      "receipt": {
+        "path": "results/ffn-precision-receipt-final-v1.pre-execution.json",
+        "bytes": 5306,
+        "sha256": "904bc49cd206da0e8fe74779ea03ce47fd496716bf182ae02784d035f48ba4a6"
+      },
+      "out": {
+        "path": "logs/ffn-precision-receipt-final-v1.out",
+        "bytes": 594,
+        "sha256": "629640c5cef0ab18ed3793a98525b203f7f1f18a10064bc78bc6108dd1237873"
+      },
+      "argv.json": {
+        "path": "logs/ffn-precision-receipt-final-v1.argv.json",
+        "bytes": 679,
+        "sha256": "eb1ae6fc073172a9ee46e5f8e8e897d54d6af510070ec2ed45e4049d52ec085a"
+      },
+      "guard.jsonl": {
+        "path": "logs/ffn-precision-receipt-final-v1.guard.jsonl",
+        "bytes": 2904,
+        "sha256": "b366ad8ff91ccd93f5d2320e9db5d0928d637c20667eab3aaf4ea4d64f508426"
+      }
+    }
+  },
+  "adversary": {
+    "lineage": "Same-lineage correlated Mini-Quad, not independent replication.",
+    "scope": "Final read-only source, four matrix reports, final small/full parity, external v3 index, docs/LANDMARKS and evidence packet reviewed; no material numerical/timing/source-exception blocker. The missing new-spec test pin identified by review is closed by the fresh pre-execution-pinned admission rerun.",
+    "verdict": "ROBUST within the declared bounded fixture scope"
+  },
+  "boundaries": {
+    "admitted": [
+      "Bounded block0 arithmetic and prepared-request latency on saved fixtures",
+      "Opt-in Plan/CLI mode, legacy ABI preserved"
+    ],
+    "rejected": [
+      "Native F16 arithmetic promotion",
+      "Default-on F32 mode before multi-block memory/parity gate",
+      "Exclusive timing ranking from overlapping repeated-row roots"
+    ],
+    "unqualified": [
+      "Full decoder",
+      "Real decoder latent quality",
+      "Diffusion",
+      "Studio",
+      "Generation or seconds of video",
+      "Backend physical arithmetic"
+    ]
+  }
+}

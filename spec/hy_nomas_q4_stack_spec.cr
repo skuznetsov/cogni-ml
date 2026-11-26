@@ -1,0 +1,579 @@
+require "spec"
+require "digest/sha256"
+require "file_utils"
+require "json"
+require "./support/video_allocation_counter"
+require "../src/ml/metal/device"
+require "../src/ml/video/hy_nomas_q4_stack"
+require "../src/ml/video/hy_nomas_bf16_stack"
+
+private def finish_hy_nomas_pass(cursor : ML::Video::HyNomasFullPassCursor,
+                                 chain_id : UInt64) : Nil
+  cursor.block_count.times do |block_index|
+    cursor.validate_block!(chain_id, block_index.to_i32,
+      previous_terminal: false, previous_wait_count: 0)
+    cursor.finish_block!(chain_id, block_index.to_i32)
+  end
+end
+
+private class HyNomasQ4StackSpecFixture
+  getter directory : String
+  getter index_path : String
+  getter index_sha256 : String
+  getter source_sha256 : String
+  getter source_bytes : Int64
+  getter payload_bytes : Int64
+  getter stage_bytes : Int64
+  getter config : ML::Video::HyNomasConfig
+  @index_sha256 : String
+  @globals_sha256 : String
+
+  def initialize
+    @directory = File.tempname("hy-nomas-q4-stack")
+    FileUtils.mkdir_p(@directory)
+    @index_path = File.join(@directory, "index.json")
+    @index_sha256 = ""
+    @source_sha256 = Digest::SHA256.hexdigest("synthetic-full-checkpoint")
+    @source_bytes = 34_213_991_280_i64
+    @config = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 1,
+      text_tokens: 1, dim: 64, heads: 1, head_dim: 64, ffn_dim: 256)
+    @config.validate!
+    @stage_bytes = ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(
+      @config, block_index: 0).sum do |binding|
+      binding.shape.reduce(1_i64) { |count, dimension| count * dimension } * 2_i64
+    end
+    @payload_bytes = 0_i64
+    @block_entries = [] of NamedTuple(block_index: Int32, manifest: String,
+      manifest_sha256: String, payload_sha256: String, bf16: String,
+      bf16_sha256: String)
+    54.times do |block_index|
+      @block_entries << write_block(block_index.to_i32)
+    end
+    globals_name = "globals-bf16.safetensors"
+    globals_path = File.join(@directory, globals_name)
+    write_file(globals_path, "global BF16 control")
+    @globals_sha256 = sha256(globals_path)
+    @index_sha256 = write_index
+  end
+
+  def cleanup : Nil
+    FileUtils.rm_rf(@directory)
+  end
+
+  def rewrite_index(&block : JSON::Any -> JSON::Any) : Nil
+    document = JSON.parse(File.read(@index_path))
+    yield document
+    body = document.to_json
+    File.write(@index_path, body)
+    @index_sha256 = Digest::SHA256.hexdigest(body)
+  end
+
+  def stack(*, budget_bytes : Int64 = @payload_bytes + @stage_bytes + 32_i64,
+            source_sha256 : String = @source_sha256,
+            max_forwards_per_chain : Int32 = 1) : ML::Video::HyNomasQ4Stack
+    ML::Video::HyNomasQ4Stack.new(@index_path, @index_sha256,
+      source_sha256, @config, budget_bytes,
+      stage_bytes: @stage_bytes, reserve_bytes: 32_i64,
+      max_forwards_per_chain: max_forwards_per_chain)
+  end
+
+  def admission : ML::Video::HyNomasQ4StackIndex::Admission
+    ML::Video::HyNomasQ4StackIndex::Admission.new(@index_path, @index_sha256,
+      @source_sha256, @config)
+  end
+
+  private def write_block(block_index : Int32)
+    bindings = ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(
+      @config, block_index: block_index).sort_by(&.source)
+    payload = Bytes.new(0)
+    tensor_layout = [] of NamedTuple(binding: ML::Video::WeightBinding,
+      elements: Int64, encoding: String, offset: Int64, nbytes: Int64)
+    cursor = 0_i64
+    bindings.each do |binding|
+      elements = binding.shape.reduce(1_i64) { |count, dimension| count * dimension }
+      encoding = binding.shape.size == 2 ? "q4_k_8range" : "bf16-le"
+      nbytes = if binding.shape.size == 2
+                 ML::Video::Q4KRangeWeights.payload_bytes(elements.to_i32)
+               else
+                 elements * 2_i64
+               end
+      tensor_layout << {binding: binding, elements: elements,
+                        encoding: encoding, offset: cursor, nbytes: nbytes}
+      cursor += nbytes
+    end
+    payload = Bytes.new(cursor.to_i32) do |index|
+      ((index + block_index) & 0xff).to_u8
+    end
+    payload_name = "block-#{block_index}.bin"
+    payload_path = File.join(@directory, payload_name)
+    write_file(payload_path, payload)
+    payload_sha256 = sha256(payload_path)
+
+    manifest_body = JSON.build do |json|
+      json.object do
+        json.field "schema", ML::Video::HyNomasQ4Cache::SCHEMA
+        json.field "schema_version", ML::Video::HyNomasQ4Cache::SCHEMA_VERSION
+        json.field "source" do
+          json.object do
+            json.field "sha256", @source_sha256
+            json.field "bytes", @source_bytes
+          end
+        end
+        json.field "block_index", block_index
+        json.field "geometry" do
+          json.object do
+            ML::Video::HyNomasQ4Cache.geometry(@config).each do |name, value|
+              json.field name, value
+            end
+          end
+        end
+        json.field "codec" do
+          json.object do
+            json.field "matrix", "q4_k"
+            json.field "ranges", 8
+            json.field "block_elements", ML::Video::Q4KRangeWeights::BLOCK_ELEMENTS
+            json.field "block_bytes", ML::Video::Q4KRangeWeights::Q4_K_BLOCK_BYTES
+            json.field "vector", "bf16-le"
+          end
+        end
+        json.field "payload" do
+          json.object do
+            json.field "basename", payload_name
+            json.field "nbytes", cursor
+            json.field "sha256", payload_sha256
+          end
+        end
+        json.field "tensors" do
+          json.object do
+            tensor_layout.each do |tensor|
+              json.field tensor[:binding].source do
+                json.object do
+                  json.field "shape", tensor[:binding].shape
+                  json.field "source_dtype", "F32"
+                  json.field "resident_dtype", "BF16"
+                  json.field "encoding", tensor[:encoding]
+                  json.field "offset_bytes", tensor[:offset]
+                  json.field "nbytes", tensor[:nbytes]
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    manifest_name = "block-#{block_index}.json"
+    manifest_path = File.join(@directory, manifest_name)
+    File.write(manifest_path, manifest_body)
+
+    bf16_name = "block-#{block_index}-bf16.safetensors"
+    bf16_path = File.join(@directory, bf16_name)
+    write_file(bf16_path, "BF16 control #{block_index}")
+    @payload_bytes += cursor
+    {block_index: block_index, manifest: manifest_name,
+     manifest_sha256: sha256(manifest_path), payload_sha256: payload_sha256,
+     bf16: bf16_name, bf16_sha256: sha256(bf16_path)}
+  end
+
+  private def write_index : String
+    body = JSON.build do |json|
+      json.object do
+        json.field "schema", ML::Video::HyNomasQ4StackIndex::SCHEMA
+        json.field "schema_version", ML::Video::HyNomasQ4StackIndex::SCHEMA_VERSION
+        json.field "source" do
+          json.object do
+            json.field "sha256", @source_sha256
+            json.field "bytes", @source_bytes
+          end
+        end
+        json.field "blocks" do
+          json.array do
+            @block_entries.each do |block|
+              json.object do
+                json.field "block_index", block[:block_index]
+                json.field "manifest", block[:manifest]
+                json.field "manifest_sha256", block[:manifest_sha256]
+                json.field "payload_sha256", block[:payload_sha256]
+                json.field "bf16", block[:bf16]
+                json.field "bf16_sha256", block[:bf16_sha256]
+              end
+            end
+          end
+        end
+        json.field "globals" do
+          json.object do
+            json.field "bf16", "globals-bf16.safetensors"
+            json.field "sha256", @globals_sha256
+          end
+        end
+      end
+    end
+    File.write(@index_path, body)
+    Digest::SHA256.hexdigest(body)
+  end
+
+  private def write_file(path : String, bytes : Bytes) : Nil
+    File.open(path, "wb") { |io| io.write(bytes) }
+  end
+
+  private def write_file(path : String, text : String) : Nil
+    File.write(path, text)
+  end
+
+  private def sha256(path : String) : String
+    Digest::SHA256.hexdigest(File.read(path))
+  end
+end
+
+describe ML::Video::HyNomasQ4StackIndex::Admission do
+  it "authenticates once, returns detached pins, and refreshes snapshots without Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      admission = fixture.admission
+      admission.sha256.should eq(fixture.index_sha256)
+      admission.source_sha256.should eq(fixture.source_sha256)
+      admission.globals_bf16_path.should eq(File.join(fixture.directory, "globals-bf16.safetensors"))
+      admission.payload_bytes.should eq(fixture.payload_bytes)
+      admission.blocks.map(&.block_index).should eq((0...54).to_a)
+
+      detached = admission.blocks
+      detached.clear
+      detached.size.should eq(0)
+      admission.blocks.size.should eq(54)
+      admission.blocks.first.manifest_path.should eq(File.join(fixture.directory, "block-0.json"))
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects stale identity and config before touching admitted files" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      admission = fixture.admission
+      expect_raises(ArgumentError, /index identity/) do
+        admission.validate!("a" * 64, fixture.source_sha256, fixture.config)
+      end
+      expect_raises(ArgumentError, /source identity/) do
+        admission.validate!(fixture.index_sha256, "b" * 64, fixture.config)
+      end
+      wrong_config = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 1,
+        text_tokens: 1, dim: 64, heads: 1, head_dim: 64, ffn_dim: 128)
+      expect_raises(ArgumentError, /config identity/) do
+        admission.validate!(fixture.index_sha256, fixture.source_sha256, wrong_config)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects replaced, removed, or timestamp-changed admitted file classes" do
+    file_classes = {
+      {"index", "index.json"},
+      {"manifest", "block-7.json"},
+      {"payload", "block-7.bin"},
+      {"control", "block-7-bf16.safetensors"},
+      {"globals", "globals-bf16.safetensors"},
+    }
+    file_classes.each do |label, basename|
+      [:replace, :remove, :mtime].each do |mutation|
+        fixture = HyNomasQ4StackSpecFixture.new
+        begin
+          allocations = ML::MetalBuffer.video_spec_allocations
+          admission = fixture.admission
+          path = File.join(fixture.directory, basename)
+          case mutation
+          when :replace
+            replacement = File.join(fixture.directory, "replacement-#{label}")
+            File.write(replacement, File.read(path))
+            File.rename(replacement, path)
+          when :remove
+            File.delete(path)
+          when :mtime
+            info = File.info(path)
+            File.utime(Time.utc(2020, 1, 1), info.modification_time + 1.second, path)
+          end
+          expect_raises(ArgumentError) do
+            admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+          end
+          ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        ensure
+          fixture.cleanup
+        end
+      end
+    end
+  end
+
+  it "does not rehash Q4 payload bytes on reuse after the captured stat snapshot matches" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      path = File.join(fixture.directory, "block-7.bin")
+      before = File.info(path)
+      bytes = File.read(path).to_slice.dup
+      bytes[0] = bytes[0] ^ 0xff_u8
+      File.write(path, bytes)
+      File.utime(Time.utc(2020, 1, 1), before.modification_time, path)
+      File.info(path).modification_time.should eq(before.modification_time)
+
+      # The admitted BF16 path does not consume Q4 payload bytes. Reuse checks
+      # the captured identity/size/mtime snapshot; a same-stat content change
+      # is outside that guarantee and demonstrates why it is not a fresh hash.
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "still full-hashes a BF16 control after a same-stat mutation before parsing or Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      path = File.join(fixture.directory, "block-0-bf16.safetensors")
+      before = File.info(path)
+      bytes = File.read(path).to_slice.dup
+      bytes[0] = bytes[0] ^ 0xff_u8
+      File.write(path, bytes)
+      File.utime(Time.utc(2020, 1, 1), before.modification_time, path)
+      File.info(path).modification_time.should eq(before.modification_time)
+
+      # Snapshot reuse remains stat-only, but the actual BF16 consumer must
+      # still authenticate bytes and fail before safetensors parsing/allocation.
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /BF16 cache SHA-256 mismatch/) do
+        ML::Video::HyNomasBF16Stack.new(admission, fixture.index_sha256,
+          fixture.source_sha256, fixture.config,
+          fixture.payload_bytes + fixture.stage_bytes,
+          stage_bytes: fixture.stage_bytes)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "makes the BF16 stack revalidate a supplied admission before control-file parsing" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      index_info = File.info(fixture.index_path)
+      File.utime(Time.utc(2020, 1, 1), index_info.modification_time + 1.second,
+        fixture.index_path)
+      allocations = ML::MetalBuffer.video_spec_allocations
+
+      expect_raises(ArgumentError, /changed after index admission/) do
+        ML::Video::HyNomasBF16Stack.new(admission, fixture.index_sha256,
+          fixture.source_sha256, fixture.config,
+          fixture.payload_bytes + fixture.stage_bytes,
+          stage_bytes: fixture.stage_bytes)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+end
+
+describe ML::Video::HyNomasQ4Stack do
+  it "authenticates the ordered 54-block cache and admits bytes before Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      stack = fixture.stack
+      stack.block_count.should eq(54)
+      stack.blocks.map(&.block_index).should eq((0...54).to_a)
+      stack.cache_payload_bytes.should eq(fixture.payload_bytes)
+      stack.admitted_bytes.should eq(fixture.payload_bytes + fixture.stage_bytes + 32_i64)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects incorrect source pins, reordered or substituted blocks, and short aggregate budgets before Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /source checkpoint mismatch/) do
+        fixture.stack(source_sha256: "a" * 64)
+      end
+      expect_raises(ArgumentError, /memory budget/) do
+        fixture.stack(budget_bytes: fixture.payload_bytes + fixture.stage_bytes + 31_i64)
+      end
+
+      fixture.rewrite_index do |document|
+        document.as_h["blocks"].as_a[1].as_h["block_index"] = JSON.parse("0")
+      end
+      expect_raises(ArgumentError, /block order/) { fixture.stack }
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "bounds opt-in same-chain forwards without widening the default admission" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 0)
+      end
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 9)
+      end
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 32)
+      end
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 128)
+      end
+      default_stack = fixture.stack
+      default_stack.max_forwards_per_chain.should eq(1)
+      default_stack.forwards_on_chain.should eq(0)
+      bounded_stack = fixture.stack(max_forwards_per_chain: 8)
+      bounded_stack.max_forwards_per_chain.should eq(8)
+      bounded_stack.forwards_on_chain.should eq(0)
+      default_stack.release
+      bounded_stack.release
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects duplicate cache payload identities and corrupt payload files" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      fixture.rewrite_index do |document|
+        first_hash = document.as_h["blocks"].as_a[0].as_h["payload_sha256"]
+        document.as_h["blocks"].as_a[1].as_h["payload_sha256"] = first_hash
+      end
+      expect_raises(ArgumentError, /duplicate block cache identities/) { fixture.stack }
+
+      # Restore a fresh index, then change a payload without changing the
+      # authenticated index or manifest. Admission must catch this before any
+      # Metal cache buffer is allocated.
+      fixture.cleanup
+      fixture = HyNomasQ4StackSpecFixture.new
+      payload_path = File.join(fixture.directory, "block-7.bin")
+      File.write(payload_path, "corrupt")
+      expect_raises(ArgumentError, /payload file size mismatch/) { fixture.stack }
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+end
+
+describe ML::Video::HyNomasBF16Stack do
+  it "rejects an oversize forward cap before opening an index or allocating Metal buffers" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      {0, 129}.each do |max_forwards|
+        expect_raises(ArgumentError, /BF16 max_forwards_per_chain must be between 1 and 128/) do
+          ML::Video::HyNomasBF16Stack.new(
+            File.join(fixture.directory, "missing-index.json"),
+            fixture.index_sha256, fixture.source_sha256, fixture.config,
+            fixture.payload_bytes + fixture.stage_bytes,
+            stage_bytes: fixture.stage_bytes,
+            max_forwards_per_chain: max_forwards)
+        end
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+end
+
+describe ML::Video::HyNomasFullPassCursor do
+  it "keeps the default at one pass and allows only a bounded ordered restart" do
+    default_cursor = ML::Video::HyNomasFullPassCursor.new(3)
+    finish_hy_nomas_pass(default_cursor, 1_u64)
+    default_cursor.forwards_on_chain.should eq(1)
+    expect_raises(ArgumentError, /per-chain forward limit/) do
+      default_cursor.validate_block!(1_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+
+    bounded_cursor = ML::Video::HyNomasFullPassCursor.new(3, 2)
+    finish_hy_nomas_pass(bounded_cursor, 7_u64)
+    bounded_cursor.validate_block!(7_u64, 0,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 0)
+    expect_raises(ArgumentError, /in order on one command chain/) do
+      bounded_cursor.validate_block!(7_u64, 2,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+    bounded_cursor.validate_block!(7_u64, 1,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 1)
+    bounded_cursor.validate_block!(7_u64, 2,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 2)
+    bounded_cursor.forwards_on_chain.should eq(2)
+    expect_raises(ArgumentError, /per-chain forward limit/) do
+      bounded_cursor.validate_block!(7_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+  end
+
+  it "requires terminal completion before a new chain starts" do
+    cursor = ML::Video::HyNomasFullPassCursor.new(2, 2)
+    finish_hy_nomas_pass(cursor, 10_u64)
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_block!(11_u64, 0,
+        previous_terminal: false, previous_wait_count: 1)
+    end
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_block!(11_u64, 0,
+        previous_terminal: true, previous_wait_count: 0)
+    end
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_block!(11_u64, 0,
+        previous_terminal: true, previous_wait_count: 2)
+    end
+    cursor.validate_block!(11_u64, 0,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.forwards_on_chain.should eq(0)
+    cursor.finish_block!(11_u64, 0)
+    cursor.validate_block!(11_u64, 1,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.finish_block!(11_u64, 1)
+    cursor.forwards_on_chain.should eq(1)
+  end
+
+  it "allows 128 complete ordered BF16-style passes on one chain and rejects the 129th" do
+    cursor = ML::Video::HyNomasFullPassCursor.new(2,
+      ML::Video::HyNomasFullPassCursor::MAX_FORWARDS_PER_CHAIN)
+    128.times { finish_hy_nomas_pass(cursor, 21_u64) }
+    cursor.forwards_on_chain.should eq(128)
+    expect_raises(ArgumentError, /per-chain forward limit/) do
+      cursor.validate_block!(21_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+
+    cursor.validate_block!(22_u64, 0,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.forwards_on_chain.should eq(0)
+    cursor.finish_block!(22_u64, 0)
+    cursor.validate_block!(22_u64, 1,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.finish_block!(22_u64, 1)
+    cursor.forwards_on_chain.should eq(1)
+  end
+
+  it "rejects a cursor forward cap outside the shared range" do
+    {0, 129}.each do |max_forwards|
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 128/) do
+        ML::Video::HyNomasFullPassCursor.new(1, max_forwards)
+      end
+    end
+  end
+end

@@ -1,0 +1,201 @@
+{
+  "schema": "cogni_ml.pixelumm_output_ring_evidence/v1",
+  "created_at": "2026-10-27T18:30:50.216613+00:00",
+  "base_revision": "75e88f0fa1c51d99c938d9c386307c22a63540ba",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in two-bank GPU output reuse for pretrained PixelUMM layers0-15 on small/full-J real encoded-static-image fixtures; no complete decoder or video generation.",
+    "decay_trigger": "Refresh after scoped source/artifact/backend/device/toolchain/OS, geometry/precision, ownership/capture/lifetime/guard changes or loss of external evidence."
+  },
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "prior_input_and_oracle_qualification": ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-sixteen-block.json",
+  "runtime": {
+    "device": "Apple M2 Max",
+    "full_grid": [
+      6,
+      44,
+      80
+    ],
+    "ffn_f32": true,
+    "bf16_boundary_storage": true,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "default_output_reuse": false,
+    "default_ffn_f32": false,
+    "one_terminal_wait_per_request": true,
+    "named_encode_allocations": 0,
+    "preterminal_activation_reads": 0,
+    "generation": false
+  },
+  "guard": {
+    "cache_aware_floor_pct": 10,
+    "small_process_cap_gib": 18,
+    "full_process_cap_gib": 23,
+    "max_system_swap_growth_mib": 64,
+    "deadline_seconds": 900,
+    "observed_swap_growth_bytes": 0,
+    "serial_intervals_checked": true,
+    "failed_small_v1": "Stopped at historical 14 GiB process cap; excluded from qualification."
+  },
+  "dod": {
+    "build_and_specs_command": [
+      "make",
+      "BUILD_DIR=/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/build",
+      "pixelumm_decoder_sixteen_block_probe",
+      "pixelumm_decoder_two_block_probe",
+      "pixelumm_decoder_four_block_probe",
+      "spec_pixelumm_decoder_block",
+      "spec_pixelumm_two_block_probe"
+    ],
+    "build_log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/logs/ring-build-green-v1.out",
+      "sha256": "60b7a7860afd96753219733e3697db07b4c7f9566ced141f8619aea445119683"
+    },
+    "build_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/ring-build-green-v1.pre-execution.json",
+      "sha256": "0a5c583b6ad714ff9c01558de1e07782412785be4d625fe50a6b29d610062613"
+    },
+    "crystal_examples": 43,
+    "native_launcher": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/tmp/run_case_v2.py",
+      "sha256": "ae2cbe93a2453b37633bd47d161a331e8e130d70aa3f4a2b81b2d61f3ea45b21"
+    },
+    "native_command_receipts": "results/<case>.pre-execution.json under artifact_root",
+    "validator": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/tmp/validate_ring_v1.py",
+      "sha256": "79c138b756868788f272748b765ac98e8be4e6271ed496b3d18e7600e9f9f5be"
+    },
+    "audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/ring-validation-v1.json",
+      "sha256": "b69ae1997dd76fd8535ec51ebd40f7c35cebd997e9d526d3a8fe5cf8bbe2a7ed"
+    },
+    "source_build_pin_count": 32,
+    "source_build_pin_map_sha256": "34a5c714223245c3a24216aba377fbef57257438849f8128a575734a36cc6d36",
+    "validator_negative_controls": [
+      "missing comparison rejected",
+      "wrong bank pattern rejected"
+    ]
+  },
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027",
+  "cases": [
+    {
+      "name": "native-small-ring-v2",
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/native-small-ring-v2.json",
+        "sha256": "e81630259a7c1e13bc06b54eea068200d590d5783d858925942c7a3cfca30a2f"
+      },
+      "request_count": 2,
+      "comparisons": 804,
+      "timed_total_seconds": [
+        1.733124125
+      ],
+      "median_total_seconds": 1.733124125,
+      "sampled_peak_gib": 14.831752307713032
+    },
+    {
+      "name": "native-full-retained-a1",
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/native-full-retained-a1.json",
+        "sha256": "be48d8f3d72704c641e05eb67a2edbabea52438bb8472af4a5256ca03ab61a36"
+      },
+      "request_count": 6,
+      "comparisons": 96,
+      "timed_total_seconds": [
+        24.265302834,
+        27.142785125,
+        33.882522167
+      ],
+      "median_total_seconds": 27.142785125,
+      "sampled_peak_gib": 16.68349791318178
+    },
+    {
+      "name": "native-full-ring-b1",
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/native-full-ring-b1.json",
+        "sha256": "bd5c6785a91dec58ce809f45e560021ac79dfae379dd1f6f0be77c3f981094a3"
+      },
+      "request_count": 6,
+      "comparisons": 54,
+      "timed_total_seconds": [
+        34.394155291,
+        35.181149540999996,
+        35.834307208
+      ],
+      "median_total_seconds": 35.181149540999996,
+      "sampled_peak_gib": 19.111890204250813
+    },
+    {
+      "name": "native-full-ring-b2",
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/native-full-ring-b2.json",
+        "sha256": "4198d18f6ddba93a96d0f3c7e9a03b1446d2a7137b4473254e73f6d8c39f8bf5"
+      },
+      "request_count": 6,
+      "comparisons": 54,
+      "timed_total_seconds": [
+        25.1801335,
+        25.031824875,
+        25.644443792
+      ],
+      "median_total_seconds": 25.1801335,
+      "sampled_peak_gib": 18.950177490711212
+    },
+    {
+      "name": "native-full-retained-a2",
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/native-full-retained-a2.json",
+        "sha256": "cc16ea685dbb3f1d56c033fe9c9027eeea730a8e0c741a01c122dad683e96713"
+      },
+      "request_count": 6,
+      "comparisons": 96,
+      "timed_total_seconds": [
+        24.136380665999997,
+        24.126332333,
+        25.5526435
+      ],
+      "median_total_seconds": 24.136380665999997,
+      "sampled_peak_gib": 16.84443249553442
+    }
+  ],
+  "numeric_coverage": {
+    "comparisons": 1104,
+    "requests": 26,
+    "finite_and_bitwise_exact": true,
+    "small_ring_captures_per_compared_request": 402,
+    "authenticated_small_fixture_captures": 416,
+    "full_retained_captures_per_compared_request": 32,
+    "full_ring_captures_per_compared_request": 18,
+    "ring_omissions": "Exactly block0.output through block13.output; all16 attention boundaries and last2 outputs retained at full J."
+  },
+  "named_full_bytes": {
+    "retained": 14202158052,
+    "ring": 11779947492,
+    "unchanged_borrowed": 6368927744,
+    "saved": 2422210560,
+    "saved_gib": 2.255859375,
+    "formula": "14*(6*44*80)*4096*2"
+  },
+  "adversary": {
+    "verdict": "ROBUST within bounded probe contract",
+    "review": "Correlated same-lineage source review plus executed negative controls; not independent neural replication.",
+    "attacks": [
+      "stale output and every interior x capture rejected before allocation",
+      "future-bank external alias and wrong predecessor rejected",
+      "actual ring identity pattern checked",
+      "different-input replay after NaN poisoning scratch and output banks",
+      "exact comparison coverage and no-wait/allocation/readback boundaries checked"
+    ]
+  },
+  "limitations": [
+    "Both ring process peaks exceed both retained peaks; no process-memory improvement established.",
+    "Substantial time drift in one serial ABBA epoch; no causal speedup established.",
+    "Selected diagnostic coverage differs between modes; omitted early output aliases are explicit.",
+    "Plan.output is an ephemeral raw GPU buffer; callers must honor overwrite lifetime.",
+    "Oracle fixtures reuse upstream semantics adapted on MPS; compiled CUDA Flex equivalence and fresh oracle inference are not claimed.",
+    "Hashes and receipts bind bytes, not hermetic build provenance or independent neural origin.",
+    "Polling cannot bound between-sample spikes or guarantee immediate file-cache reclaim.",
+    "Layers16-35/global head, full decoder and generated-video quality remain unqualified."
+  ],
+  "rollback": "Omit --reuse-output-banks; retained-output default unchanged.",
+  "next_signal": "Separate named buffers from loading/opaque MPS phase peaks before any default promotion; then qualify wider decoder/global head and connected lifetimes."
+}

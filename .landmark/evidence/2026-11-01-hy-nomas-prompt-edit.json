@@ -1,0 +1,232 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 38249,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json",
+      "sha256": "57c17e89956a168a91d82ed8f9922ac59b3c6ece7c77ac226f75b46e4311ece8"
+    },
+    {
+      "bytes": 1715,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/adversary-review.json",
+      "sha256": "16935c7e16b67fd11fc82917a7e69947a7759d91065258a8c85c7085d897eec3"
+    },
+    {
+      "bytes": 1036,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/collect-qualification-02-command.json",
+      "sha256": "023235bbf71120d5ffdb68e888c84dd5daee349c2179f282db7ed8aa0b7af0b5"
+    },
+    {
+      "bytes": 11472,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/collect-qualification-02.jsonl",
+      "sha256": "94ec2add77ae4358cb147755efddaef55766e1d6c4197e36a277db3f0df8e11b"
+    },
+    {
+      "bytes": 123,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/collect-qualification-02.out",
+      "sha256": "a40d02bfdfde204ebcd4fb3515d6f444ff75c38e25633ec5a5d67e1caca3e3a1"
+    },
+    {
+      "bytes": 1233,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/python-regression-02-command.json",
+      "sha256": "ad16cd6a13ecd2a630e88bcdb330f8bdd34e33c1e70b4d814c80d79c650a51d9"
+    },
+    {
+      "bytes": 10562,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/python-regression-02.jsonl",
+      "sha256": "7ed26d984afeb8731f3cd9d5f88328dbc026b1bbe1a91d95522da5c56cd17fdd"
+    },
+    {
+      "bytes": 11791,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/python-regression-02.out",
+      "sha256": "1970222c10e09549ac41fc041cac9000aeba24e1a9c58f6b2dc560105e148bee"
+    },
+    {
+      "bytes": 114,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/core-regression-02.out",
+      "sha256": "c620c7b52221207caca5167d6334f29fc239ee11c9c7b0e21aef006af051bdfe"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_segment_edit.cr",
+      "spec/hy_nomas_segment_prompt_edit_spec.cr",
+      "spec/hy_nomas_prompt_history_spec.cr",
+      "examples/hy_nomas_prompt_history_probe.cr",
+      "examples/support/hy_nomas_prompt_history_probe.cr",
+      "spec/support/hy_nomas_prompt_history_reference.py",
+      "spec/support/hy_nomas_prompt_edit_resume_reference.py",
+      "spec/hy_nomas_prompt_edit_resume_reference_test.py",
+      "examples/hy_nomas_prompt_refiner_probe.cr",
+      "examples/support/hy_nomas_prompt_refiner_probe.cr",
+      "spec/support/hy_nomas_prompt_refiner_reference.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_segment_edit.cr",
+      "spec/hy_nomas_segment_prompt_edit_spec.cr",
+      "spec/hy_nomas_prompt_history_spec.cr",
+      "examples/hy_nomas_prompt_history_probe.cr",
+      "examples/support/hy_nomas_prompt_history_probe.cr",
+      "spec/support/hy_nomas_prompt_history_reference.py",
+      "spec/support/hy_nomas_prompt_edit_resume_reference.py",
+      "spec/hy_nomas_prompt_edit_resume_reference_test.py",
+      "examples/hy_nomas_prompt_refiner_probe.cr",
+      "examples/support/hy_nomas_prompt_refiner_probe.cr",
+      "spec/support/hy_nomas_prompt_refiner_reference.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json"
+    ],
+    "out_of_scope": [
+      "UI integration",
+      "Multiple or combined edits",
+      "Edited QBit qualification",
+      "Full upstream neural/video parity",
+      "Perceptual quality or instruction-following verdict",
+      "Performance speedup claims"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Weights, binaries, state bundles, raw media and logs remain outside Git. Hashes detect changes and do not recover lost files.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Source/binary/prompt/input/noise/weights/codec/geometry/backend/device changes or modification/loss of referenced artifacts.",
+    "level": "VERIFIED",
+    "scope": "Native three-segment exact-checkpoint execution, default/prefix regression, scoped Qwen/refiner/history upstream checks and produced media integrity.",
+    "text": "A single authenticated B prompt edit preserves exact A latents and regenerates B/C with bitwise continuous-versus-restarted results."
+  },
+  "created_at": "2026-11-01T17:48:55.727632+00:00",
+  "definition_of_done": {
+    "commands": [
+      "crystal spec spec/hy_nomas_segment_prompt_edit_spec.cr spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_prompt_history_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_sequence_admission_spec.cr -Dcpu_only",
+      "python3 -B -m unittest spec.hy_nomas_prompt_edit_resume_reference_test spec.hy_nomas_segment_edit_video_compare_test spec.hy_nomas_segment_edit_resume_reference_test spec.hy_nomas_segment_edit_reference_test spec.hy_nomas_cache_qbit_video_compare_test -v",
+      "Guarded five-process native matrix, Qwen/history/refiner probes, decoder and final collector; exact command receipts are linked by qualification-summary.json and this packet.",
+      "git diff --check"
+    ],
+    "expected": "36 Crystal examples and 59 Python tests pass; exact A; all eight B/C steps and full timelines bitwise across restart; B/C differ from control; scoped upstream checks meet unchanged tolerances; 10% guards and zero added encode waits/readbacks/allocations.",
+    "observed": "Passed at the phase-specific source/binary pins. Five real pre-model rejection cases and current produced-media revalidation also pass."
+  },
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/real/matrix-validation.json",
+      "result": "passed",
+      "signal": "All 552960 A latent bytes and unused future noise unchanged; eight Euler updates, two segment slices and 829440-value timeline bitwise across continuous/split edited runs; B/C nonvacuously changed."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/conditioning/native-qwen-b.json",
+      "result": "passed",
+      "signal": "All 27 upstream BF16 states and 4587520-value conditioning crop bitwise exact."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/refiner/native-validation.json",
+      "result": "passed",
+      "signal": "B585/C557 at timesteps 1000/206.897: consumed projected_text and vec bitwise exact with upstream MPS. Padded rows are not consumed or claimed equal."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/probe/upstream.json",
+      "result": "passed",
+      "signal": "Tiny changing-text/poison-padding GPU attention-history fixture max absolute error 7.45058e-9 at atol=rtol=2e-5; cached K/V exact."
+    },
+    {
+      "kind": "guarded_native_run",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json",
+      "result": "passed",
+      "signal": "Five DiT processes: sampled peak 29.9163 GiB; minimum cache-aware headroom 17.0209 GiB; swap growth at most 0.82 MiB. Cap 32 GiB, reserve 10%, swap stop 64 MiB, deadline 900 s. Instrumented encode allocations/readbacks/prewaits 0; one terminal wait per process."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json",
+      "result": "passed",
+      "signal": "Fresh matrix and consumed-bank validation plus raw pixel comparison before media binding. First100 frames exact; final20 A frames may change through overlap. Matched 15s/360-frame/24fps original-left/edited-right comparison."
+    },
+    {
+      "kind": "executed_test",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/logs/python-regression-02.out",
+      "result": "passed",
+      "signal": "59 Python tests, including 11 new hostile prompt-edit cases, passed after portable temporary-directory cleanup."
+    }
+  ],
+  "full_upstream_video_parity": false,
+  "id": "LM-HY-NOMAS-PROMPT-EDIT-2026-11-01",
+  "limitations": [
+    "Instrumented counters exclude opaque MPS allocations.",
+    "Sampled guards do not bound between-sample spikes; cache reclaimability is estimated.",
+    "Setup authentication and terminal checkpoint/media I/O use CPU.",
+    "Qwen/refiner/history checks do not establish full upstream DiT or decoder neural parity.",
+    "Checkpoint metadata digests do not prove arbitrary forged KV semantics.",
+    "One edit, exact checkpoint execution, no UI/multiple-edit/edited-QBit qualification.",
+    "A latent prefix is immutable; its final20 decoded frames overlap B.",
+    "Media was directly revalidated; the external export adapter alone trusts a pair-report boolean.",
+    "Local-only artifacts and hashes do not provide recovery.",
+    "The repository has no landmark graph validator or packet template; JSON structure, exact path inventory and referenced hashes are checked directly. This does not itself prove execution or neural correctness."
+  ],
+  "quality_verdict": "Pending user motion and instruction-following review.",
+  "rollback": "Revert this atomic commit and use the untouched default branch at 2f2091c4. Checkpoints bind the executable; a rebuilt executable needs a fresh parent state.",
+  "source_state": {
+    "base_commit": "2f2091c41fb2dde9642e2ac88793d2a951aa39a9",
+    "branch": "codex/hy-nomas-native",
+    "native_binary_sha256": "a916875afc4aa36c9ca4146af4357865b46fb7174aa8104659de774cd2187e3a",
+    "phase_note": "The original Makefile pin predates an added refiner probe target; production sources and original binaries remain unchanged. Final refiner pins include the updated Makefile.",
+    "source_sha256": {
+      "LANDMARKS.md": "14e1466f9c7ad0630de9a9eb1ee217fb04f3e9ca67f853a1c64cf08e53728f97",
+      "Makefile": "9681e64ae7be954d456f5cba52ddcd05b320491819ed21ce0600895267dd0402",
+      "docs/hy-nomas-generation-frontier.md": "bad77a77dcaadd7f38ab412afb7803449355e1ceda6c55546e35f1eec81fffb4",
+      "examples/hy_nomas_compact_sequence_probe.cr": "9d7b31a2ec831cda79af8e49f8b1e28820b653dd1eda7fb719dd225e9e04e9ac",
+      "examples/hy_nomas_prompt_history_probe.cr": "0f04c5a48bcafed0e09ef0b1e3b289c435d5c172aa1717799bda3f3b751fca7a",
+      "examples/hy_nomas_prompt_refiner_probe.cr": "f23f0f56b4be387fadbb99eab5f3fb85eeaea9f5f552954baf6aeccdc7b13ee5",
+      "examples/support/hy_nomas_prompt_history_probe.cr": "0d3e5b1ecd4ffdf5815b31b48726086b1bd3fbd389245d09f16da6628cbc31e1",
+      "examples/support/hy_nomas_prompt_refiner_probe.cr": "9ed4e3671396cb7af470bc08a5810ccf9ac9e53511428ddb2b77390d127f5635",
+      "examples/support/hy_nomas_sequence.cr": "702d1348461a6ba6d3fcdda3b97975aec7c35ad68e82e3e6ed30c8eb1dbebc7b",
+      "spec/hy_nomas_prompt_edit_resume_reference_test.py": "a4f3b739393070b9e887570e1fa286ab35bd4c5de4ae36f16613190db0297985",
+      "spec/hy_nomas_prompt_history_spec.cr": "f8fe738a5118398c3c16065411f3a258673954d449bebb3ad8d51adc184b4ecb",
+      "spec/hy_nomas_segment_prompt_edit_spec.cr": "649ce9791eee91ece62307677cfda3c06d53c23d49458f058e467d7bdfe30f35",
+      "spec/support/hy_nomas_prompt_edit_resume_reference.py": "5c1d27a0521e34d01b186d99367ec8c4059fba9933858f243869cb12d2bff3bd",
+      "spec/support/hy_nomas_prompt_history_reference.py": "b6238c7db695e2eb5bbcb6f51d44397a2f28e90333e6a7ff3e8e941203331114",
+      "spec/support/hy_nomas_prompt_refiner_reference.py": "c0dd9c06fcb1e1e31a13eef393a1e4dadcb7adaab69294096c54d0d22d892f4d",
+      "src/ml/video/hy_nomas_continuation_history.cr": "8d535710fb94cfed4a1fbbd0b5b0452faab1b2788b2ce7554b3246f9fea30f84",
+      "src/ml/video/hy_nomas_segment_edit.cr": "34836a1f7f41a26402c4e5b5fea9460a9b49c44180398168f48ae8dc491027e0"
+    },
+    "test_note": "After qualification collection, the new Python fixture dropped its run-specific temporary path in favor of TMPDIR. All 59 tests were rerun under the same external-SSD guard. Neural/checker code is unchanged.",
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+  },
+  "verdict": {
+    "limitations": [
+      "The standalone external exporter still trusts a pair-report boolean; the collector independently recomputes the produced pair predicate.",
+      "The summary is local and mutable; hashes are subsequently bound by the repository packet and do not recover artifacts.",
+      "The collector checks actual hstack metadata and current media hashes; individual-arm metadata also relies on the authenticated earlier export report.",
+      "No full upstream DiT/decoder parity, visual-quality, arbitrary forged-KV authenticity, multiple-edit, UI or edited-QBit claim."
+    ],
+    "observations": [
+      "Fresh matrix comparison equals the saved report, including exact A, continuous/restart equality and nonvacuous B/C changes.",
+      "The collector validates actual consumed decoder banks against the fresh matrix and reruns raw prefix comparison before binding the exported media.",
+      "All 50 qualification artifacts and the collector source matched their recorded hashes in the read-only review.",
+      "The four real B585/C557 refiner cases match upstream bitwise for consumed text and vec outputs; padded text rows are outside consumed K/V/history.",
+      "Hostile receipt tests reject coordinated forged post-B base contracts and descendant links.",
+      "The historical runner pin correctly identifies run_prompt_matrix.py; source-pins.json is preserved."
+    ],
+    "review_type": "Same-lineage correlated read-only agent reviews; not independent neural or visual-quality evidence.",
+    "schema": "cogni_ml.hy_nomas_prompt_edit_adversary/v1",
+    "scope": "The produced native prompt-edit matrix, scoped refiner boundary, checker rejection cases and directly revalidated media pair.",
+    "verdict": "ROBUST"
+  }
+}

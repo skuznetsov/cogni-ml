@@ -244,13 +244,13 @@ resident services such as Cogniformerus `cfmodeld`
 
 - Slice: engine contract and validation
   - Status: verified
-  - Source/spec: `src/ml/gguf/qwen35_engine_contract.cr`,
+  - Source/spec: `src/ml/models/qwen35/engine_contract.cr`,
     `spec/qwen35_engine_contract_spec.cr`
   - Boundary: no model load and no backend implementation required
 - Slice: CPU/Metal resident greedy and constrained classification
   - Status: admitted for CPU and planned native hybrid routing, with asymmetric
     evidence; observed Metal remains guard-only
-  - Source/spec: `src/ml/gguf/qwen35_native_runtime.cr`,
+  - Source/spec: `src/ml/models/qwen35/native_runtime.cr`,
     `spec/qwen35_native_runtime_spec.cr`,
     `spec/qwen35_weights_lifecycle_spec.cr`
   - Boundary: deterministic greedy and unique single-token labels, one live
@@ -349,7 +349,7 @@ matching every downstream cache value is stronger than matching model output.
 Do not relax the state tolerance from these observations or promote automatic
 prefix admission. No production engine/kernel changed in this test slice.
 
-`bin/qwen35_flash_prefix_model_probe.cr` builds the same raw code-token prefix
+`experiments/qwen35/qwen35_flash_prefix_model_probe.cr` builds the same raw code-token prefix
 with Flash disabled in two independent states, then compares append policy
 `0` versus `1`. It uses full-width `prefill_tokens_last_hidden` plus the full
 GPU logit head, with device fences. The nonzero-prefix `prefill_tokens_logits`
@@ -415,7 +415,7 @@ currently expects exit1, with continuation passing):
 
 ```sh
 CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_model_build crystal build \
-  bin/qwen35_flash_prefix_model_probe.cr --release \
+  experiments/qwen35/qwen35_flash_prefix_model_probe.cr --release \
   -o /private/tmp/qwen35_flash_prefix_model_probe \
   --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
 /private/tmp/qwen35_flash_prefix_model_probe --self-test
@@ -428,7 +428,7 @@ COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
 
 ### Real-Q rounding discriminator
 
-`bin/qwen35_flash_real_q_replay_probe.cr` isolates the last attention layer63
+`experiments/qwen35/qwen35_flash_real_q_replay_probe.cr` isolates the last attention layer63
 on the same fixed-token P256/T64 or T65 fixture. It does not modify the engine:
 after synchronized Flash-off prefill it reads existing scratch slots (missing
 slots fail, never allocate) and layer63 F16 K/V. Ordinary row replay must
@@ -486,7 +486,7 @@ Reproduce the bounded operator gate from the repository root:
 
 ```sh
 CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_prefix_build crystal build \
-  bin/qwen35_attn_flash_d256_prefix_probe.cr --release \
+  experiments/qwen35/qwen35_attn_flash_d256_prefix_probe.cr --release \
   -o /private/tmp/qwen35_attn_flash_d256_prefix_probe \
   --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
 COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
@@ -503,7 +503,7 @@ CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_prefix_spec crystal spec \
 This slice supersedes the immediate Q-precision-correction plan in LM1049.
 The user objective is useful coding output at useful latency, not minimum
 internal state error. No engine/shader/policy or numerical tolerance changed.
-`bin/qwen35_flash_prefix_model_probe.cr --prompt-file` renders an untruncated
+`experiments/qwen35/qwen35_flash_prefix_model_probe.cr --prompt-file` renders an untruncated
 no-thinking chat prompt, derives its actual append length, and stops baseline
 and fresh-candidate greedy continuations independently at EOS. The baseline
 always consumes its own argmax; only the comparison candidate is teacher-forced.
@@ -618,7 +618,7 @@ Reproduce with `--prefix 256 --append 512 --gen 2 --warmup`, adding
 to the same guarded invocation. Do not disable cooldown to improve the row.
 
 Next smallest optimization candidate is a per-query-tile causal key bound in
-`src/ml/gguf/kernels/qwen35_attn_flash_d256.metal`: currently each tile visits
+`src/ml/metal/kernels/qwen35/qwen35_attn_flash_d256.metal`: currently each tile visits
 all full key blocks and masks future scores only after QK. Skipping fully
 future blocks could reduce work without introducing extra Q rounding. Keep
 the existing global scalar tail, ensure uniform barrier control, and first
@@ -822,7 +822,7 @@ workload changes. No LTP/WBA or automatic-admission claim.
 ### Full append attribution and profiling command lifetime (2026-09-07)
 
 The next bounded slice adds `--profile off|boundary|detail` to
-`bin/qwen35_flash_prefix_model_probe.cr`; default `off` leaves the existing
+`experiments/qwen35/qwen35_flash_prefix_model_probe.cr`; default `off` leaves the existing
 route controls unchanged. Profiles cover append only, not prefix or decode.
 Boundary mode retains shared commands and labels GPU intervals on stderr with
 same-stream begin/end markers (the safe runner captures stderr separately).
@@ -1081,7 +1081,7 @@ advisory environment marker rejected an initial invocation before Metal/model
 work; it is not an actual containment credential, and the runner does not set
 it automatically.
 
-Rebuild `bin/qwen35_q4_b128_single_buffer_probe.cr` with Crystal 1.21.0,
+Rebuild `experiments/qwen35/qwen35_q4_b128_single_buffer_probe.cr` with Crystal 1.21.0,
 `--release`, a fresh `CRYSTAL_CACHE_DIR`, and the bridge link recipe above.
 Run `--self-test`; `--self-test --batch=257` must reject before model/Metal.
 Run `--compile-only` under the guarded runner, then `--run --batch=N` in four

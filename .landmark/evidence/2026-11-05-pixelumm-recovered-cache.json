@@ -1,0 +1,38 @@
+{
+  "schema": "cogni_ml.pixelumm_recovered_cache_evidence/v1",
+  "status": "VERIFIED CPU admission only",
+  "date": "2026-11-05",
+  "reason": "Restore deleted PixelUMM weights in a separate persistent model store without silently replacing the historical cache-manifest pin.",
+  "implementation": [
+    "examples/hy_nomas_decode_latent.cr",
+    "examples/support/hy_nomas_decode_latent_admission.cr",
+    "examples/support/hy_nomas_generation.cr",
+    "spec/hy_nomas_decode_latent_admission_spec.cr"
+  ],
+  "persistent_bundle": "/Volumes/Nata's Data/MLData/models/hy-nomas/pixelumm-ft-bac719a8",
+  "qualified_artifacts": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/decoder-cache-qualified-artifacts.json",
+    "bytes": 7854,
+    "sha256": "5f0029d8560e9ef67762ca5429561a9b8902cf4b61c1a7070810034f0522e64e"
+  },
+  "checks": {
+    "crystal_examples": 26,
+    "compiled_negative_cases": 9,
+    "canonical_weight_records": 468,
+    "release_build": true,
+    "positive_plan_only": true,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "inference_performed": false
+  },
+  "adversary": {
+    "verdict": "ROBUST within explicit CPU admission scope",
+    "tests": "Paired options, digest identity, regular leaf and payload, schema, inventory; canonical shape/name/offset binding; default semantics preserved."
+  },
+  "rollback": "Omit --decoder-cache and --decoder-cache-sha to keep the historical default path and pin.",
+  "refresh_on": [
+    "manifest or payload mutation",
+    "decoder validation or binary change",
+    "source revision or precision change"
+  ]
+}

@@ -1,0 +1,3545 @@
+{
+  "format": "landmark-evidence/v1",
+  "id": "drama3-whisper30-20261015",
+  "created_at_utc": "2026-10-15T04:43:41.578383+00:00",
+  "base_revision": "a21ee640f210d0ab50ca6f376152848de26b286d",
+  "branch": "codex/drama3-native",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Executed bounded generation timings, silent-suffix measurement, strict negative numerical gates and capture-fidelity controls.",
+    "speech_delivery_level": "IN_PROGRESS",
+    "full_30_word_delivery_passes": false,
+    "production_parity_passes": false,
+    "silence_root_cause_established": false,
+    "no_tolerance_precision_default_or_performance_promotion": true
+  },
+  "change": {
+    "risk": "CAUTION",
+    "paths": [
+      "examples/drama3_generate.cr",
+      "examples/drama3_generation_replay.cr",
+      "scripts/drama3/replay_mlx_generation.py",
+      "scripts/drama3/compare_generation_replay.py",
+      "spec/drama3_generation_replay_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-whisper30.json"
+    ],
+    "need": "Whole-clip nonzero RMS and EOS did not detect the user-observed silent suffix; accumulated error needs shared-prefix intermediate evidence.",
+    "behavior": "Add CPU phase clocks and frozen selector metadata; bounded CLI cap/cache guard; native and official GPU common-prefix captures plus strict comparator.",
+    "rollback": "Revert this atomic measurement/probe commit; defaults and kernel arithmetic are unchanged."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "memory_gib": 64,
+    "os": "macOS 26.6.2 build25G83",
+    "crystal": "1.21.0 / LLVM22.1.8",
+    "mlx": "0.31.1",
+    "python": "3.12.2",
+    "reference_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "model_repository_label": "cguldogan/drama-3-mlx-q4@5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "model_label_policy": "Actual local checkpoint bytes are manifest-bound; remote revision identity is not authenticated."
+  },
+  "input": {
+    "text": "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+    "spoken_text": "Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.  Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+    "word_count": 30,
+    "count_rule": "Whitespace-delimited spoken words; style tags and cues excluded",
+    "created_utc": "2026-10-15T03:33:57.689557+00:00"
+  },
+  "native_runs": [
+    {
+      "name": "generate-native",
+      "seed": 0,
+      "frames": 512,
+      "stopped_on_eos": false,
+      "truncated": true,
+      "samples": 1048576,
+      "wav_seconds": 23.777233560090703,
+      "native_elapsed_seconds": 191.284626625,
+      "phase_seconds": {
+        "model_initialize": 0.167865125,
+        "generation": 135.092271416,
+        "codec": 56.013302916,
+        "wav_write": 0.007304125
+      },
+      "wrapper_seconds": 192.04709070920944
+    },
+    {
+      "name": "generate-native-long",
+      "seed": 0,
+      "frames": 768,
+      "stopped_on_eos": false,
+      "truncated": true,
+      "samples": 1572864,
+      "wav_seconds": 35.66585034013605,
+      "native_elapsed_seconds": 268.41231075,
+      "phase_seconds": {
+        "model_initialize": 0.0064965,
+        "generation": 188.797251791,
+        "codec": 79.595930375,
+        "wav_write": 0.008828667
+      },
+      "wrapper_seconds": 269.5528465830721
+    },
+    {
+      "name": "generate-native-seed1",
+      "seed": 1,
+      "frames": 489,
+      "stopped_on_eos": true,
+      "truncated": false,
+      "samples": 1001472,
+      "wav_seconds": 22.709115646258503,
+      "native_elapsed_seconds": 185.726762458,
+      "phase_seconds": {
+        "model_initialize": 0.00546975,
+        "generation": 133.14721025,
+        "codec": 52.538030292,
+        "wav_write": 0.018335125
+      },
+      "wrapper_seconds": 186.7761600408703
+    }
+  ],
+  "timing_scope": {
+    "shared_host": true,
+    "controlled_cache": false,
+    "matched_speedup_claim": false,
+    "native_timer_starts_after_weightstore_and_prompt": true,
+    "model_initialize_is_resident_construction_not_eager_load": true,
+    "added_phase_clocks_add_gpu_reads_submissions_or_waits": false,
+    "seed0_512_frame_prefix_bitwise_equal_at_cap768": true
+  },
+  "provenance_limits": {
+    "primary_sources": "Executed primary-source hashes checked against receipt-bound builds/replays/comparators/tests.",
+    "older_external_helpers": "Initial controls/activity tools self-report hashes matched to final files; these are not independent pre-invocation helper receipts.",
+    "newer_external_helpers": "Separate external_source_sha256 launch receipts are checked where present; do not infer them for older commands."
+  },
+  "quality": {
+    "human_observation": "Whisper sounds excellent; remaining speech absent after approximately9s.",
+    "silent_interval_seconds": [
+      9.5,
+      22.709115646258503
+    ],
+    "max_pcm16_magnitude_each_half_second": 2,
+    "same_code_official_dac_also_silent": true,
+    "whole_clip_dac_comparison": {
+      "samples": 1001472,
+      "exact_samples": 976942,
+      "max_abs_pcm_error": 7,
+      "rms_pcm_error": 0.1689555572242991,
+      "max_abs_error_normalized_units": 0.00021362956633198035,
+      "rms_error_normalized_units": 5.156271774172158e-06,
+      "one_pcm_lsb_normalized_units": 3.051850947599719e-05,
+      "within_one_pcm_lsb": false
+    },
+    "halves": [
+      {
+        "samples": 500736,
+        "native_peak_pcm": 8555,
+        "native_rms_pcm": 415.0418899676635,
+        "reference_peak_pcm": 8555,
+        "reference_rms_pcm": 415.08030425206204,
+        "exact_zero_fraction": 0.16512493609406953,
+        "max_abs_delta_pcm": 7,
+        "rms_delta_pcm": 0.23427592486722282
+      },
+      {
+        "samples": 500736,
+        "native_peak_pcm": 2,
+        "native_rms_pcm": 0.7249898631263694,
+        "reference_peak_pcm": 2,
+        "reference_rms_pcm": 0.7244842168714996,
+        "exact_zero_fraction": 0.48430510288854806,
+        "max_abs_delta_pcm": 1,
+        "rms_delta_pcm": 0.04697607541668623
+      }
+    ],
+    "longest_repeated_main_token_run": {
+      "start_frame": 198,
+      "length_frames": 65,
+      "main_token": 250598,
+      "start_seconds_nominal": 9.195102040816327,
+      "end_seconds_nominal": 12.213696145124716
+    },
+    "interpretation": "Gross silence is represented in generated codes; no DAC parity or unique cause claim. PCM activity is not ASR/word alignment."
+  },
+  "common_prefix": {
+    "precision": "Floating checkpoint tensors promoted to F32; packed integers preserved; rowwise prefill1; official model math; native frames forced, sampler disabled.",
+    "fixed_tolerances": {
+      "atol": 6e-05,
+      "rtol": 0.0003
+    },
+    "capture_steps": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      192,
+      256,
+      361,
+      362,
+      363,
+      364,
+      365,
+      366,
+      367,
+      368,
+      369,
+      370,
+      371,
+      372,
+      373,
+      374,
+      375,
+      376,
+      377,
+      378,
+      379,
+      380,
+      381,
+      382,
+      383,
+      384,
+      385,
+      386,
+      387,
+      388,
+      389,
+      390,
+      391,
+      392,
+      393,
+      394,
+      395,
+      396,
+      397,
+      398,
+      399,
+      400,
+      401,
+      402,
+      403,
+      404,
+      405,
+      406,
+      407,
+      408,
+      409,
+      410,
+      411,
+      412,
+      413,
+      414,
+      415,
+      416,
+      417,
+      418,
+      419,
+      420,
+      421,
+      422,
+      423,
+      424,
+      425,
+      426,
+      427,
+      428,
+      429,
+      430,
+      431,
+      432,
+      433,
+      434,
+      435,
+      436,
+      437,
+      438,
+      439,
+      440,
+      441,
+      442,
+      443,
+      444,
+      445,
+      446,
+      447,
+      448,
+      449,
+      450,
+      451,
+      452,
+      453,
+      454,
+      455,
+      456,
+      457,
+      458,
+      459,
+      460,
+      461,
+      462,
+      463,
+      464,
+      465,
+      466,
+      467,
+      468,
+      469,
+      470,
+      471,
+      472,
+      473,
+      474,
+      475,
+      476,
+      477,
+      478,
+      479,
+      480,
+      481,
+      482,
+      483,
+      484,
+      485,
+      486,
+      487,
+      488,
+      489
+    ],
+    "stage_count": 1670,
+    "f32_values_per_arm": 6269068,
+    "arms": {
+      "native": {
+        "status": "mismatch",
+        "parity_metrics": {
+          "value_count": 6269068,
+          "out_of_tolerance_count": 1051036,
+          "max_abs": 0.8615207672119141,
+          "rms": 0.01114446776097674,
+          "relative_l2": 0.002044760438371696,
+          "relative_l2_denominator_floor": 1e-30,
+          "worst": {
+            "stage": "generation.step455.main_logits",
+            "coordinate": [
+              2801
+            ],
+            "flat_index": 2801,
+            "reference": 6.286005973815918,
+            "actual": 7.147526741027832,
+            "allowed_error": 0.0019458017921447752
+          }
+        },
+        "first_observed_failing_step": 447,
+        "failing_steps": [
+          447,
+          448,
+          449,
+          450,
+          451,
+          452,
+          453,
+          454,
+          455,
+          456,
+          457,
+          458,
+          459,
+          460,
+          461,
+          462,
+          463,
+          464,
+          465,
+          466,
+          467,
+          468,
+          469,
+          470,
+          471,
+          472,
+          473,
+          474,
+          475,
+          476,
+          477,
+          478,
+          479,
+          480,
+          481,
+          482,
+          483,
+          484,
+          485,
+          486,
+          487,
+          488,
+          489
+        ],
+        "main_top1_different_steps": [
+          448,
+          463
+        ],
+        "main_min_top30_overlap": 28
+      },
+      "mlx": {
+        "status": "mismatch",
+        "parity_metrics": {
+          "value_count": 6269068,
+          "out_of_tolerance_count": 1051066,
+          "max_abs": 0.8615193367004395,
+          "rms": 0.011144471782644959,
+          "relative_l2": 0.0020447611762578156,
+          "relative_l2_denominator_floor": 1e-30,
+          "worst": {
+            "stage": "generation.step455.main_logits",
+            "coordinate": [
+              2801
+            ],
+            "flat_index": 2801,
+            "reference": 6.286005973815918,
+            "actual": 7.147525310516357,
+            "allowed_error": 0.0019458017921447752
+          }
+        },
+        "first_observed_failing_step": 447,
+        "failing_steps": [
+          447,
+          448,
+          449,
+          450,
+          451,
+          452,
+          453,
+          454,
+          455,
+          456,
+          457,
+          458,
+          459,
+          460,
+          461,
+          462,
+          463,
+          464,
+          465,
+          466,
+          467,
+          468,
+          469,
+          470,
+          471,
+          472,
+          473,
+          474,
+          475,
+          476,
+          477,
+          478,
+          479,
+          480,
+          481,
+          482,
+          483,
+          484,
+          485,
+          486,
+          487,
+          488,
+          489
+        ],
+        "main_top1_different_steps": [
+          448,
+          463
+        ],
+        "main_min_top30_overlap": 28
+      }
+    },
+    "capture_perturbation_controls": [
+      {
+        "arm": "native",
+        "overlapping_stages": 146,
+        "overlapping_f32_values": 546829,
+        "bitwise_equal": true
+      },
+      {
+        "arm": "upstream",
+        "overlapping_stages": 146,
+        "overlapping_f32_values": 546829,
+        "bitwise_equal": true
+      }
+    ],
+    "causal_limit": "Observed failure at447 follows silence onset near198; earlier unsampled boundaries and sampling remain open. Same forced codes cannot test speech recovery."
+  },
+  "independent_controls": [
+    {
+      "name": "generate-official-bounded",
+      "format": "drama3-independent-official-control-v1",
+      "claim_scope": "canonical loaded checkpoint dtype; not F32 parity and not a same-RNG trajectory comparison",
+      "settings": {
+        "method": "official load_model + fish_omni.Model.generate_codes + official decode_codes",
+        "seed": 1,
+        "seed_comparison": "same integer seed as native is recorded for convenience; RNG implementations differ, so this is not a matched random stream",
+        "max_new_tokens": 768,
+        "temperature": 0.8,
+        "top_k": 30,
+        "top_p": 0.9,
+        "prefill_chunk_size": 1,
+        "forced_codes": false,
+        "precision_override": null
+      },
+      "termination": {
+        "frame_count": 768,
+        "max_new_tokens": 768,
+        "frame_cap_reached_by_count": true,
+        "api_exposes_stopped_on_eos": false,
+        "status": "frame_cap_reached"
+      },
+      "timings_seconds": {
+        "model_load": 5.8620003326795995,
+        "generation": 36.371104000136256,
+        "decode_codes": 0.005577708128839731,
+        "terminal_eval": 3.0455593750812113,
+        "host_readback": 5.3874682635068893e-05,
+        "analysis_pcm_and_riff_serialization": 0.016873958986252546,
+        "wav_file_write": 0.0013867081142961979
+      },
+      "wrapper_seconds": 46.81956645799801,
+      "parameter_dtypes": {
+        "meaning": "counts of parameter arrays returned by official model.parameters(); no tensor readback",
+        "counts_by_dtype": {
+          "mlx.core.bfloat16": 1046,
+          "mlx.core.bool": 3,
+          "mlx.core.float32": 658,
+          "mlx.core.uint32": 121
+        },
+        "counts_by_module": {
+          "backbone": {
+            "mlx.core.bfloat16": 853,
+            "mlx.core.uint32": 121
+          },
+          "codec": {
+            "mlx.core.bool": 3,
+            "mlx.core.float32": 658
+          },
+          "lm_head": {
+            "mlx.core.bfloat16": 1
+          },
+          "tower": {
+            "mlx.core.bfloat16": 192
+          }
+        }
+      },
+      "output_seconds": 35.66585034013605,
+      "output_samples": 1572864,
+      "pcm16_activity": {
+        "sample_count": 1572864,
+        "peak_pcm": 2958,
+        "rms_pcm": 66.18522229476547,
+        "exact_zero_fraction": 0.015471776326497396
+      },
+      "post_9_5s_window_peak_range_pcm": [
+        50,
+        90
+      ],
+      "longest_repeated_main_token_run": {
+        "value": 250115,
+        "start_frame": 164,
+        "length_frames": 5,
+        "start_seconds_nominal": 7.616145124716553,
+        "end_seconds_nominal": 7.848344671201814
+      },
+      "speech_content_verified": false
+    },
+    {
+      "name": "generate-f32-control",
+      "format": "drama3-independent-f32-control-v1",
+      "claim_scope": "custom shardwise F32 core loading plus official sampler and codec; not stock load_model, not a same-RNG trajectory comparison, and not a bitwise F32 replay",
+      "settings": {
+        "method": "custom shardwise F32 core loader + official fish_omni.Model.generate_codes + official decode_codes",
+        "seed": 1,
+        "seed_comparison": "same integer seed as native is recorded for convenience; RNG implementations differ, so this is not a matched random stream",
+        "max_new_tokens": 768,
+        "temperature": 0.8,
+        "top_k": 30,
+        "top_p": 0.9,
+        "prefill_chunk_size": 1,
+        "forced_codes": false,
+        "precision_override": "core floating tensors promoted to F32; packed integer tensors preserved; codec loaded by official hook at checkpoint dtype"
+      },
+      "termination": {
+        "frame_count": 384,
+        "max_new_tokens": 768,
+        "frame_cap_reached_by_count": false,
+        "api_exposes_stopped_on_eos": false,
+        "status": "returned_before_frame_cap_reason_not_reported"
+      },
+      "timings_seconds": {
+        "model_load": 40.21527133323252,
+        "model_construct": 0.015738707967102528,
+        "quantization_layout": 0.011516334023326635,
+        "core_shardwise_load": 35.39252162538469,
+        "model_eval": 0.0025845831260085106,
+        "post_load_hook_and_codec": 4.792910082731396,
+        "generation": 27.67716420814395,
+        "decode_codes": 0.02410562476143241,
+        "terminal_eval": 2.2531830831430852,
+        "host_readback": 5.150027573108673e-05,
+        "analysis_pcm_and_riff_serialization": 0.008080207742750645,
+        "wav_file_write": 0.001430000178515911
+      },
+      "wrapper_seconds": 72.111313957721,
+      "parameter_dtypes": {
+        "meaning": "counts of parameter arrays returned by official model.parameters(); no tensor readback",
+        "counts_by_dtype": {
+          "mlx.core.bool": 3,
+          "mlx.core.float32": 1704,
+          "mlx.core.uint32": 121
+        },
+        "counts_by_module": {
+          "backbone": {
+            "mlx.core.float32": 853,
+            "mlx.core.uint32": 121
+          },
+          "codec": {
+            "mlx.core.bool": 3,
+            "mlx.core.float32": 658
+          },
+          "lm_head": {
+            "mlx.core.float32": 1
+          },
+          "tower": {
+            "mlx.core.float32": 192
+          }
+        }
+      },
+      "output_seconds": 17.832925170068027,
+      "output_samples": 786432,
+      "pcm16_activity": {
+        "sample_count": 786432,
+        "peak_pcm": 10589,
+        "rms_pcm": 507.16769031659953,
+        "exact_zero_fraction": 0.13762410481770834
+      },
+      "post_9_5s_window_peak_range_pcm": [
+        5,
+        6004
+      ],
+      "longest_repeated_main_token_run": {
+        "value": 249739,
+        "start_frame": 246,
+        "length_frames": 4,
+        "start_seconds_nominal": 11.42421768707483,
+        "end_seconds_nominal": 11.609977324263038
+      },
+      "speech_content_verified": false
+    },
+    {
+      "name": "generate-chunked-control",
+      "format": "drama3-independent-chunked-control-v1",
+      "claim_scope": "custom shardwise F32 core loading plus pinned high-level Model.generate; default text chunking and prefill both differ from the low-level control, so this is a public-path discriminator rather than a single-cause test; not a same-RNG trajectory comparison or speech-success claim",
+      "settings": {
+        "method": "custom shardwise F32 core loader + official fish_omni.Model.generate and its official sampler/decode path",
+        "seed": 1,
+        "seed_comparison": "same integer seed as native is recorded for convenience; RNG implementations differ, so this is not a matched random stream",
+        "max_new_tokens_per_chunk": 768,
+        "temperature": 0.8,
+        "top_k": 30,
+        "top_p": 0.9,
+        "prefill_chunk_size": 128,
+        "chunk_length_bytes": 300,
+        "single_chunk": false,
+        "forced_codes": false,
+        "precision_override": "core floating tensors promoted to F32; packed integer tensors preserved; codec loaded by official hook at checkpoint dtype"
+      },
+      "termination": {
+        "frame_count": 648,
+        "max_new_tokens_per_chunk": 768,
+        "frame_cap_reached_by_count": false,
+        "frame_cap_reached_segments": [],
+        "api_exposes_stopped_on_eos": false,
+        "status": "chunk_termination_reason_not_reported_by_api"
+      },
+      "timings_seconds": {
+        "model_load": 45.11316883331165,
+        "model_construct": 0.03231000015512109,
+        "quantization_layout": 0.03157150000333786,
+        "core_shardwise_load": 42.31501791626215,
+        "model_eval": 0.0029532918706536293,
+        "post_load_hook_and_codec": 2.731316125020385,
+        "official_generate_iterator_wall": 61.86740237521008,
+        "sum_official_result_processing_times": 61.86629300145432,
+        "post_iterator_host_readback": 7.595773786306381e-05,
+        "analysis_pcm_and_riff_serialization": 0.015693209134042263,
+        "wav_file_write": 0.0015087500214576721
+      },
+      "wrapper_seconds": 108.86512120813131,
+      "parameter_dtypes": {
+        "meaning": "counts of parameter arrays returned by official model.parameters(); no tensor readback",
+        "counts_by_dtype": {
+          "mlx.core.bool": 3,
+          "mlx.core.float32": 1704,
+          "mlx.core.uint32": 121
+        },
+        "counts_by_module": {
+          "backbone": {
+            "mlx.core.float32": 853,
+            "mlx.core.uint32": 121
+          },
+          "codec": {
+            "mlx.core.bool": 3,
+            "mlx.core.float32": 658
+          },
+          "lm_head": {
+            "mlx.core.float32": 1
+          },
+          "tower": {
+            "mlx.core.float32": 192
+          }
+        }
+      },
+      "output_seconds": 30.093061224489794,
+      "output_samples": 1327104,
+      "pcm16_activity": {
+        "sample_count": 1327104,
+        "peak_pcm": 12224,
+        "rms_pcm": 1180.894059752115,
+        "exact_zero_fraction": 0.04480432581018518
+      },
+      "post_9_5s_window_peak_range_pcm": [
+        18,
+        12084
+      ],
+      "longest_repeated_main_token_run": {
+        "value": 250708,
+        "start_frame": 89,
+        "length_frames": 5,
+        "start_seconds_nominal": 4.133151927437642,
+        "end_seconds_nominal": 4.365351473922902
+      },
+      "speech_content_verified": false,
+      "chunks": [
+        {
+          "segment_idx": 0,
+          "input_text": "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку!",
+          "input_utf8_bytes": 265,
+          "returned_result": true,
+          "prompt_rows": 71,
+          "prompt_tokens_per_second": 1.562932968055473,
+          "frame_count": 534,
+          "frame_cap_reached_by_count": false,
+          "stop_reason": "Model.generate does not expose EOS-versus-cap termination; count is recorded only",
+          "frames_shape": [
+            534,
+            11
+          ],
+          "codebook_shape": [
+            10,
+            534
+          ],
+          "codebook_dtype": "mlx.core.uint32",
+          "audio_sample_rate": 44100,
+          "audio_samples": 1093632,
+          "audio_seconds": 24.79891156462585,
+          "decoded_audio_dtype": "mlx.core.float32",
+          "processing_time_seconds": 45.427412084303796,
+          "token_count": 534,
+          "real_time_factor": 0.545901921918956,
+          "peak_memory_usage_gb": 43.808916044
+        },
+        {
+          "segment_idx": 1,
+          "input_text": "Ну и напугал же он нас сегодня, маленький проказник.",
+          "input_utf8_bytes": 94,
+          "returned_result": true,
+          "prompt_rows": 633,
+          "prompt_tokens_per_second": 38.50627078511148,
+          "frame_count": 114,
+          "frame_cap_reached_by_count": false,
+          "stop_reason": "Model.generate does not expose EOS-versus-cap termination; count is recorded only",
+          "frames_shape": [
+            114,
+            11
+          ],
+          "codebook_shape": [
+            10,
+            114
+          ],
+          "codebook_dtype": "mlx.core.uint32",
+          "audio_sample_rate": 44100,
+          "audio_samples": 233472,
+          "audio_seconds": 5.294149659863946,
+          "decoded_audio_dtype": "mlx.core.float32",
+          "processing_time_seconds": 16.438880917150527,
+          "token_count": 114,
+          "real_time_factor": 0.32205049033116423,
+          "peak_memory_usage_gb": 43.808916044
+        }
+      ],
+      "per_chunk_activity": {
+        "scope": "Per-chunk terminal PCM activity; not ASR, word alignment or a speech-success gate.",
+        "source_sha256": {
+          "helper": "8aa952b7d15ea411a554733b1ab016561e7247264293a1b119cb8d709c7c290b",
+          "report": "d7b1e4a69a3718ed78d5603f373a61130737baff3b80a79371c4db88ed39b946",
+          "wav": "e30c47d02a309e602f19c428098c5dde62906231b4b9941447e7828d160ea8e7"
+        },
+        "chunks": [
+          {
+            "segment_idx": 0,
+            "text": "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку!",
+            "prompt_rows": 71,
+            "frames": 534,
+            "global_start_seconds": 0.0,
+            "seconds": 24.79891156462585,
+            "windows": [
+              {
+                "start_seconds_in_chunk": 0.0,
+                "end_seconds_in_chunk": 0.5,
+                "peak_pcm": 7890,
+                "rms_pcm": 1381.2583551670632
+              },
+              {
+                "start_seconds_in_chunk": 0.5,
+                "end_seconds_in_chunk": 1.0,
+                "peak_pcm": 42,
+                "rms_pcm": 9.610720110537185
+              },
+              {
+                "start_seconds_in_chunk": 1.0,
+                "end_seconds_in_chunk": 1.5,
+                "peak_pcm": 11213,
+                "rms_pcm": 1390.3366319886106
+              },
+              {
+                "start_seconds_in_chunk": 1.5,
+                "end_seconds_in_chunk": 2.0,
+                "peak_pcm": 12152,
+                "rms_pcm": 1557.5753955683233
+              },
+              {
+                "start_seconds_in_chunk": 2.0,
+                "end_seconds_in_chunk": 2.5,
+                "peak_pcm": 12224,
+                "rms_pcm": 1413.3202980081708
+              },
+              {
+                "start_seconds_in_chunk": 2.5,
+                "end_seconds_in_chunk": 3.0,
+                "peak_pcm": 6833,
+                "rms_pcm": 1223.441716991571
+              },
+              {
+                "start_seconds_in_chunk": 3.0,
+                "end_seconds_in_chunk": 3.5,
+                "peak_pcm": 4767,
+                "rms_pcm": 651.5701218739399
+              },
+              {
+                "start_seconds_in_chunk": 3.5,
+                "end_seconds_in_chunk": 4.0,
+                "peak_pcm": 38,
+                "rms_pcm": 9.065200961960281
+              },
+              {
+                "start_seconds_in_chunk": 4.0,
+                "end_seconds_in_chunk": 4.5,
+                "peak_pcm": 30,
+                "rms_pcm": 6.802650543851912
+              },
+              {
+                "start_seconds_in_chunk": 4.5,
+                "end_seconds_in_chunk": 5.0,
+                "peak_pcm": 7556,
+                "rms_pcm": 844.1818648295102
+              },
+              {
+                "start_seconds_in_chunk": 5.0,
+                "end_seconds_in_chunk": 5.5,
+                "peak_pcm": 10053,
+                "rms_pcm": 1380.5231343387347
+              },
+              {
+                "start_seconds_in_chunk": 5.5,
+                "end_seconds_in_chunk": 6.0,
+                "peak_pcm": 4190,
+                "rms_pcm": 581.0193848167889
+              },
+              {
+                "start_seconds_in_chunk": 6.0,
+                "end_seconds_in_chunk": 6.5,
+                "peak_pcm": 11547,
+                "rms_pcm": 1188.6419630894886
+              },
+              {
+                "start_seconds_in_chunk": 6.5,
+                "end_seconds_in_chunk": 7.0,
+                "peak_pcm": 6250,
+                "rms_pcm": 938.3133163969758
+              },
+              {
+                "start_seconds_in_chunk": 7.0,
+                "end_seconds_in_chunk": 7.5,
+                "peak_pcm": 10877,
+                "rms_pcm": 1211.7522850660575
+              },
+              {
+                "start_seconds_in_chunk": 7.5,
+                "end_seconds_in_chunk": 8.0,
+                "peak_pcm": 6201,
+                "rms_pcm": 456.2307210600819
+              },
+              {
+                "start_seconds_in_chunk": 8.0,
+                "end_seconds_in_chunk": 8.5,
+                "peak_pcm": 21,
+                "rms_pcm": 5.914807123707213
+              },
+              {
+                "start_seconds_in_chunk": 8.5,
+                "end_seconds_in_chunk": 9.0,
+                "peak_pcm": 28,
+                "rms_pcm": 5.912598486425237
+              },
+              {
+                "start_seconds_in_chunk": 9.0,
+                "end_seconds_in_chunk": 9.5,
+                "peak_pcm": 22,
+                "rms_pcm": 6.31080130822762
+              },
+              {
+                "start_seconds_in_chunk": 9.5,
+                "end_seconds_in_chunk": 10.0,
+                "peak_pcm": 26,
+                "rms_pcm": 5.997516492818728
+              },
+              {
+                "start_seconds_in_chunk": 10.0,
+                "end_seconds_in_chunk": 10.5,
+                "peak_pcm": 24,
+                "rms_pcm": 5.676134547503304
+              },
+              {
+                "start_seconds_in_chunk": 10.5,
+                "end_seconds_in_chunk": 11.0,
+                "peak_pcm": 21,
+                "rms_pcm": 5.946202507738746
+              },
+              {
+                "start_seconds_in_chunk": 11.0,
+                "end_seconds_in_chunk": 11.5,
+                "peak_pcm": 22,
+                "rms_pcm": 5.706089359825425
+              },
+              {
+                "start_seconds_in_chunk": 11.5,
+                "end_seconds_in_chunk": 12.0,
+                "peak_pcm": 23,
+                "rms_pcm": 5.71147152925395
+              },
+              {
+                "start_seconds_in_chunk": 12.0,
+                "end_seconds_in_chunk": 12.5,
+                "peak_pcm": 24,
+                "rms_pcm": 5.894941911168796
+              },
+              {
+                "start_seconds_in_chunk": 12.5,
+                "end_seconds_in_chunk": 13.0,
+                "peak_pcm": 25,
+                "rms_pcm": 6.053555391653618
+              },
+              {
+                "start_seconds_in_chunk": 13.0,
+                "end_seconds_in_chunk": 13.5,
+                "peak_pcm": 24,
+                "rms_pcm": 5.890066198150417
+              },
+              {
+                "start_seconds_in_chunk": 13.5,
+                "end_seconds_in_chunk": 14.0,
+                "peak_pcm": 22,
+                "rms_pcm": 5.836102355420769
+              },
+              {
+                "start_seconds_in_chunk": 14.0,
+                "end_seconds_in_chunk": 14.5,
+                "peak_pcm": 24,
+                "rms_pcm": 6.060017287418372
+              },
+              {
+                "start_seconds_in_chunk": 14.5,
+                "end_seconds_in_chunk": 15.0,
+                "peak_pcm": 21,
+                "rms_pcm": 5.719755318807744
+              },
+              {
+                "start_seconds_in_chunk": 15.0,
+                "end_seconds_in_chunk": 15.5,
+                "peak_pcm": 20,
+                "rms_pcm": 5.854188182350856
+              },
+              {
+                "start_seconds_in_chunk": 15.5,
+                "end_seconds_in_chunk": 16.0,
+                "peak_pcm": 20,
+                "rms_pcm": 5.814896032863861
+              },
+              {
+                "start_seconds_in_chunk": 16.0,
+                "end_seconds_in_chunk": 16.5,
+                "peak_pcm": 21,
+                "rms_pcm": 5.918624280919072
+              },
+              {
+                "start_seconds_in_chunk": 16.5,
+                "end_seconds_in_chunk": 17.0,
+                "peak_pcm": 23,
+                "rms_pcm": 5.723429192656795
+              },
+              {
+                "start_seconds_in_chunk": 17.0,
+                "end_seconds_in_chunk": 17.5,
+                "peak_pcm": 23,
+                "rms_pcm": 5.70098849685472
+              },
+              {
+                "start_seconds_in_chunk": 17.5,
+                "end_seconds_in_chunk": 18.0,
+                "peak_pcm": 22,
+                "rms_pcm": 5.967466597842997
+              },
+              {
+                "start_seconds_in_chunk": 18.0,
+                "end_seconds_in_chunk": 18.5,
+                "peak_pcm": 22,
+                "rms_pcm": 5.964479133827905
+              },
+              {
+                "start_seconds_in_chunk": 18.5,
+                "end_seconds_in_chunk": 19.0,
+                "peak_pcm": 22,
+                "rms_pcm": 5.855663769884764
+              },
+              {
+                "start_seconds_in_chunk": 19.0,
+                "end_seconds_in_chunk": 19.5,
+                "peak_pcm": 22,
+                "rms_pcm": 5.937367733340005
+              },
+              {
+                "start_seconds_in_chunk": 19.5,
+                "end_seconds_in_chunk": 20.0,
+                "peak_pcm": 24,
+                "rms_pcm": 6.021563669425352
+              },
+              {
+                "start_seconds_in_chunk": 20.0,
+                "end_seconds_in_chunk": 20.5,
+                "peak_pcm": 24,
+                "rms_pcm": 6.066423707477038
+              },
+              {
+                "start_seconds_in_chunk": 20.5,
+                "end_seconds_in_chunk": 21.0,
+                "peak_pcm": 22,
+                "rms_pcm": 5.930225433838508
+              },
+              {
+                "start_seconds_in_chunk": 21.0,
+                "end_seconds_in_chunk": 21.5,
+                "peak_pcm": 22,
+                "rms_pcm": 5.862718987202311
+              },
+              {
+                "start_seconds_in_chunk": 21.5,
+                "end_seconds_in_chunk": 22.0,
+                "peak_pcm": 28,
+                "rms_pcm": 6.303207979989417
+              },
+              {
+                "start_seconds_in_chunk": 22.0,
+                "end_seconds_in_chunk": 22.5,
+                "peak_pcm": 24,
+                "rms_pcm": 6.288152485269782
+              },
+              {
+                "start_seconds_in_chunk": 22.5,
+                "end_seconds_in_chunk": 23.0,
+                "peak_pcm": 24,
+                "rms_pcm": 6.219397642013128
+              },
+              {
+                "start_seconds_in_chunk": 23.0,
+                "end_seconds_in_chunk": 23.5,
+                "peak_pcm": 24,
+                "rms_pcm": 5.960626669636723
+              },
+              {
+                "start_seconds_in_chunk": 23.5,
+                "end_seconds_in_chunk": 24.0,
+                "peak_pcm": 22,
+                "rms_pcm": 6.291343078582371
+              },
+              {
+                "start_seconds_in_chunk": 24.0,
+                "end_seconds_in_chunk": 24.5,
+                "peak_pcm": 24,
+                "rms_pcm": 6.185624472385847
+              },
+              {
+                "start_seconds_in_chunk": 24.5,
+                "end_seconds_in_chunk": 24.79891156462585,
+                "peak_pcm": 23,
+                "rms_pcm": 6.080043140812697
+              }
+            ]
+          },
+          {
+            "segment_idx": 1,
+            "text": "Ну и напугал же он нас сегодня, маленький проказник.",
+            "prompt_rows": 633,
+            "frames": 114,
+            "global_start_seconds": 24.79891156462585,
+            "seconds": 5.294149659863946,
+            "windows": [
+              {
+                "start_seconds_in_chunk": 0.0,
+                "end_seconds_in_chunk": 0.5,
+                "peak_pcm": 10093,
+                "rms_pcm": 3685.94217449779
+              },
+              {
+                "start_seconds_in_chunk": 0.5,
+                "end_seconds_in_chunk": 1.0,
+                "peak_pcm": 11275,
+                "rms_pcm": 3127.646391128081
+              },
+              {
+                "start_seconds_in_chunk": 1.0,
+                "end_seconds_in_chunk": 1.5,
+                "peak_pcm": 9865,
+                "rms_pcm": 3468.1543218847924
+              },
+              {
+                "start_seconds_in_chunk": 1.5,
+                "end_seconds_in_chunk": 2.0,
+                "peak_pcm": 12084,
+                "rms_pcm": 3116.6721713145757
+              },
+              {
+                "start_seconds_in_chunk": 2.0,
+                "end_seconds_in_chunk": 2.5,
+                "peak_pcm": 11197,
+                "rms_pcm": 2351.525354456775
+              },
+              {
+                "start_seconds_in_chunk": 2.5,
+                "end_seconds_in_chunk": 3.0,
+                "peak_pcm": 6079,
+                "rms_pcm": 1164.8477102101629
+              },
+              {
+                "start_seconds_in_chunk": 3.0,
+                "end_seconds_in_chunk": 3.5,
+                "peak_pcm": 9477,
+                "rms_pcm": 2775.9885949712457
+              },
+              {
+                "start_seconds_in_chunk": 3.5,
+                "end_seconds_in_chunk": 4.0,
+                "peak_pcm": 10880,
+                "rms_pcm": 2468.88384205864
+              },
+              {
+                "start_seconds_in_chunk": 4.0,
+                "end_seconds_in_chunk": 4.5,
+                "peak_pcm": 7934,
+                "rms_pcm": 1009.4441327721948
+              },
+              {
+                "start_seconds_in_chunk": 4.5,
+                "end_seconds_in_chunk": 5.0,
+                "peak_pcm": 19,
+                "rms_pcm": 4.822551897359021
+              },
+              {
+                "start_seconds_in_chunk": 5.0,
+                "end_seconds_in_chunk": 5.294149659863946,
+                "peak_pcm": 19,
+                "rms_pcm": 5.375694205397809
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "generate-no-whisper-control",
+      "format": "drama3-independent-chunked-control-v1",
+      "claim_scope": "same public path, F32 loader, seed, settings and chunk boundaries as the baseline; only the whisper wrapper is removed. A single sampled prompt ablation, not a causal or speech-success claim; later random draws are not aligned across changed chunk lengths",
+      "settings": {
+        "method": "custom shardwise F32 core loader + official fish_omni.Model.generate and its official sampler/decode path",
+        "seed": 1,
+        "seed_comparison": "same integer seed as native is recorded for convenience; RNG implementations differ, so this is not a matched random stream",
+        "max_new_tokens_per_chunk": 768,
+        "temperature": 0.8,
+        "top_k": 30,
+        "top_p": 0.9,
+        "prefill_chunk_size": 128,
+        "chunk_length_bytes": 300,
+        "single_chunk": false,
+        "forced_codes": false,
+        "precision_override": "core floating tensors promoted to F32; packed integer tensors preserved; codec loaded by official hook at checkpoint dtype"
+      },
+      "termination": {
+        "frame_count": 555,
+        "max_new_tokens_per_chunk": 768,
+        "frame_cap_reached_by_count": false,
+        "frame_cap_reached_segments": [],
+        "api_exposes_stopped_on_eos": false,
+        "status": "chunk_termination_reason_not_reported_by_api"
+      },
+      "timings_seconds": {
+        "model_load": 45.03179183229804,
+        "model_construct": 0.014404083136469126,
+        "quantization_layout": 0.010059249587357044,
+        "core_shardwise_load": 42.33892025006935,
+        "model_eval": 0.0030664997175335884,
+        "post_load_hook_and_codec": 2.6653417497873306,
+        "official_generate_iterator_wall": 83.69804975017905,
+        "sum_official_result_processing_times": 83.69670170824975,
+        "post_iterator_host_readback": 8.429121226072311e-05,
+        "analysis_pcm_and_riff_serialization": 0.010492790956050158,
+        "wav_file_write": 0.0017470410093665123
+      },
+      "wrapper_seconds": 129.9955091252923,
+      "parameter_dtypes": {
+        "meaning": "counts of parameter arrays returned by official model.parameters(); no tensor readback",
+        "counts_by_dtype": {
+          "mlx.core.bool": 3,
+          "mlx.core.float32": 1704,
+          "mlx.core.uint32": 121
+        },
+        "counts_by_module": {
+          "backbone": {
+            "mlx.core.float32": 853,
+            "mlx.core.uint32": 121
+          },
+          "codec": {
+            "mlx.core.bool": 3,
+            "mlx.core.float32": 658
+          },
+          "lm_head": {
+            "mlx.core.float32": 1
+          },
+          "tower": {
+            "mlx.core.float32": 192
+          }
+        }
+      },
+      "output_seconds": 25.774149659863944,
+      "output_samples": 1136640,
+      "pcm16_activity": {
+        "sample_count": 1136640,
+        "peak_pcm": 14481,
+        "rms_pcm": 849.2561631271897,
+        "exact_zero_fraction": 0.2623354800112613
+      },
+      "post_9_5s_window_peak_range_pcm": [
+        1,
+        14481
+      ],
+      "longest_repeated_main_token_run": {
+        "value": 250716,
+        "start_frame": 292,
+        "length_frames": 4,
+        "start_seconds_nominal": 13.56045351473923,
+        "end_seconds_nominal": 13.746213151927437
+      },
+      "speech_content_verified": false,
+      "chunks": [
+        {
+          "segment_idx": 0,
+          "input_text": "Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит. [laughs] Ах, это всего лишь наш кот уронил коробку!",
+          "input_utf8_bytes": 246,
+          "returned_result": true,
+          "prompt_rows": 64,
+          "prompt_tokens_per_second": 0.8740425518294368,
+          "frame_count": 451,
+          "frame_cap_reached_by_count": false,
+          "stop_reason": "Model.generate does not expose EOS-versus-cap termination; count is recorded only",
+          "frames_shape": [
+            451,
+            11
+          ],
+          "codebook_shape": [
+            10,
+            451
+          ],
+          "codebook_dtype": "mlx.core.uint32",
+          "audio_sample_rate": 44100,
+          "audio_samples": 923648,
+          "audio_seconds": 20.94439909297052,
+          "decoded_audio_dtype": "mlx.core.float32",
+          "processing_time_seconds": 73.22297966619954,
+          "token_count": 451,
+          "real_time_factor": 0.2860358754649077,
+          "peak_memory_usage_gb": 42.4217483
+        },
+        {
+          "segment_idx": 1,
+          "input_text": "Ну и напугал же он нас сегодня, маленький проказник.",
+          "input_utf8_bytes": 94,
+          "returned_result": true,
+          "prompt_rows": 543,
+          "prompt_tokens_per_second": 51.84403384202363,
+          "frame_count": 104,
+          "frame_cap_reached_by_count": false,
+          "stop_reason": "Model.generate does not expose EOS-versus-cap termination; count is recorded only",
+          "frames_shape": [
+            104,
+            11
+          ],
+          "codebook_shape": [
+            10,
+            104
+          ],
+          "codebook_dtype": "mlx.core.uint32",
+          "audio_sample_rate": 44100,
+          "audio_samples": 212992,
+          "audio_seconds": 4.829750566893424,
+          "decoded_audio_dtype": "mlx.core.float32",
+          "processing_time_seconds": 10.473722042050213,
+          "token_count": 104,
+          "real_time_factor": 0.4611302980452219,
+          "peak_memory_usage_gb": 42.4217483
+        }
+      ],
+      "per_chunk_activity": {
+        "scope": "Per-chunk terminal PCM activity; not ASR, word alignment or a speech-success gate.",
+        "source_sha256": {
+          "helper": "acd3fe58bb922f9b58ea957cd065851da67dd06803b82119d5596ab4bea03dce",
+          "report": "e0d0c43c754defc0dc0ef90ef4373f31fcbd2f5c331db1a0891a6b2d39bd6e9e",
+          "wav": "3364f24b63aa2196644579104f5cbfb86afedb739172856e2e62b1a3fed1b1a4"
+        },
+        "chunks": [
+          {
+            "segment_idx": 0,
+            "text": "Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит. [laughs] Ах, это всего лишь наш кот уронил коробку!",
+            "prompt_rows": 64,
+            "frames": 451,
+            "global_start_seconds": 0.0,
+            "seconds": 20.94439909297052,
+            "windows": [
+              {
+                "start_seconds_in_chunk": 0.0,
+                "end_seconds_in_chunk": 0.5,
+                "peak_pcm": 6670,
+                "rms_pcm": 1154.1717779891242
+              },
+              {
+                "start_seconds_in_chunk": 0.5,
+                "end_seconds_in_chunk": 1.0,
+                "peak_pcm": 31,
+                "rms_pcm": 2.4136046752408875
+              },
+              {
+                "start_seconds_in_chunk": 1.0,
+                "end_seconds_in_chunk": 1.5,
+                "peak_pcm": 10039,
+                "rms_pcm": 1078.8638233962183
+              },
+              {
+                "start_seconds_in_chunk": 1.5,
+                "end_seconds_in_chunk": 2.0,
+                "peak_pcm": 5810,
+                "rms_pcm": 1230.075982904642
+              },
+              {
+                "start_seconds_in_chunk": 2.0,
+                "end_seconds_in_chunk": 2.5,
+                "peak_pcm": 5461,
+                "rms_pcm": 984.0871342290285
+              },
+              {
+                "start_seconds_in_chunk": 2.5,
+                "end_seconds_in_chunk": 3.0,
+                "peak_pcm": 4517,
+                "rms_pcm": 412.81698568914214
+              },
+              {
+                "start_seconds_in_chunk": 3.0,
+                "end_seconds_in_chunk": 3.5,
+                "peak_pcm": 3,
+                "rms_pcm": 0.8699049912936188
+              },
+              {
+                "start_seconds_in_chunk": 3.5,
+                "end_seconds_in_chunk": 4.0,
+                "peak_pcm": 8578,
+                "rms_pcm": 441.2100628859645
+              },
+              {
+                "start_seconds_in_chunk": 4.0,
+                "end_seconds_in_chunk": 4.5,
+                "peak_pcm": 9344,
+                "rms_pcm": 1621.3717966145653
+              },
+              {
+                "start_seconds_in_chunk": 4.5,
+                "end_seconds_in_chunk": 5.0,
+                "peak_pcm": 6679,
+                "rms_pcm": 1673.0824229181153
+              },
+              {
+                "start_seconds_in_chunk": 5.0,
+                "end_seconds_in_chunk": 5.5,
+                "peak_pcm": 4943,
+                "rms_pcm": 918.2234719030773
+              },
+              {
+                "start_seconds_in_chunk": 5.5,
+                "end_seconds_in_chunk": 6.0,
+                "peak_pcm": 4193,
+                "rms_pcm": 607.1061047326309
+              },
+              {
+                "start_seconds_in_chunk": 6.0,
+                "end_seconds_in_chunk": 6.5,
+                "peak_pcm": 2785,
+                "rms_pcm": 483.939683841253
+              },
+              {
+                "start_seconds_in_chunk": 6.5,
+                "end_seconds_in_chunk": 7.0,
+                "peak_pcm": 921,
+                "rms_pcm": 80.59250315398977
+              },
+              {
+                "start_seconds_in_chunk": 7.0,
+                "end_seconds_in_chunk": 7.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.875465538611916
+              },
+              {
+                "start_seconds_in_chunk": 7.5,
+                "end_seconds_in_chunk": 8.0,
+                "peak_pcm": 4,
+                "rms_pcm": 1.0595425359500807
+              },
+              {
+                "start_seconds_in_chunk": 8.0,
+                "end_seconds_in_chunk": 8.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.9022270254443594
+              },
+              {
+                "start_seconds_in_chunk": 8.5,
+                "end_seconds_in_chunk": 9.0,
+                "peak_pcm": 2,
+                "rms_pcm": 0.8663264638403432
+              },
+              {
+                "start_seconds_in_chunk": 9.0,
+                "end_seconds_in_chunk": 9.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.8909217118235695
+              },
+              {
+                "start_seconds_in_chunk": 9.5,
+                "end_seconds_in_chunk": 10.0,
+                "peak_pcm": 2,
+                "rms_pcm": 0.86268052433959
+              },
+              {
+                "start_seconds_in_chunk": 10.0,
+                "end_seconds_in_chunk": 10.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.9171829096728299
+              },
+              {
+                "start_seconds_in_chunk": 10.5,
+                "end_seconds_in_chunk": 11.0,
+                "peak_pcm": 2,
+                "rms_pcm": 1.0322025851889485
+              },
+              {
+                "start_seconds_in_chunk": 11.0,
+                "end_seconds_in_chunk": 11.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.93554160529508
+              },
+              {
+                "start_seconds_in_chunk": 11.5,
+                "end_seconds_in_chunk": 12.0,
+                "peak_pcm": 2,
+                "rms_pcm": 0.8929301557448649
+              },
+              {
+                "start_seconds_in_chunk": 12.0,
+                "end_seconds_in_chunk": 12.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.9177513681254554
+              },
+              {
+                "start_seconds_in_chunk": 12.5,
+                "end_seconds_in_chunk": 13.0,
+                "peak_pcm": 2,
+                "rms_pcm": 1.0563059750494503
+              },
+              {
+                "start_seconds_in_chunk": 13.0,
+                "end_seconds_in_chunk": 13.5,
+                "peak_pcm": 4,
+                "rms_pcm": 1.0709734483095867
+              },
+              {
+                "start_seconds_in_chunk": 13.5,
+                "end_seconds_in_chunk": 14.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.8536702141149826
+              },
+              {
+                "start_seconds_in_chunk": 14.0,
+                "end_seconds_in_chunk": 14.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6304085706796779
+              },
+              {
+                "start_seconds_in_chunk": 14.5,
+                "end_seconds_in_chunk": 15.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.5910135803466744
+              },
+              {
+                "start_seconds_in_chunk": 15.0,
+                "end_seconds_in_chunk": 15.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.5301777394177821
+              },
+              {
+                "start_seconds_in_chunk": 15.5,
+                "end_seconds_in_chunk": 16.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.595942440417067
+              },
+              {
+                "start_seconds_in_chunk": 16.0,
+                "end_seconds_in_chunk": 16.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.5687636270825197
+              },
+              {
+                "start_seconds_in_chunk": 16.5,
+                "end_seconds_in_chunk": 17.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6013212964691186
+              },
+              {
+                "start_seconds_in_chunk": 17.0,
+                "end_seconds_in_chunk": 17.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.5576513755827581
+              },
+              {
+                "start_seconds_in_chunk": 17.5,
+                "end_seconds_in_chunk": 18.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.5930435736706948
+              },
+              {
+                "start_seconds_in_chunk": 18.0,
+                "end_seconds_in_chunk": 18.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6948465955757572
+              },
+              {
+                "start_seconds_in_chunk": 18.5,
+                "end_seconds_in_chunk": 19.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6605501726683939
+              },
+              {
+                "start_seconds_in_chunk": 19.0,
+                "end_seconds_in_chunk": 19.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6887828167916814
+              },
+              {
+                "start_seconds_in_chunk": 19.5,
+                "end_seconds_in_chunk": 20.0,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6911490973950063
+              },
+              {
+                "start_seconds_in_chunk": 20.0,
+                "end_seconds_in_chunk": 20.5,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6881240725545248
+              },
+              {
+                "start_seconds_in_chunk": 20.5,
+                "end_seconds_in_chunk": 20.94439909297052,
+                "peak_pcm": 1,
+                "rms_pcm": 0.6141924540810204
+              }
+            ]
+          },
+          {
+            "segment_idx": 1,
+            "text": "Ну и напугал же он нас сегодня, маленький проказник.",
+            "prompt_rows": 543,
+            "frames": 104,
+            "global_start_seconds": 20.94439909297052,
+            "seconds": 4.829750566893424,
+            "windows": [
+              {
+                "start_seconds_in_chunk": 0.0,
+                "end_seconds_in_chunk": 0.5,
+                "peak_pcm": 11441,
+                "rms_pcm": 3124.821095468476
+              },
+              {
+                "start_seconds_in_chunk": 0.5,
+                "end_seconds_in_chunk": 1.0,
+                "peak_pcm": 14481,
+                "rms_pcm": 2530.027417219443
+              },
+              {
+                "start_seconds_in_chunk": 1.0,
+                "end_seconds_in_chunk": 1.5,
+                "peak_pcm": 9331,
+                "rms_pcm": 1895.4874953754552
+              },
+              {
+                "start_seconds_in_chunk": 1.5,
+                "end_seconds_in_chunk": 2.0,
+                "peak_pcm": 6629,
+                "rms_pcm": 1113.2333214682405
+              },
+              {
+                "start_seconds_in_chunk": 2.0,
+                "end_seconds_in_chunk": 2.5,
+                "peak_pcm": 846,
+                "rms_pcm": 138.60068223369703
+              },
+              {
+                "start_seconds_in_chunk": 2.5,
+                "end_seconds_in_chunk": 3.0,
+                "peak_pcm": 11443,
+                "rms_pcm": 1662.2784739457197
+              },
+              {
+                "start_seconds_in_chunk": 3.0,
+                "end_seconds_in_chunk": 3.5,
+                "peak_pcm": 9180,
+                "rms_pcm": 1030.6773698082832
+              },
+              {
+                "start_seconds_in_chunk": 3.5,
+                "end_seconds_in_chunk": 4.0,
+                "peak_pcm": 2275,
+                "rms_pcm": 336.10747410561976
+              },
+              {
+                "start_seconds_in_chunk": 4.0,
+                "end_seconds_in_chunk": 4.5,
+                "peak_pcm": 2,
+                "rms_pcm": 0.8012178938208288
+              },
+              {
+                "start_seconds_in_chunk": 4.5,
+                "end_seconds_in_chunk": 4.829750566893424,
+                "peak_pcm": 2,
+                "rms_pcm": 0.820543208277117
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "prompt_syntax": {
+    "reference": "Pinned community-port README and prompt.py are SHA-bound artifacts.",
+    "documented_cue": "[laughs]",
+    "whisper_wrapper_source_behavior": "Generic paired-tag chunk protection and unchanged tokenizer input, not an explicit style controller or learned-semantics guarantee.",
+    "ablation_result": "Same public path/settings/chunk boundaries without wrapper still produces a quiet first-chunk suffix from7s to20.944s. Wrapper is not necessary to reproduce this symptom in this run; contribution to original trajectory remains open.",
+    "speech_content_verified": false
+  },
+  "independent_control_limits": [
+    "Two low-level controls use one single-prompt generate_codes run per precision and prefill1; they bypass public chunking.",
+    "A third F32 control uses public Model.generate with default chunk300/prefill128; both expected chunks returned.",
+    "A fourth F32 public-path control removes only the whisper wrapper; same words, laughter cue, chunk boundaries and settings, one sampled run.",
+    "Both F32 controls use custom shardwise core loading, not canonical BF16 load_model. Public chunking and prefill change together.",
+    "The public first chunk remains near-silent from8s to24.799s; activity in its second chunk does not certify word delivery or a chunking fix.",
+    "Same numeric seed is not a matched RNG stream. Parameter/output activity does not establish requested word delivery.",
+    "Default device GPU is verified; official frame EOS and DAC-length scalar reads/evaluations remain.",
+    "Decode call and terminal eval split lazy execution; these phases are not synchronized native latency comparisons."
+  ],
+  "memory_control": {
+    "initial_official_attempt_exit": 1,
+    "initial_termination": "run_safe sampled free13% below authorized15% reserve; no behavioral outputs",
+    "bounded_change": "MLX allocator free-buffer cache limit0; no kernel/sampler/weight precision change in canonical retry",
+    "reserve_pct": 15,
+    "unrelated_processes_untouched": true
+  },
+  "gpu_boundary": {
+    "native_selected_readbacks": {
+      "control": 3928,
+      "terminal": 4027404
+    },
+    "native_selected_graph": {
+      "depth": 2,
+      "submitted": 609,
+      "completed": 609,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 609,
+      "retained_bytes": 0,
+      "max_retained_bytes": 32035736324
+    },
+    "replays": "Zero pre-final-drain reads; bounded per-row graph submit; terminal captured-buffer reads add no submission/completion wait. Finite status control4bytes/stage.",
+    "host_work": "Input/provenance/checkpoint setup, EOS control, terminal PCM/WAV/report analysis; no CPU inference fallback introduced."
+  },
+  "dod": {
+    "commands_index": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/commands.json",
+    "required_checks": [
+      "check-generation:18 Crystal examples pass",
+      "check-replay-final:15 Python tests pass",
+      "check-prompt:87IDs match",
+      "check-bounds:real invalid range/cache cases reject",
+      "compare-native-tail and compare-mlx-tail:exit1 valid numerical mismatch at fixed tolerance",
+      "public chunked control:both expected chunks returned; terminal per-chunk PCM analysis and provenance guards pass",
+      "sparse/dense overlap:146stages/546829F32values bitwise per native/upstream arm"
+    ],
+    "executed_command_receipts": [
+      {
+        "name": "build-generate",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generate.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:34:23.794689+00:00",
+        "finished_at_utc": "2026-10-15T03:34:37.395446+00:00",
+        "wrapper_seconds": 13.580379333347082,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-generate.log",
+        "log_sha256": "94fec0564b7483016e87f56cb481a6c7f3fb52936e3fee3882195adeb8c8b432"
+      },
+      {
+        "name": "generate-native",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate",
+          "1200",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native.wav",
+          "--seed",
+          "0",
+          "--temperature",
+          "0.8",
+          "--top-k",
+          "30",
+          "--top-p",
+          "0.9",
+          "--max-frames",
+          "512"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:34:41.366528+00:00",
+        "finished_at_utc": "2026-10-15T03:37:53.419614+00:00",
+        "wrapper_seconds": 192.04709070920944,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native.log",
+        "log_sha256": "bcfa83ca00a8559bd0430abde55f85a3a56cd757e477de6b2b9a80a1072d5a6e"
+      },
+      {
+        "name": "build-generate-long",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generate.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:38:57.305194+00:00",
+        "finished_at_utc": "2026-10-15T03:39:08.988536+00:00",
+        "wrapper_seconds": 11.680066000204533,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-generate-long.log",
+        "log_sha256": "2a4ab5909ad0b03343610cac2a2c7f33f1442430f150dfcd94bda6fb3e824607"
+      },
+      {
+        "name": "generate-native-long",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate",
+          "1200",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-long.wav",
+          "--seed",
+          "0",
+          "--temperature",
+          "0.8",
+          "--top-k",
+          "30",
+          "--top-p",
+          "0.9",
+          "--max-frames",
+          "768"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:41:43.791424+00:00",
+        "finished_at_utc": "2026-10-15T03:46:13.351586+00:00",
+        "wrapper_seconds": 269.5528465830721,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-long.log",
+        "log_sha256": "9c67629b7191b7ba3e8dc21c36b7a988e98ae0fcafa8e97dfaf740560efc7bdb"
+      },
+      {
+        "name": "generate-native-seed1",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate",
+          "1200",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav",
+          "--seed",
+          "1",
+          "--temperature",
+          "0.8",
+          "--top-k",
+          "30",
+          "--top-p",
+          "0.9",
+          "--max-frames",
+          "768"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:46:29.379785+00:00",
+        "finished_at_utc": "2026-10-15T03:49:36.162565+00:00",
+        "wrapper_seconds": 186.7761600408703,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.log",
+        "log_sha256": "3c172e2d359d8caf365b52f83d6ce1212ce8c621c30a4ffd5e934dce4e4b0ab9"
+      },
+      {
+        "name": "hash-checkpoint",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "240",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/checkpoint_manifest.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:52:53.926275+00:00",
+        "finished_at_utc": "2026-10-15T03:53:08.858141+00:00",
+        "wrapper_seconds": 14.928000625222921,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/hash-checkpoint.log",
+        "log_sha256": "88064168f2f82ef3e17ba5d5c896ae2d1d1818281be6cfe9b172294c2dedd465"
+      },
+      {
+        "name": "build-replay",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generation_replay.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:53:14.741884+00:00",
+        "finished_at_utc": "2026-10-15T03:53:23.792869+00:00",
+        "wrapper_seconds": 9.046237874776125,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay.log",
+        "log_sha256": "6db961288a3c383bf697c2916fb1339e4e9048a7250122ad9a1fb2a441987cca"
+      },
+      {
+        "name": "replay-upstream",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "scripts/drama3/replay_mlx_generation.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--generation",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:53:41.740443+00:00",
+        "finished_at_utc": "2026-10-15T03:54:31.344314+00:00",
+        "wrapper_seconds": 49.599962290842086,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream.log",
+        "log_sha256": "0ce3f511dbcb9501233f4ebdfcc43205fa5430bba13b6903dc06c0825a4dc896"
+      },
+      {
+        "name": "replay-native",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:54:40.433154+00:00",
+        "finished_at_utc": "2026-10-15T03:56:28.356141+00:00",
+        "wrapper_seconds": 107.91834549978375,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native.log",
+        "log_sha256": "4db7af9d392242f0e971b9c999da48e24d91aac24dbd430a6dcf3995c927f6a7"
+      },
+      {
+        "name": "compare-native",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "120",
+          "4096",
+          "scripts/drama3/compare_generation_replay.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:56:54.427682+00:00",
+        "finished_at_utc": "2026-10-15T03:56:55.847894+00:00",
+        "wrapper_seconds": 1.4162860000506043,
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native.log",
+        "log_sha256": "c32644c8ff465239ccd31f964eaf2e87a7bcc64e1b71c3f396d24dc4006588c7"
+      },
+      {
+        "name": "build-replay-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generation_replay.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:57:08.352129+00:00",
+        "finished_at_utc": "2026-10-15T03:57:09.767324+00:00",
+        "wrapper_seconds": 1.411873500328511,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-final.log",
+        "log_sha256": "2ab316f9d2fec57ac38ed35f87f882d621969bf888a04839b9b822506cdf1e16"
+      },
+      {
+        "name": "codec-upstream",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "600",
+          "12288",
+          "spec/support/drama3/codec_reference.py",
+          "real",
+          "--codec",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors",
+          "--codes-json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "--wav-output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/upstream-codec.wav",
+          "--compare-wav",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/codec-upstream.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "PYTHONPATH": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:58:04.310980+00:00",
+        "finished_at_utc": "2026-10-15T03:58:09.901950+00:00",
+        "wrapper_seconds": 5.587697083130479,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/codec-upstream.log",
+        "log_sha256": "de5a58af248a7e7a07bc750521867a8dce17a866b40353c7c1d98b5d2489433c"
+      },
+      {
+        "name": "check-prompt",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "60",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check_prompt.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:59:02.012643+00:00",
+        "finished_at_utc": "2026-10-15T03:59:03.552101+00:00",
+        "wrapper_seconds": 1.5361501253210008,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-prompt.log",
+        "log_sha256": "6b1da3839b6a4f9258e814d54ce7479f9d107bfc13499f95d8361a0cc4c61b2b"
+      },
+      {
+        "name": "check-bounds",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check_bounds.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:59:14.367808+00:00",
+        "finished_at_utc": "2026-10-15T03:59:15.147047+00:00",
+        "wrapper_seconds": 0.7748464159667492,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-bounds.log",
+        "log_sha256": "f2c62202c39fc81c13e3d3d370e972d9c2ccbbfc500d4db526754d8509955a85"
+      },
+      {
+        "name": "check-replay",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "-Werror::SyntaxWarning",
+          "spec/drama3_generation_replay_spec.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:01:34.144018+00:00",
+        "finished_at_utc": "2026-10-15T04:01:34.861327+00:00",
+        "wrapper_seconds": 0.7141827093437314,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-replay.log",
+        "log_sha256": "217962e83fb6d1efbae41dc981139d5cb34a0f5a6151d9c3d9096319f9e4ea27"
+      },
+      {
+        "name": "build-replay-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generation_replay.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:02:05.082713+00:00",
+        "finished_at_utc": "2026-10-15T04:02:14.934447+00:00",
+        "wrapper_seconds": 9.84808237478137,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-tail.log",
+        "log_sha256": "2ed97be36897b4408fb5f41a9c60d0638f01608e0d7f58f4cffa6cc17686c9da"
+      },
+      {
+        "name": "analyze-waveform",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_waveform.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:03:36.217359+00:00",
+        "finished_at_utc": "2026-10-15T04:03:37.048105+00:00",
+        "wrapper_seconds": 0.8227111250162125,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-waveform.log",
+        "log_sha256": "8556f4591273425efaf8312ec12a4189fd4b3b45a1636b5e78ef666b84c3a717"
+      },
+      {
+        "name": "replay-upstream-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "scripts/drama3/replay_mlx_generation.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--generation",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:02:35.470193+00:00",
+        "finished_at_utc": "2026-10-15T04:03:42.862566+00:00",
+        "wrapper_seconds": 67.38801562506706,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.log",
+        "log_sha256": "6b4eb0a14f84ab5e6958776ae2ec49e158d6751b8b5d1c152cf473e1f06f6f2a"
+      },
+      {
+        "name": "check-replay-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "-Werror::SyntaxWarning",
+          "spec/drama3_generation_replay_spec.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:04:10.737343+00:00",
+        "finished_at_utc": "2026-10-15T04:04:11.451900+00:00",
+        "wrapper_seconds": 0.711536374874413,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-replay-final.log",
+        "log_sha256": "0a4d02dc73148f9eb1c507785a0a1b9c7abba0d2e49746708e4c12fea980f647"
+      },
+      {
+        "name": "build-replay-tail-fixed",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_generation_replay.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:04:12.262242+00:00",
+        "finished_at_utc": "2026-10-15T04:04:20.021813+00:00",
+        "wrapper_seconds": 7.756208417005837,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-tail-fixed.log",
+        "log_sha256": "4b508439b906e6eeab798ff6209b5468a487af5b7bd993094b360563757073b4"
+      },
+      {
+        "name": "replay-native-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native-tail.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:04:20.972711+00:00",
+        "finished_at_utc": "2026-10-15T04:06:10.816954+00:00",
+        "wrapper_seconds": 109.83381175016984,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native-tail.log",
+        "log_sha256": "60860627535c0dd313f5b6afbba84f6baa04aaae84b9f22a6f6a937a4af8b5b0"
+      },
+      {
+        "name": "compare-native-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "120",
+          "4096",
+          "scripts/drama3/compare_generation_replay.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native-tail.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native-tail.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:06:49.188701+00:00",
+        "finished_at_utc": "2026-10-15T04:07:04.473145+00:00",
+        "wrapper_seconds": 15.280996708199382,
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native-tail.log",
+        "log_sha256": "cbf1f1a7219eb44162cf5f8fbd9227bafec2e28094fa5d314de2355644c84b8b"
+      },
+      {
+        "name": "replay-mlx-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-mlx-tail.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "mlx_q4",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:07:08.276527+00:00",
+        "finished_at_utc": "2026-10-15T04:08:50.007480+00:00",
+        "wrapper_seconds": 101.72253933316097,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-mlx-tail.log",
+        "log_sha256": "d8ad2a3dea34cf5a326d39fd264c17972fcb002a2cd1cab8082c6f754cf9a866"
+      },
+      {
+        "name": "compare-mlx-tail",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "120",
+          "4096",
+          "scripts/drama3/compare_generation_replay.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-mlx-tail.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-mlx-tail.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:08:55.915813+00:00",
+        "finished_at_utc": "2026-10-15T04:09:11.134564+00:00",
+        "wrapper_seconds": 15.210627750027925,
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-mlx-tail.log",
+        "log_sha256": "b5196688554707547aac78907369b126ec6a8c4b04c2853005d1cef70db951e9"
+      },
+      {
+        "name": "analyze-replay",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "120",
+          "4096",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_replay.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:09:19.234170+00:00",
+        "finished_at_utc": "2026-10-15T04:09:22.344737+00:00",
+        "wrapper_seconds": 3.1072280001826584,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-replay.log",
+        "log_sha256": "c9ed27253e8d77c3c6d5ff6229d3bbc9c0f2fc521bd4c85eab3626ffdc3ecb85"
+      },
+      {
+        "name": "check-generation",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "spec",
+          "--release",
+          "-Ddrama3_metal",
+          "spec/drama3_generator_resident_spec.cr",
+          "spec/drama3_graph_generator_spec.cr",
+          "spec/drama3_graph_resident_spec.cr",
+          "spec/drama3_generation_spec.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:09:46.076324+00:00",
+        "finished_at_utc": "2026-10-15T04:09:58.168842+00:00",
+        "wrapper_seconds": 12.089202790986747,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-generation.log",
+        "log_sha256": "85de6d794b67baf59072b2030164ae6283b50b4be10002770a89b205dc89ea63"
+      },
+      {
+        "name": "generate-official-control",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_official_control.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:14:57.376308+00:00",
+        "finished_at_utc": "2026-10-15T04:15:45.797495+00:00",
+        "wrapper_seconds": 48.42204741714522,
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-control.log",
+        "log_sha256": "57a1e4a84858830e93cd4c889c95a253cb9f028327c7af75a2ba6b8c0d6932d7"
+      },
+      {
+        "name": "generate-official-bounded",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_official_control.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:18:17.794100+00:00",
+        "finished_at_utc": "2026-10-15T04:19:04.615979+00:00",
+        "wrapper_seconds": 46.81956645799801,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-bounded.log",
+        "log_sha256": "9d641fb16be16552757808539bac14a27226742f85a6276593e4ce879bc91bce"
+      },
+      {
+        "name": "generate-f32-control",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_f32_control.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:22:45.998156+00:00",
+        "finished_at_utc": "2026-10-15T04:23:58.113833+00:00",
+        "wrapper_seconds": 72.111313957721,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-f32-control.log",
+        "log_sha256": "44c559b4fa080971c072955d448d97455553cae77a5d6219e44766432e1a7525"
+      },
+      {
+        "name": "generate-chunked-control",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_chunked_control.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:31:49.099736+00:00",
+        "finished_at_utc": "2026-10-15T04:33:37.981167+00:00",
+        "wrapper_seconds": 108.86512120813131,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-chunked-control.log",
+        "log_sha256": "668f70597b93feb1cddb5bdc33d0191e445acc13bea30f2249af17f2943085a4"
+      },
+      {
+        "name": "analyze-chunked",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_chunked.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:33:46.221074+00:00",
+        "finished_at_utc": "2026-10-15T04:33:46.950351+00:00",
+        "wrapper_seconds": 0.725793625228107,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-chunked.log",
+        "log_sha256": "ec02cb3a83d759e2088054accc8856b69998b75b5642c02181cf86c33676cdf9"
+      },
+      {
+        "name": "generate-no-whisper-control",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_no_whisper_control.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:40:29.590237+00:00",
+        "finished_at_utc": "2026-10-15T04:42:39.591236+00:00",
+        "wrapper_seconds": 129.9955091252923,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-no-whisper-control.log",
+        "log_sha256": "b0ac7b817ebd4012bb7ec7681168c08a94aca821d30ac8215019be211a3f1ef9"
+      },
+      {
+        "name": "analyze-no-whisper",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/python3",
+          "60",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_no_whisper.py"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T04:42:48.314016+00:00",
+        "finished_at_utc": "2026-10-15T04:42:49.033972+00:00",
+        "wrapper_seconds": 0.7168679158203304,
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-no-whisper.log",
+        "log_sha256": "853a8cb1164c330d998e114b1bc2078868259d7359ae64c22d8e2d0a0557b07b"
+      }
+    ],
+    "expected_signal": "Produce bounded timing/quality evidence and valid strict comparisons; no all-words, full-parity or speedup pass is required for a measurement commit."
+  },
+  "mini_quadrumvirate": {
+    "prediction": "EOS and global nonzero activity can hide a silent suffix; forced-prefix parity can be mistaken for speech recovery.",
+    "question": "Do identical codes remain silent under official DAC, and where does fixed-tolerance common-prefix parity first fail among captured steps?",
+    "move": "Time bounded native runs, decode same codes upstream, capture sparse and dense-tail GPU boundaries, independently sample low-level and public chunked official paths.",
+    "attack": "Caught out-of-range native checkpoints before its GPU execution; rejected one-LSB DAC parity and any full-text/EOS pass; scoped dtype/RNG/prefill/loader controls; quiet suffix survives wrapper removal under the same public path/settings/chunk boundaries.",
+    "verdict": "ROBUST",
+    "scope": "Bounded measurements and negative gates only; full requested speech delivery is VULNERABLE and remains open.",
+    "review": "Parent executed commands and correlated dense_kernel/dense_probe/dense_upstream mini-Quadrumvirate reviews; agreement is not independent proof."
+  },
+  "return_frontier": {
+    "original": "MoE39 row1 hidden[33] full gate remains open; see drama3-native-mlx-q4.json.",
+    "original_next_falsifier": "On common normalized input substitute upstream gate/up-derived activation and shared output separately on GPU, then original official sum/full hidden gate.",
+    "generation_next_falsifier": "Use equal reference precision and aligned random draws with captures around the first trajectory divergence/silence onset; do not infer cause from different-RNG controls.",
+    "defaults": {
+      "expert_down": "native",
+      "dense": "tree",
+      "MAP_SHARED": false
+    },
+    "no_ltp_wba_promotion": true
+  },
+  "lineage": {
+    "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/.landmark/evidence/drama3-native-mlx-q4.json",
+    "sha256": "560006ac85d497276a07a2500d7eb613a576d53aa7e31580c75aad8ff586d159",
+    "bytes": 51983,
+    "role": "Original retained numerical frontier"
+  },
+  "source_sha256": {
+    "examples/drama3_generate.cr": "ebddf597fbab4ffaf3840118c3b343a049ca21f6b0c1913381fe5a7a36a871ef",
+    "examples/drama3_generation_replay.cr": "4ff6a7b5674cb17b4bca4d8051ab9f12beaf14c7f37edd199f1226765060115c",
+    "scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+    "scripts/drama3/compare_generation_replay.py": "fa2aad3606808305d28ad13371a738b1cecb2a5c9d23937de16ace858eb214f0",
+    "spec/drama3_generation_replay_spec.py": "455f0a33358d3cb2fc7d1294e6cbc523299cc6b8aad063e2e5e4d6053781a9ea",
+    "docs/drama3-native-frontier.md": "605d172d4d1b203ed443fc93ca9562d3376c2384920013b58fd370398a218569",
+    "LANDMARKS.md": "5f640d26efc0e6b7ee96ce11d5c71836dd64c70545471ceb1cdf7c0a4a80e16a"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate",
+      "sha256": "6e5e11226b2f754c3d161633e28b3f2fef5e1d4e75161a19b1ec93feb0f86efb",
+      "bytes": 1422264,
+      "role": "Native executable built from receipt-bound example source"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay",
+      "sha256": "55069e7773d1bcf5e2c00c42861e7b6d5e1ad7cf3589c0aa9003010dd078374a",
+      "bytes": 978552,
+      "role": "Native replay executable built from receipt-bound helper source"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/prompt.json",
+      "sha256": "a370d0dcd5ff2aef919ae29647b87516810142f117781556029bf04659ac54f1",
+      "bytes": 887,
+      "role": "Exact 30-word input and counting rule"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/selected-generation.txt",
+      "sha256": "e3301355ea07a43d378978f9b30143211cc2be3b33c691a2909b14f17f5a3bec",
+      "bytes": 22,
+      "role": "Selected native run name"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/commands.json",
+      "sha256": "882a1fbebcd9e50a3f1370a3025a62dc7de873632b6c806827ad354f59bfba47",
+      "bytes": 98249,
+      "role": "Argv/environment/primary-source hashes/timestamps/exit/log/wrapper receipts; external-helper launch hashes only where explicitly present"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/run.py",
+      "sha256": "c3eb597659e715b8b9f6ca7ec7751545642e3fe8b658fc16ff5f1b1afbaf33a8",
+      "bytes": 7328,
+      "role": "Sequential run_safe controller; reserve15%, shared host, profiling unset"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/checkpoint-manifest.json",
+      "sha256": "2a957963ec4bdb6f367b150e848385fa1b21e4b50d71a1693e47ee0611e10009",
+      "bytes": 2083,
+      "role": "Actual local checkpoint SHA-256 and initial file metadata; no remote attestation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/final-provenance.json",
+      "sha256": "6bdfd0df8bab44d12db093a14c4d4694bd162edab14bae9a177e3036fe92a28e",
+      "bytes": 1766,
+      "role": "Final checkpoint metadata, upstream pin/clean and executed source checks"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/prompt-check.json",
+      "sha256": "7dbc788676f9ff6c490e9a3089d40ae27343d2fc502684cee3d4fa2cc7dcfec1",
+      "bytes": 288,
+      "role": "All 87 native prompt IDs match official builder"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check_prompt.py",
+      "sha256": "6bed9821ad127aac7efb024d9a4f5c7399e1b6e66804cb14acb917181d92ec95",
+      "bytes": 1272,
+      "role": "Independent official prompt-builder check"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/bound-check.json",
+      "sha256": "f8c8ad42c7f4361efe189c3dbe783ec983ce4edb5029f0855cc6ef2633208618",
+      "bytes": 666,
+      "role": "CLI range and cache bound rejection witnesses"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check_bounds.py",
+      "sha256": "1d6225c4b61fffe58ccb33a18affee7f39aed8bf7cb86b3d4ec008e1429640a5",
+      "bytes": 875,
+      "role": "Real CLI bounds guard"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/waveform-activity.json",
+      "sha256": "b5049b21148e1d5b57e899b9a0b9208b9f6f3aef294dcbd38a2da695bc112dcf",
+      "bytes": 18453,
+      "role": "Native and same-code official DAC half-second PCM activity"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_waveform.py",
+      "sha256": "3bd9ddda6bea5a9930d9f240509df5a6335b0662ca1f556b15a7367190c1708b",
+      "bytes": 3138,
+      "role": "Terminal PCM analysis implementation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/codec-upstream.json",
+      "sha256": "9a256dd52c4836612f7a34b7b08bba416832a86ef3a01c95a8033e871d4387d8",
+      "bytes": 19826,
+      "role": "Same-code official DAC comparison; one-LSB gate fails"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/upstream-codec.wav",
+      "sha256": "8963486d6d7bdc0265d534d26a1cce5576d2015a3e0e20da00a1c174272d5937",
+      "bytes": 2002988,
+      "role": "Official same-code DAC output"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-analysis.json",
+      "sha256": "c69710adece609605bbeaa00f84732defbcb0aa66c4e664a8bf8e6c17b999a9a",
+      "bytes": 175567,
+      "role": "Both numeric arms and sparse/dense bitwise overlap controls"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_replay.py",
+      "sha256": "2eb67fba8cb562f793ea595492c051ab427301af9ce8977cfc8212afa6a00564",
+      "bytes": 2585,
+      "role": "Terminal replay analysis implementation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_official_control.initial.py",
+      "sha256": "0f1559fe3ad27506cc52185a32eb32eb01b06a8e36db9896adc55a5d2a5535e3",
+      "bytes": 31405,
+      "role": "Original official control; memory reserve stopped it before any behavioral output"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_official_control.py",
+      "sha256": "74bda303052762432b9056f46102c0628e7699434db59a59b6355964c96317ff",
+      "bytes": 33568,
+      "role": "Official low-level canonical-dtype control with cache0 and phase progress"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_f32_control.py",
+      "sha256": "8601804d60a2bc90c1d1268bb4e47030ab37c27f824cc97e026bfc2baa30c0c8",
+      "bytes": 40294,
+      "role": "Shardwise F32 core behavioral control using official generation/sampler/DAC"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_chunked_control.py",
+      "sha256": "1ea97b3f96a3c89fdcb56649098db4c83833a1d1aca7c4cb4081e8e5b427ebb5",
+      "bytes": 49431,
+      "role": "Public Model.generate F32 control with default chunk300/prefill128"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate_no_whisper_control.py",
+      "sha256": "d928e81413917b2717045fd34c585ce026386c1b726b03d306011c998047bc03",
+      "bytes": 50907,
+      "role": "Single public-path prompt ablation removing only whisper wrapper, with same chunk boundaries/settings"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_no_whisper.py",
+      "sha256": "acd3fe58bb922f9b58ea957cd065851da67dd06803b82119d5596ab4bea03dce",
+      "bytes": 1956,
+      "role": "Independent terminal per-chunk PCM analysis for wrapper ablation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/no-whisper-activity.json",
+      "sha256": "20cd64b9ca85a77e39ff71ff42f71cf9c234f09ddc7bc606ae399cd2822da7fc",
+      "bytes": 9887,
+      "role": "Wrapper-ablation per-chunk activity, not speech recognition"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze_chunked.py",
+      "sha256": "8aa952b7d15ea411a554733b1ab016561e7247264293a1b119cb8d709c7c290b",
+      "bytes": 1947,
+      "role": "Independent terminal per-chunk PCM activity analysis"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/chunked-activity.json",
+      "sha256": "0c6c97cbd99320f83b02117fb3cc190e1e7873b5ea9e170d5e699e3d99d178fc",
+      "bytes": 11432,
+      "role": "Per-chunk PCM activity, not ASR or word alignment"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-bounded.json",
+      "sha256": "a491f0d55094efc812732c9a7cce20f3dcd0d8e6038c9400dc9c7c9a84678fa3",
+      "bytes": 151645,
+      "role": "Canonical-dtype independently sampled output and provenance"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-bounded.wav",
+      "sha256": "de14a4eabb309e90543b6c331d72449beec7bfffcd6bdfbda8098964d5c7994a",
+      "bytes": 3145772,
+      "role": "Canonical-dtype independently sampled waveform"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-f32-control.json",
+      "sha256": "d60a93a4d02f6f779c6a17a5902c3a9be010ecc855c1f7cf329da2889fbfbbde",
+      "bytes": 83039,
+      "role": "F32 core independently sampled output and provenance"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-f32-control.wav",
+      "sha256": "89a9bd908076d77797da4de901cc918bce625597dfc008dd0a824e837b056e47",
+      "bytes": 1572908,
+      "role": "F32 core independently sampled waveform"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-chunked-control.json",
+      "sha256": "d7b1e4a69a3718ed78d5603f373a61130737baff3b80a79371c4db88ed39b946",
+      "bytes": 275525,
+      "role": "Public chunked F32 output, both chunks returned, provenance and timings"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-chunked-control.wav",
+      "sha256": "e30c47d02a309e602f19c428098c5dde62906231b4b9941447e7828d160ea8e7",
+      "bytes": 2654252,
+      "role": "Unmodified concatenated public chunked F32 waveform"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-no-whisper-control.json",
+      "sha256": "e0d0c43c754defc0dc0ef90ef4373f31fcbd2f5c331db1a0891a6b2d39bd6e9e",
+      "bytes": 238862,
+      "role": "Public F32 wrapper-ablation output and provenance"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-no-whisper-control.wav",
+      "sha256": "3364f24b63aa2196644579104f5cbfb86afedb739172856e2e62b1a3fed1b1a4",
+      "bytes": 2273324,
+      "role": "Unmodified wrapper-ablation waveform"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.json.manifest.json",
+      "sha256": "38b59b48b728eec4d89301d757db197c07a5bac3319e840cc14b581962ec7a2f",
+      "bytes": 69769,
+      "role": "Pinned upstream F32 capture source/runtime/input provenance"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/finalize_measurement.py",
+      "sha256": "084b158740ebc726ea23fad9b03e0408e04427386061308248e70978f2bcf147",
+      "bytes": 26273,
+      "role": "Final evidence binding and provenance guard"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native.wav.json",
+      "sha256": "5c40f7b5c9d33bcaf0b43e33e9a461f73a353b8c22e34bdaa631b90bcf7dcca1",
+      "bytes": 71805,
+      "role": "Native generation report/timers/frame codes/read ledger"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native.wav",
+      "sha256": "1bf8e05fe0ccc5ffa472f57791f6f03bce2b670a2b6b23892e4bdb84c52dd87d",
+      "bytes": 2097196,
+      "role": "Native PCM16 output"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-long.wav.json",
+      "sha256": "e209f55f404ebff547bc9d3a8cf115df4155055d7223ff09d0d22da198631dad",
+      "bytes": 107067,
+      "role": "Native generation report/timers/frame codes/read ledger"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-long.wav",
+      "sha256": "7625edce2f6fc5b70ad6e08a49d4b0c45f5fdb9b93426fb9bd233fd068008143",
+      "bytes": 3145772,
+      "role": "Native PCM16 output"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+      "sha256": "ba22da53fa60afc34e80b23594ca311c6eb5fba74c5eed47605e87499bbf1fcf",
+      "bytes": 68642,
+      "role": "Native generation report/timers/frame codes/read ledger"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav",
+      "sha256": "d7f0295b35d82d82b6e32e941a8106445c0a598f4f3f87ff2018ba6e5ce4109e",
+      "bytes": 2002988,
+      "role": "Native PCM16 output"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native.json",
+      "sha256": "6bc9c4bb13bfbfa19a3d2eb387c95c3b54ecdac5c76c8da19f18ada46f77ea69",
+      "bytes": 10694405,
+      "role": "Terminal common-prefix intermediate capture; diagnostic, not new speech"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream.json",
+      "sha256": "072391c8e3e2f807377a1bba538c37e1a4b71d25c030861cf7a4440b71a3036b",
+      "bytes": 10483086,
+      "role": "Terminal common-prefix intermediate capture; diagnostic, not new speech"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native-tail.json",
+      "sha256": "09094676c858b59c26cb271c53683c129961298d2177f44d51824deefecf088d",
+      "bytes": 122385206,
+      "role": "Terminal common-prefix intermediate capture; diagnostic, not new speech"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-mlx-tail.json",
+      "sha256": "e5a339e7846e1caecd30db7c28f6b19b427ab428ed30511b5fb1a787b1f5f848",
+      "bytes": 122382833,
+      "role": "Terminal common-prefix intermediate capture; diagnostic, not new speech"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.json",
+      "sha256": "a13042b9bafe82cfeddbe9935fbc25c9a9f80f888f5161c733a45873c0dd7ba4",
+      "bytes": 120482688,
+      "role": "Terminal common-prefix intermediate capture; diagnostic, not new speech"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native.json",
+      "sha256": "cedd808a590c27ab2d9b4de45e3d1ed0a84e0ee03060d66d46e2e9380499f068",
+      "bytes": 258917,
+      "role": "Strict fixed-tolerance numerical comparator report"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native-tail.json",
+      "sha256": "6cde250c39853f92a3514a065325b8b2d64ed707d38029382690570f49c8d62b",
+      "bytes": 2914161,
+      "role": "Strict fixed-tolerance numerical comparator report"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-mlx-tail.json",
+      "sha256": "308f98e83a9535511573d4ffcd1ff866a6d03289ab0c6e329661384ac08f0e22",
+      "bytes": 2913956,
+      "role": "Strict fixed-tolerance numerical comparator report"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/tts/models/fish_omni/README.md",
+      "sha256": "1f064de6ad400faa1f600cde8a1d7b2a42041235fb6ddb3436377e82dd24323b",
+      "bytes": 6278,
+      "role": "Pinned community-port usage/cue documentation; not a model semantic guarantee"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/tts/models/fish_omni/prompt.py",
+      "sha256": "c2f9c80ed2e4ba6c73a3806e3fdbd94f5cea80c75cce450a003e4e71d17f25c2",
+      "bytes": 11822,
+      "role": "Pinned prompt/tokenization and generic paired-tag chunk protection"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-generate.log",
+      "sha256": "94fec0564b7483016e87f56cb481a6c7f3fb52936e3fee3882195adeb8c8b432",
+      "bytes": 61,
+      "role": "Execution log for build-generate"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native.log",
+      "sha256": "bcfa83ca00a8559bd0430abde55f85a3a56cd757e477de6b2b9a80a1072d5a6e",
+      "bytes": 17953,
+      "role": "Execution log for generate-native"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-generate-long.log",
+      "sha256": "2a4ab5909ad0b03343610cac2a2c7f33f1442430f150dfcd94bda6fb3e824607",
+      "bytes": 61,
+      "role": "Execution log for build-generate-long"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-long.log",
+      "sha256": "9c67629b7191b7ba3e8dc21c36b7a988e98ae0fcafa8e97dfaf740560efc7bdb",
+      "bytes": 25599,
+      "role": "Execution log for generate-native-long"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.log",
+      "sha256": "3c172e2d359d8caf365b52f83d6ce1212ce8c621c30a4ffd5e934dce4e4b0ab9",
+      "bytes": 17227,
+      "role": "Execution log for generate-native-seed1"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/hash-checkpoint.log",
+      "sha256": "88064168f2f82ef3e17ba5d5c896ae2d1d1818281be6cfe9b172294c2dedd465",
+      "bytes": 974,
+      "role": "Execution log for hash-checkpoint"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay.log",
+      "sha256": "6db961288a3c383bf697c2916fb1339e4e9048a7250122ad9a1fb2a441987cca",
+      "bytes": 61,
+      "role": "Execution log for build-replay"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream.log",
+      "sha256": "0ce3f511dbcb9501233f4ebdfcc43205fa5430bba13b6903dc06c0825a4dc896",
+      "bytes": 639,
+      "role": "Execution log for replay-upstream"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native.log",
+      "sha256": "4db7af9d392242f0e971b9c999da48e24d91aac24dbd430a6dcf3995c927f6a7",
+      "bytes": 301,
+      "role": "Execution log for replay-native"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native.log",
+      "sha256": "c32644c8ff465239ccd31f964eaf2e87a7bcc64e1b71c3f396d24dc4006588c7",
+      "bytes": 262,
+      "role": "Execution log for compare-native"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-final.log",
+      "sha256": "2ab316f9d2fec57ac38ed35f87f882d621969bf888a04839b9b822506cdf1e16",
+      "bytes": 61,
+      "role": "Execution log for build-replay-final"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/codec-upstream.log",
+      "sha256": "de5a58af248a7e7a07bc750521867a8dce17a866b40353c7c1d98b5d2489433c",
+      "bytes": 363,
+      "role": "Execution log for codec-upstream"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-prompt.log",
+      "sha256": "6b1da3839b6a4f9258e814d54ce7479f9d107bfc13499f95d8361a0cc4c61b2b",
+      "bytes": 336,
+      "role": "Execution log for check-prompt"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-bounds.log",
+      "sha256": "f2c62202c39fc81c13e3d3d370e972d9c2ccbbfc500d4db526754d8509955a85",
+      "bytes": 620,
+      "role": "Execution log for check-bounds"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-replay.log",
+      "sha256": "217962e83fb6d1efbae41dc981139d5cb34a0f5a6151d9c3d9096319f9e4ea27",
+      "bytes": 701,
+      "role": "Execution log for check-replay"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-tail.log",
+      "sha256": "2ed97be36897b4408fb5f41a9c60d0638f01608e0d7f58f4cffa6cc17686c9da",
+      "bytes": 61,
+      "role": "Execution log for build-replay-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-waveform.log",
+      "sha256": "8556f4591273425efaf8312ec12a4189fd4b3b45a1636b5e78ef666b84c3a717",
+      "bytes": 3730,
+      "role": "Execution log for analyze-waveform"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-upstream-tail.log",
+      "sha256": "6b4eb0a14f84ab5e6958776ae2ec49e158d6751b8b5d1c152cf473e1f06f6f2a",
+      "bytes": 650,
+      "role": "Execution log for replay-upstream-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-replay-final.log",
+      "sha256": "0a4d02dc73148f9eb1c507785a0a1b9c7abba0d2e49746708e4c12fea980f647",
+      "bytes": 702,
+      "role": "Execution log for check-replay-final"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/build-replay-tail-fixed.log",
+      "sha256": "4b508439b906e6eeab798ff6209b5468a487af5b7bd993094b360563757073b4",
+      "bytes": 61,
+      "role": "Execution log for build-replay-tail-fixed"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-native-tail.log",
+      "sha256": "60860627535c0dd313f5b6afbba84f6baa04aaae84b9f22a6f6a937a4af8b5b0",
+      "bytes": 301,
+      "role": "Execution log for replay-native-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-native-tail.log",
+      "sha256": "cbf1f1a7219eb44162cf5f8fbd9227bafec2e28094fa5d314de2355644c84b8b",
+      "bytes": 271,
+      "role": "Execution log for compare-native-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/replay-mlx-tail.log",
+      "sha256": "d8ad2a3dea34cf5a326d39fd264c17972fcb002a2cd1cab8082c6f754cf9a866",
+      "bytes": 301,
+      "role": "Execution log for replay-mlx-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/compare-mlx-tail.log",
+      "sha256": "b5196688554707547aac78907369b126ec6a8c4b04c2853005d1cef70db951e9",
+      "bytes": 268,
+      "role": "Execution log for compare-mlx-tail"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-replay.log",
+      "sha256": "c9ed27253e8d77c3c6d5ff6229d3bbc9c0f2fc521bd4c85eab3626ffdc3ecb85",
+      "bytes": 3174,
+      "role": "Execution log for analyze-replay"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/check-generation.log",
+      "sha256": "85de6d794b67baf59072b2030164ae6283b50b4be10002770a89b205dc89ea63",
+      "bytes": 425,
+      "role": "Execution log for check-generation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-control.log",
+      "sha256": "57a1e4a84858830e93cd4c889c95a253cb9f028327c7af75a2ba6b8c0d6932d7",
+      "bytes": 99,
+      "role": "Execution log for generate-official-control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-official-bounded.log",
+      "sha256": "9d641fb16be16552757808539bac14a27226742f85a6276593e4ce879bc91bce",
+      "bytes": 2540,
+      "role": "Execution log for generate-official-bounded"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-f32-control.log",
+      "sha256": "44c559b4fa080971c072955d448d97455553cae77a5d6219e44766432e1a7525",
+      "bytes": 3972,
+      "role": "Execution log for generate-f32-control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-chunked-control.log",
+      "sha256": "668f70597b93feb1cddb5bdc33d0191e445acc13bea30f2249af17f2943085a4",
+      "bytes": 4179,
+      "role": "Execution log for generate-chunked-control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-chunked.log",
+      "sha256": "ec02cb3a83d759e2088054accc8856b69998b75b5642c02181cf86c33676cdf9",
+      "bytes": 7807,
+      "role": "Execution log for analyze-chunked"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/generate-no-whisper-control.log",
+      "sha256": "b0ac7b817ebd4012bb7ec7681168c08a94aca821d30ac8215019be211a3f1ef9",
+      "bytes": 4158,
+      "role": "Execution log for generate-no-whisper-control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper30-20261015/analyze-no-whisper.log",
+      "sha256": "853a8cb1164c330d998e114b1bc2078868259d7359ae64c22d8e2d0a0557b07b",
+      "bytes": 6784,
+      "role": "Execution log for analyze-no-whisper"
+    }
+  ],
+  "refresh": {
+    "decay_trigger": "Source/model/input/reference/runtime/precision/compiler/device/OS/artifact drift; checkpoint mutation during run.",
+    "operation": "Recheck source/pins/local bytes; rebuild; repeat relevant run_safe generation/replay/quality/strict comparator and boundary guards.",
+    "failure_policy": "Reopen dependent claims; preserve unchanged tolerance, precision and defaults; no performance or full-quality promotion."
+  }
+}

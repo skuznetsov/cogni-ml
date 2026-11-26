@@ -1,0 +1,693 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-host-attribution",
+  "created_at_utc": "2026-10-16T15:34:54.909635+00:00",
+  "base_revision": "b3144c85595a1332ad595095db19e38c37d2a3cb",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Observed host allocation/command/GC attribution and bounded unchanged-output correctness under the pinned DRAMA-3 Metal workload; final scoped correlated review returned ROBUST. The unique slowdown cause remains unproven.",
+    "excluded": [
+      "A unique causal explanation or correction of the earlier slower request",
+      "A stable scratch speedup, default promotion, zero profiler overhead, or zero GC",
+      "CPU utilization, typed object census, pure arithmetic GPU time, residency/queue/driver/OS attribution",
+      "Fresh MLX audio, stock RNG parity, general MoE39/DAC numerical parity or long-speech/voice-quality certification"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/audio/drama3/host_profile.cr",
+      "src/ml/audio/drama3/resident_host_encoder.cr",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "src/ml/audio/drama3/studio/engine.cr",
+      "examples/drama3_studio.cr",
+      "spec/drama3_host_profile_spec.cr",
+      "spec/drama3_host_profile_resident_spec.cr",
+      "scripts/drama3/measure_host_pairs.py",
+      "scripts/drama3/README.md",
+      "docs/drama3-host-attribution.md",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-host-attribution.json"
+    ],
+    "changed_paths": [
+      "src/ml/audio/drama3/host_profile.cr",
+      "src/ml/audio/drama3/resident_host_encoder.cr",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "src/ml/audio/drama3/studio/engine.cr",
+      "examples/drama3_studio.cr",
+      "spec/drama3_host_profile_spec.cr",
+      "spec/drama3_host_profile_resident_spec.cr",
+      "scripts/drama3/measure_host_pairs.py",
+      "scripts/drama3/README.md",
+      "docs/drama3-host-attribution.md",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-host-attribution.json"
+    ],
+    "raw_artifacts": [
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/commands.json",
+        "bytes": 323496,
+        "sha256": "9b00415e80d906c7d35f3f8c81c34d3c892cdaf792b10b157f419c013081226d",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/source-seal.json",
+        "bytes": 5492,
+        "sha256": "1992ffd6503f11bf388a5c9df5b31acc1dbb6f43b31d8c57f214d77547878d4f",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/clock-units.json",
+        "bytes": 341,
+        "sha256": "d6f95bd42203e97daf00bb220c187be5384ef8f05a58c0121b199b04ccae127f",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/runtime.json",
+        "bytes": 530,
+        "sha256": "2925354cc8ee9cc463e9d6e5d549297aad4d0f99e067abd63dcf630529ffa329",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/upstream-pin-refresh.json",
+        "bytes": 2538,
+        "sha256": "993c585af6c1b5063fdeec731d902c900e68771a054e678e23f06498eb795ec2",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/paired-worker.json",
+        "bytes": 521753,
+        "sha256": "5a124ce7bc3bea9a0533586a19487866929ad3df9617e5f86df23a6f948a33eb",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/host-analysis.json",
+        "bytes": 329880,
+        "sha256": "f2c02bfe61cf626a976a775b66a1fdee7c3d14ebc6c2da665ddcc7704a248821",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/legacy-worker.json",
+        "bytes": 196665,
+        "sha256": "930f19240137d0f67e9c035d8eeb1e98b6cf692b395d67b4a828fe552d2724a3",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/legacy-analysis.json",
+        "bytes": 2575,
+        "sha256": "00e8b59d57df26de93e40f72bc5a0896cfc6ce7a23f91ca8545cabd3edecbd6d",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-worker.json",
+        "bytes": 202190,
+        "sha256": "ad3632947b07775077171827a235ed1219c4f6656f16d750c1ed9f9435015c5c",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-analysis.json",
+        "bytes": 7304,
+        "sha256": "850f267818fa1604e5cdea01a2b1f827381a432ebb728e124fe3ac4285522495",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/worker-upstream-comparison.json",
+        "bytes": 1181,
+        "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill-current.json",
+        "bytes": 7979,
+        "sha256": "77da397e2e0138e2e5df9eea281477e675c2d1dc17b6660455dd0320316e991b",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/measure_host_pairs-primary.py",
+        "bytes": 6317,
+        "sha256": "268bd36341524994a96a3a4063de4ace935c3f3936f0823c98c037e51d3f97fc",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/measure_host_pairs-legacy.py",
+        "bytes": 6986,
+        "sha256": "7d73a7a9d239c01197a1bcbd3b91e4a2fa3fa72da9d2314e170ad7379d39066f",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/run.py",
+        "bytes": 3490,
+        "sha256": "eb8bf2bbaebe0a6f7948d67e4abb029fb877c10b929030d44815c065a678e6cc",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/analyze_host.py",
+        "bytes": 3971,
+        "sha256": "0aa2d323f1e28a2ccb0a6da634b65b283ac6d92b15e2b1fbbdc92fa192118142",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/analyze_timeline.py",
+        "bytes": 2591,
+        "sha256": "1f94141a201948b3a1856eb12ee71df153f12890525d868763679916948f98fc",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/compare_worker_upstream.py",
+        "bytes": 1463,
+        "sha256": "653480d80ff4393c76e03e9602faf58378bed15a48a73d11b4dc51a9543a7c3d",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill_workspace.cr",
+        "bytes": 26740,
+        "sha256": "679cfd0a3661690ec26c1e5d34328bce98d187efd7d570768a954aef519cd574",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/verify.py",
+        "bytes": 1901,
+        "sha256": "f8c0ca21207628338b82f7c4cf2e5203f099fdd62cac3413cd0a04e431e42174",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/validate_source.py",
+        "bytes": 3235,
+        "sha256": "b5f867968760ea4ee6e686d0672590f72bb469eec9d1597f1bac8da31da21618",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-arm0.stderr",
+        "bytes": 18875,
+        "sha256": "34b2884f9117c32f00a5a1dffe232db498f4c47fc1667d810dc2574a2223fb2e",
+        "availability": "Local cache; completed GPU timestamps, not a CPU/GPU utilization profile."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-arm1.stderr",
+        "bytes": 18870,
+        "sha256": "8f1577119125ad551b602bca53e548f479c1ea89882a425dc2e2cdf90017b263",
+        "availability": "Local cache; completed GPU timestamps, not a CPU/GPU utilization profile."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-arm2.stderr",
+        "bytes": 18888,
+        "sha256": "a3d86a9ef038e649bb87ffce44b6ea9dbea24fc05fbfa8724ab290388cd555e9",
+        "availability": "Local cache; completed GPU timestamps, not a CPU/GPU utilization profile."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-arm3.stderr",
+        "bytes": 18886,
+        "sha256": "7a2a527417f33e852548affbc39c1be8351c5f6873928ed3a8dbd0a766e476d5",
+        "availability": "Local cache; completed GPU timestamps, not a CPU/GPU utilization profile."
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/adversary-final.txt",
+        "bytes": 1385,
+        "sha256": "01231243ecf5121d47565bdbabc52a560eb626c5b8d7db31c88f889771998212",
+        "availability": "Local cache; not committed; eviction requires refresh."
+      }
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Measurement perturbation, hidden graph-window waits mislabelled as encoding, or changed GPU lifetime/boundaries.",
+    "guards": "Exclusive nested timers, separately measured existing waits, profile-off/on depth0/2 tests, full native output/ledger identity, old/current binary ABBA and unchanged GPU upstream gates.",
+    "rollback": "Unset DRAMA3_HOST_PROFILE for fine clocks/counters only; revert this isolated commit to remove the facade and coarse GC snapshots. DRAMA3_GENERATION_SCRATCH remains default0."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+    "crystal": "Crystal 1.22.0 (2026-10-12)\n\nLLVM: 23.1.3\nDefault target: aarch64-apple-darwin25.6.0",
+    "harness_python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+    "mlx_python": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+    "mlx_runtime": "3.12.2; mlx0.31.1 (refreshed via importlib.metadata before these gates)"
+  },
+  "upstream_pins": {
+    "refreshed_utc": "2026-10-16T15:18:17.536473+00:00",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "clean": true,
+    "control_sha256": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+    "source_hashes": {
+      "mlx_audio/utils.py": "a9a6e2c29962949ce0e278d4b923394d81529586feec4599616af292ce64de42",
+      "mlx_audio/tts/utils.py": "3d31af164037578ade6e0f9126d8d5ea647b1176c69d3c4280bf3094806c0388",
+      "mlx_audio/tts/models/base.py": "6fb902515978db0e5024b8fc4c7eea1a25902bf16eb7276170fd6e7cc1fccc70",
+      "mlx_audio/tts/models/fish_omni/__init__.py": "989358fa928817bdc3d1e62d5be2994600cc933f8a535e556c6d7815d3638ac0",
+      "mlx_audio/tts/models/fish_omni/config.py": "b86e352cfd602b306ce701fa0f9b9282f8cba11cb1cc78f6ea188c44fb23ee22",
+      "mlx_audio/tts/models/fish_omni/fish_omni.py": "3b0eb71f765c6696055f5f2bdd0810dd31cd75c9385ff0202fb452938f246441",
+      "mlx_audio/tts/models/fish_omni/prompt.py": "c2f9c80ed2e4ba6c73a3806e3fdbd94f5cea80c75cce450a003e4e71d17f25c2",
+      "mlx_audio/tts/models/fish_omni/tower.py": "a184fcc388a70d389ec912c531eb3bbdcc0372be638560d1dd9a9ee1a1ecdba0",
+      "mlx_audio/lm/models/qwen3_5.py": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1",
+      "mlx_audio/lm/models/activations.py": "c90408cee7fff39eaaf5aa0fa34a8351bf898f2acab572cb09e3c90f776c183b",
+      "mlx_audio/lm/models/base.py": "0cac9ce6bf366622934f11eab4cc5eb2d394f46ac702cdd507c9c23c18fc1b96",
+      "mlx_audio/lm/models/cache.py": "ab41054c4564784e7e131d7bd9c9e42a91b951bb4478d3a7ce8017ed3028e632",
+      "mlx_audio/lm/models/gated_delta.py": "c51f0547d8f066bbc6306011cd87be5aeac1c6fad42a1dacfe3f6e22818cbd32",
+      "mlx_audio/lm/models/rope_utils.py": "c96bca6b7a7eafec4fe64e7e632d8697e078f1721cefb2c8b36e565a1f4b21af",
+      "mlx_audio/lm/models/switch_layers.py": "aa9ee805cd397f60996e254bd75cd97454770a34f748bc7bc97035f12857825e",
+      "mlx_audio/codec/models/fish_s1_dac/__init__.py": "c0dcbc2fbe7b7b2e3ce1563e9b966722b6ec9f5bfbd0da95212d9280fcbd51d4",
+      "mlx_audio/codec/models/fish_s1_dac/fish_s1_dac.py": "365bd3384b07c8da019edbcb5aeac7b7aee560e4ed4821dbe3fff29a68c802d1",
+      "scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+      "scripts/drama3/generate_mlx_control.py": "6da10f4be3fe38d2e90f5cc178802533ee7b7e7a7c7c5424720e55aa8779dd0a"
+    },
+    "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+    "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
+  },
+  "source_state": {
+    "base_revision": "b3144c85595a1332ad595095db19e38c37d2a3cb",
+    "current_binary": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/studio-host-profile",
+      "sha256": "d4bdc5972790ffc2f0318a0a90e16c44eb5e94c664b8ee4dd5298ce6bfe6ad60"
+    },
+    "passed_same_source_commands": [
+      "build-studio-final",
+      "host-pairs",
+      "legacy-pairs-corrected",
+      "timeline-pairs",
+      "host-full-cpu",
+      "host-full-metal",
+      "build-prefill-current",
+      "prefill-current"
+    ],
+    "same_source_files_per_command": 42,
+    "jobs": 44,
+    "full_codes_wav_sampler_readback_queue_identity": true,
+    "helper_snapshots_exact": true,
+    "log_digests_exact": true,
+    "prefill_and_upstream_checks": true,
+    "changed_production_sha256": {
+      "examples/drama3_studio.cr": "fa9b2d3efd215a3c7dab418dfc8e6ac3dc6f08797544c223ab5d2778b3679644",
+      "src/ml/audio/drama3/backbone_resident.cr": "ec22729b4fd4d3b1def99123f79d7d71e43d92fc2ffbe451db72be5000908044",
+      "src/ml/audio/drama3/host_profile.cr": "4464a34cb3e06bc7ceb1999b2d286d87a69b755bb65b0519be698fac034ded49",
+      "src/ml/audio/drama3/resident.cr": "742af56483f365f286dd9063648b6158364c029f214bbcde6e7435143268c77b",
+      "src/ml/audio/drama3/resident_host_encoder.cr": "59c08582b95e8493d3893ea2d466b5feb23b3b5da5521c2868869d15f0ca7bd6",
+      "src/ml/audio/drama3/studio/engine.cr": "c4737619e132b27189e50f2cb347fb93c1832aec163ae1f47956fda73696e08d"
+    },
+    "production_hash_index": "All42 production hashes are in the hash-bound source-seal.json raw receipt; changed production files repeated here."
+  },
+  "experiment": {
+    "primary_jobs": 24,
+    "legacy_control_jobs": 12,
+    "timestamp_control_jobs": 8,
+    "completed_jobs": 44,
+    "primary_order": "fresh:off,reuse:off,reuse:on,fresh:on,fresh:on,reuse:on,reuse:off,fresh:off",
+    "primary_repeats": "One excluded cold + two warm per worker; four correlated warm observations from two workers per condition.",
+    "legacy_order": "legacy/current/current/legacy, scratch0/profile0; one cold+two warm per worker.",
+    "timestamp_order": "fresh/reuse/reuse/fresh, profile1/timeline1; one cold+one warm per worker; separate from primary.",
+    "host_policy": "Serial run_safe, 15% memory floor, quiet-host off; unrelated processes untouched. Shared-host small-n timings; no causal confidence interval.",
+    "input": {
+      "text": "Hello, this is a voice test.",
+      "reference": null,
+      "seed": 1,
+      "max_frames": 64,
+      "temperature": 0.8,
+      "top_k": 30,
+      "top_p": 0.9
+    },
+    "fixed_controls": {
+      "DRAMA3_BACKEND": "metal",
+      "DRAMA3_DAC_SCRATCH": "0",
+      "DRAMA3_MEMORY_PROFILE": "0",
+      "DRAMA3_ALLOCATION_PROFILE": "0",
+      "DRAMA3_METAL_TIMELINE": "0",
+      "DRAMA3_MOE_BATCH": "1",
+      "DRAMA3_DENSE_REDUCTION": "tree",
+      "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+      "DRAMA3_DELTA_TRANSPOSE": "1",
+      "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+      "DRAMA3_MMAP_SHARED": "0",
+      "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+      "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+      "DRAMA3_GENERATION_SCRATCH": "0",
+      "DRAMA3_HOST_PROFILE": "0"
+    },
+    "per_arm_controls": [
+      "DRAMA3_GENERATION_SCRATCH",
+      "DRAMA3_HOST_PROFILE",
+      "DRAMA3_METAL_TIMELINE only in separate timestamp series"
+    ],
+    "unchanged_contract": {
+      "frames": 60,
+      "ids_per_frame": 11,
+      "audio_samples": 122880,
+      "sample_rate": 44100,
+      "audio_seconds": 2.786394557823129,
+      "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "sampler_uniform_count": 704,
+      "sampler_f32le_sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "graph_depth": 2,
+      "submitted": 122,
+      "completed": 122,
+      "completion_waits": 122,
+      "pending": 0,
+      "max_pending": 2,
+      "control_read_bytes": 496,
+      "terminal_read_bytes": 494160
+    }
+  },
+  "measurements": {
+    "units": "Host intervals are wall milliseconds and overlap GPU work/GC. Full-GC cumulative delta is milliseconds/full collections only; not additive CPU time.",
+    "generation_profile_on_warm_medians": {
+      "backing_ms_fresh_reuse": [
+        770.2828215,
+        8.2013735
+      ],
+      "view_ms_fresh_reuse": [
+        86.523824,
+        0.887479
+      ],
+      "workspace_reuse_ms": 2.5913915,
+      "encoder_api_ms_fresh_reuse": [
+        54.621498,
+        46.2841125
+      ],
+      "retention_ms_fresh_reuse": [
+        16.8812725,
+        19.732832
+      ],
+      "full_gc_ms_fresh_reuse": [
+        1222.5,
+        20.5
+      ],
+      "managed_allocated_bytes_fresh_reuse": [
+        95965808.0,
+        74731096.0
+      ],
+      "backing_calls_fresh_reuse": [
+        135139.0,
+        1894.0
+      ]
+    },
+    "warm_profile_off_request_median_seconds_fresh_reuse": [
+      26.852939270902425,
+      28.466118999989703
+    ],
+    "warm_profile_off_request_seconds_per_audio_second_fresh_reuse": [
+      9.637163263727189,
+      10.216112043453336
+    ],
+    "audio_rate_scope": "Request through worker result: WAV, report/sidecar serialization and existing post-job GC included; worker startup/model loading excluded. Short no-reference input on shared M2 Max.",
+    "legacy_interpretation": "Mixed four matched warm deltas (+4.229,-6.864,-1.459,-6.247s current-minus-legacy); no repeatable multi-second disabled-path penalty established. Sub-second/intermittent overhead remains possible.",
+    "timestamp_interpretation": "Four warm command-duration sums: generation15.509-15.532s, DAC6.017-6.055s while host generation waits19.151-23.945s. This does not identify individual queue/residency/driver/OS costs or justify subtracting sums to infer CPU time.",
+    "paired_warm_request_delta_reuse_minus_fresh_seconds": {
+      "profile0": [
+        0.07346987491473556,
+        6.383823875337839,
+        -3.174538416787982,
+        4.902864167001098
+      ],
+      "profile1": [
+        -0.5793653326109052,
+        -0.7818344999104738,
+        -0.6451161252334714,
+        1.529459667392075
+      ]
+    },
+    "paired_details": "Individual request/phase/GC differences, arm order and raw repetitions are in host-analysis.json."
+  },
+  "verification": {
+    "cpu_examples": 33,
+    "metal_examples": 51,
+    "failures": 0,
+    "release_build_passed": true,
+    "all44_native_outputs_and_ledgers_exact": true,
+    "full60_frame_gpu_comparison_to_saved_mlx_control": true,
+    "fresh_mlx_generation": false,
+    "upstream_source_refresh": "Clean pinned checkout; all19 source/control hashes plus config/index checked.",
+    "prefill": {
+      "prompt_rows": 158,
+      "resident_capacity": 2205,
+      "tolerances": {
+        "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+      },
+      "stages": [
+        {
+          "name": "prompt.backbone.hidden",
+          "shape": [
+            1,
+            2048
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 2048,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.05126616,
+          "passes": true
+        },
+        {
+          "name": "prompt.main_logits",
+          "shape": [
+            1,
+            4097
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 4097,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.0079710195,
+          "passes": true
+        }
+      ],
+      "passes": true,
+      "fresh_vs_reused_bitwise_equal": true,
+      "existing_submits_waits_per_arm": 159,
+      "extra_graph_work_at_metric_reads": false
+    },
+    "commands": [
+      {
+        "name": "build-studio-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+          "examples/drama3_studio.cr",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/studio-host-profile"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/build-studio-final.log",
+        "log_sha256": "189caf468720383746508691db304bdc7062603f57b72728c27e0e908551e8c7"
+      },
+      {
+        "name": "host-pairs",
+        "argv": [
+          "scripts/run_safe.sh",
+          "python3",
+          "2400",
+          "40960",
+          "scripts/drama3/measure_host_pairs.py",
+          "--binary",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/studio-host-profile",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016",
+          "--baseline",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/host-pairs.log",
+        "log_sha256": "5440019f4fbcb076dd4299d180c38dc889bff325ec6750af799f8dd07228f1a7"
+      },
+      {
+        "name": "legacy-pairs-corrected",
+        "argv": [
+          "scripts/run_safe.sh",
+          "python3",
+          "1500",
+          "40960",
+          "scripts/drama3/measure_host_pairs.py",
+          "--binary",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/studio-host-profile",
+          "--legacy-binary",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016",
+          "--prefix",
+          "legacy",
+          "--baseline",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/legacy-pairs-corrected.log",
+        "log_sha256": "d6e79bcfb0bbe79b527eb29ea1c450b4d05dfa0f0be90af8fb0964bb134a6fd6"
+      },
+      {
+        "name": "timeline-pairs",
+        "argv": [
+          "scripts/run_safe.sh",
+          "python3",
+          "900",
+          "40960",
+          "scripts/drama3/measure_host_pairs.py",
+          "--binary",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/studio-host-profile",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016",
+          "--baseline",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+          "--prefix",
+          "timeline",
+          "--schedule",
+          "0:1,1:1,1:1,0:1",
+          "--warm-repeats",
+          "1",
+          "--timeline"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/timeline-pairs.log",
+        "log_sha256": "bdd385420e8a297c344bad58226a733cbd0260877b06710fcc5efea44cea5833"
+      },
+      {
+        "name": "host-full-cpu",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "1200",
+          "40960",
+          "spec",
+          "-Dcpu_only",
+          "spec/drama3_studio_store_spec.cr",
+          "spec/drama3_studio_media_spec.cr",
+          "spec/drama3_studio_http_spec.cr",
+          "spec/drama3_studio_worker_spec.cr",
+          "spec/drama3_profile_spec.cr",
+          "spec/drama3_window_budget_spec.cr",
+          "spec/drama3_host_profile_spec.cr"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/host-full-cpu.log",
+        "log_sha256": "4c6fb8883f1100a14ab6996a1ffa929c96d27a59ad4fd1753a9cfec635b243fb"
+      },
+      {
+        "name": "host-full-metal",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "1200",
+          "40960",
+          "spec",
+          "-Ddrama3_metal",
+          "--link-flags",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+          "spec/drama3_workspace_spec.cr",
+          "spec/drama3_tower_workspace_spec.cr",
+          "spec/drama3_generator_workspace_spec.cr",
+          "spec/drama3_graph_resident_spec.cr",
+          "spec/drama3_graph_generator_spec.cr",
+          "spec/drama3_generator_resident_spec.cr",
+          "spec/drama3_reference_prompt_spec.cr",
+          "spec/drama3_tower_resident_spec.cr",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_host_profile_resident_spec.cr"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/host-full-metal.log",
+        "log_sha256": "3f7cdf078d792ca00968108092e709e1fb34693afdc5ba2eba1acbb67d790369"
+      },
+      {
+        "name": "worker-upstream",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/compare_worker_upstream.py"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/worker-upstream.log",
+        "log_sha256": "42e89cdd81d186d2741626e41a936584d899825e5ab0934be2c07b7e052062f7"
+      },
+      {
+        "name": "build-prefill-current",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "1200",
+          "40960",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill_workspace.cr",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill-workspace-current"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/build-prefill-current.log",
+        "log_sha256": "bef98d0298ccac0d599d20c9f9d98f93e81c6f3ef08ac7b77e65b36b30705747"
+      },
+      {
+        "name": "prefill-current",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill-workspace-current",
+          "1200",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill-current.json"
+        ],
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/prefill-current.log",
+        "log_sha256": "3da3706672f1b3b6292b04057a446763d3b5bccc73d10f1e3f419863c87ce70f"
+      }
+    ],
+    "failed_attempts": [
+      {
+        "name": "host-profile-red",
+        "exit_code": 1,
+        "scope": "Expected missing-new-profiler test before implementation."
+      },
+      {
+        "name": "legacy-pairs",
+        "exit_code": 1,
+        "scope": "Wrong baseline path; stopped before model/inference. Corrected legacy-pairs-corrected passes."
+      }
+    ],
+    "adversary_verdict": "ROBUST within the declared diagnostic workload and unchanged-output scope; no causal, speedup or default-promotion claim.",
+    "review_independence": "Same-lineage mini-Quadrumvirate review is correlated. Execution, source hashes and raw outputs are the evidence.",
+    "trust": {
+      "F": "Executed native tests, exact output/ledger/hash checks and pointwise GPU gates; no formal proof.",
+      "G": "One short shared-host no-reference trajectory plus depth0/2 focused tests and a158-row prefill fixture.",
+      "R": "Exact bounded outputs repeat; timings vary by seconds and do not support a causal or default-speed claim."
+    },
+    "structural_validation": "No validator is shipped in this repository. The shared older template imposes numeric trust thresholds contrary to the active v13.7 instructions; use direct JSON/path/hash/source checks, not invented trust scores or structural evidence as truth.",
+    "command_details": "Exact controls, timestamps and per-command source hashes are in the hash-bound commands.json raw receipt.",
+    "adversary_receipt": "/Users/sergey/.cache/cogni-ml/drama3-runs/host-attribution-20261016/adversary-final.txt"
+  },
+  "decision": {
+    "default": "Keep DRAMA3_GENERATION_SCRATCH=0 and fine profiler off.",
+    "conclusion": "Backing and full-GC costs are lower, while direct encoding/retention costs are tens of milliseconds. The primary warm scratch median remains slower and matched effect sizes vary. A unique cause is unproven; large variable host completion waits remain the discriminating frontier.",
+    "next_falsifier": "Attribute GPU execution within generation/backbone/tower and separate per-command wait variation; keep DAC distinct. Do not prioritize a broad host-object rewrite from these timings.",
+    "numeric_return_frontier": "MoE39/common-prefix and DAC first post-module gates remain open.",
+    "ltp_wba_claim": false
+  },
+  "refresh": {
+    "assumptions": "Pinned code/runtime/device/checkpoint, fixed text/sampler/precision/graph controls, serialized single worker; no new wait/readback.",
+    "decay_trigger": "Source/shader/checkpoint/input/tape/fixture/precision/gate/graph/runtime/device/OS drift or contradictory results.",
+    "operation": "Rebuild, rerun focused suites and pinned upstream gates, then separate cold/warm primary, binary and timestamp controls with source/binary seals.",
+    "failure_policy": "Keep scratch opt-in; narrow/reopen the dependent claim, never relax tolerances to pass."
+  },
+  "links": {
+    "report": "docs/drama3-host-attribution.md",
+    "frontier": "docs/drama3-native-frontier.md",
+    "related_packet": ".landmark/evidence/drama3-allocation-reuse.json"
+  }
+}

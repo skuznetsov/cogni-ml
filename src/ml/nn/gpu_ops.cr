@@ -8,7 +8,7 @@ require "../core/tensor"
 module ML
   module NN
     # Load nn.metal kernel source at compile time
-    NN_KERNEL_SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/nn.metal") }}
+    NN_KERNEL_SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/nn/nn.metal") }}
 
     # GPU operations module
     module GPUOps

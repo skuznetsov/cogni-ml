@@ -18,9 +18,12 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import os
 import re
+import stat
 import sys
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +106,35 @@ def _tensor_descriptor(dtype: str, shape: list[int], offset: int, nbytes: int) -
     return {"dtype": dtype, "shape": shape, "offset_bytes": offset, "nbytes": nbytes}
 
 
+def _write_exclusive_file(
+    path: Path, data: bytes | bytearray, owned_files: list[tuple[Path, int, int]]
+) -> None:
+    """Create a new regular file without following or truncating an existing entry.
+
+    O_EXCL protects the leaf entry against concurrent creators. It is not a
+    defense against a malicious same-UID process with access to output paths.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags, 0o666)
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise OSError(f"exclusive conditioning output is not a regular file: {path}")
+        # Record ownership before writing so an interrupted/failed write can be
+        # removed by the caller only if this path still names the same inode.
+        owned_files.append((path, file_stat.st_dev, file_stat.st_ino))
+        remaining = memoryview(data)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError(f"short write while creating conditioning output: {path}")
+            remaining = remaining[written:]
+    finally:
+        os.close(descriptor)
+
+
 def write_conditioning_bundle(
     *,
     output_dir: str | Path,
@@ -120,6 +152,7 @@ def write_conditioning_bundle(
     torch_version: str,
     diffusers_version: str,
     diffusers_commit: str | None = None,
+    _owned_files: list[tuple[Path, int, int]] | None = None,
 ) -> Path:
     """Validate and serialize the exact batch-one conditioning exchange."""
     import numpy as np
@@ -209,15 +242,23 @@ def write_conditioning_bundle(
     }
 
     # Write data first and the manifest last. A manifest therefore never points
-    # to a payload that this invocation has not completely written.
-    payload_path.write_bytes(payload)
-    try:
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-    except Exception:
-        payload_path.unlink(missing_ok=True)
-        raise
+    # to a payload that this invocation has not completely written. The batch
+    # path opts into exclusive creation; the singleton path retains its existing
+    # writer behavior and byte format.
+    if _owned_files is None:
+        payload_path.write_bytes(payload)
+        try:
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+        except Exception:
+            payload_path.unlink(missing_ok=True)
+            raise
+    else:
+        _write_exclusive_file(payload_path, payload, _owned_files)
+        manifest_text = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        manifest_bytes = manifest_text.replace("\n", os.linesep).encode("utf-8")
+        _write_exclusive_file(manifest_path, manifest_bytes, _owned_files)
     return manifest_path
 
 
@@ -468,6 +509,209 @@ def prepare_conditioning(
     )
 
 
+def _validate_batch_seeds(seeds: Sequence[int]) -> list[int]:
+    if isinstance(seeds, (str, bytes)) or not isinstance(seeds, Sequence):
+        raise ValueError("seeds must be a non-empty sequence of distinct integers")
+    if not seeds:
+        raise ValueError("at least one seed is required")
+    validated: list[int] = []
+    seen: set[int] = set()
+    for seed in seeds:
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, int)
+            or not 0 <= seed <= (2**63 - 1)
+        ):
+            raise ValueError("each seed must be an integer in [0, 2^63-1]")
+        if seed in seen:
+            raise ValueError(f"seeds must be distinct; duplicate seed {seed}")
+        seen.add(seed)
+        validated.append(seed)
+    return validated
+
+
+def _cleanup_conditioning_batch_outputs(
+    output_dir: Path,
+    reserved_dirs: Sequence[Path],
+    created_output_dir: bool,
+    owned_files: Sequence[tuple[Path, int, int]],
+) -> None:
+    """Remove only unchanged bundle files and empty directories owned here."""
+    for path, device, inode in reversed(owned_files):
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        if (
+            current.st_dev == device
+            and current.st_ino == inode
+            and stat.S_ISREG(current.st_mode)
+        ):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    for seed_dir in reversed(reserved_dirs):
+        try:
+            seed_dir.rmdir()
+        except OSError:
+            # The directory may contain data this invocation did not create.
+            pass
+    if created_output_dir:
+        try:
+            output_dir.rmdir()
+        except OSError:
+            pass
+
+
+def prepare_conditioning_batch(
+    *,
+    model_dir: str | Path,
+    output_dir: str | Path,
+    prompt: str,
+    seeds: Sequence[int],
+    width: int = 1024,
+    height: int = 1024,
+    revision: str | None = None,
+    device: str = "auto",
+    dtype_name: str = "bfloat16",
+    mps_eager_attention: bool = False,
+) -> list[Path]:
+    """Prepare one text prompt and independent seeded latents in one process."""
+    requested_seeds = _validate_batch_seeds(seeds)
+    model_root = Path(model_dir)
+    _validate_model_directory(model_root)
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError("prompt must be a non-empty string")
+    cached_revision = _read_cached_revision(model_root)
+    if revision is None:
+        if cached_revision is None:
+            raise ValueError(
+                "could not determine local model revision; pass the full --revision commit SHA"
+            )
+        revision = cached_revision
+    revision = _check_revision(revision)
+    if cached_revision is not None and cached_revision != revision:
+        raise ValueError(
+            f"requested revision {revision} differs from local model cache revision {cached_revision}"
+        )
+
+    latent_height, latent_width = _validate_image_dimensions(width, height)
+    if dtype_name not in {"bfloat16", "float16", "float32"}:
+        raise ValueError("dtype must be bfloat16, float16, or float32")
+
+    output_root = Path(output_dir)
+    if output_root.is_symlink():
+        raise FileExistsError(
+            f"conditioning batch output directory must not be a symlink: {output_root}"
+        )
+    if output_root.exists() and not output_root.is_dir():
+        raise FileExistsError(f"conditioning batch output path is not a directory: {output_root}")
+    seed_dirs = [output_root / f"seed-{seed}" for seed in requested_seeds]
+    for seed, seed_dir in zip(requested_seeds, seed_dirs):
+        if seed_dir.exists() or seed_dir.is_symlink():
+            raise FileExistsError(
+                f"conditioning batch output already exists for seed {seed}: {seed_dir}"
+            )
+
+    created_output_dir = False
+    reserved_dirs: list[Path] = []
+    owned_files: list[tuple[Path, int, int]] = []
+    try:
+        if not output_root.exists():
+            output_root.mkdir(parents=True, exist_ok=False)
+            created_output_dir = True
+        for seed_dir in seed_dirs:
+            # Reserve the seed name before model loading. Bundle files below
+            # are also created exclusively, so a concurrent leaf-file creator
+            # cannot be silently overwritten.
+            seed_dir.mkdir()
+            reserved_dirs.append(seed_dir)
+
+        torch, diffusers, pipeline, device_name = _load_local_pipeline(
+            model_root, device, dtype_name, mps_eager_attention=mps_eager_attention
+        )
+        try:
+            with torch.inference_mode():
+                prompt_embeds, attention_mask, image_mask = pipeline._get_qwen_prompt_embeds(
+                    prompt, image=None, device=torch.device(device_name)
+                )
+        except Exception as exc:
+            raise RuntimeError(f"official Qwen3-VL prompt encoding failed: {exc}") from exc
+
+        if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1:
+            raise ValueError("official prompt encoder must return one batch of token embeddings")
+        if tuple(prompt_embeds.shape[1:]) != (attention_mask.shape[1], CONTEXT_DIM):
+            raise ValueError("official Qwen3-VL prompt embeddings/mask dimensions do not match the bridge")
+        if tuple(image_mask.shape) != tuple(attention_mask.shape):
+            raise ValueError("official Qwen3-VL image-pad mask dimensions do not match attention mask")
+
+        manifests: list[Path] = []
+        for seed, seed_dir in zip(requested_seeds, seed_dirs):
+            try:
+                with torch.inference_mode():
+                    # Match the official single-request CPU generator behavior,
+                    # but create an independent generator for every requested seed.
+                    generator = torch.Generator(device="cpu").manual_seed(seed)
+                    target_latents, condition_latents = pipeline.prepare_latents(
+                        None,
+                        1,
+                        LATENT_CHANNELS,
+                        height,
+                        width,
+                        prompt_embeds.dtype,
+                        torch.device(device_name),
+                        generator,
+                        latents=None,
+                    )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"official QwenImage21 latent preparation failed for seed {seed}: {exc}"
+                ) from exc
+
+            if condition_latents is not None:
+                raise RuntimeError(
+                    f"text-to-image preparation unexpectedly produced condition-image latents for seed {seed}"
+                )
+            if tuple(target_latents.shape) != (
+                1,
+                latent_height * latent_width,
+                LATENT_CHANNELS,
+            ):
+                raise RuntimeError(
+                    "official QwenImage21Pipeline.prepare_latents returned an unexpected latent shape "
+                    f"for seed {seed}: {tuple(target_latents.shape)}"
+                )
+
+            manifest_path = write_conditioning_bundle(
+                output_dir=seed_dir,
+                prompt=prompt,
+                revision=revision,
+                width=width,
+                height=height,
+                seed=seed,
+                encoder_hidden_states=prompt_embeds[0],
+                encoder_hidden_states_mask=attention_mask[0],
+                encoder_img_mask=image_mask[0],
+                initial_target_latents=target_latents[0],
+                source_dtype=dtype_name,
+                device=device_name,
+                torch_version=torch.__version__,
+                diffusers_version=diffusers.__version__,
+                diffusers_commit=_installed_diffusers_commit(),
+                _owned_files=owned_files,
+            )
+            manifests.append(manifest_path)
+        return manifests
+    except Exception:
+        _cleanup_conditioning_batch_outputs(
+            output_root, reserved_dirs, created_output_dir, owned_files
+        )
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", required=True, help="local Qwen-Image-2.1 snapshot directory")
@@ -475,7 +719,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt", required=True, help="text prompt to encode")
     parser.add_argument("--width", type=int, default=1024, help="output image width (multiple of 32)")
     parser.add_argument("--height", type=int, default=1024, help="output image height (multiple of 32)")
-    parser.add_argument("--seed", type=int, default=0, help="CPU-generator seed for initial noise")
+    seed_group = parser.add_mutually_exclusive_group()
+    seed_group.add_argument("--seed", type=int, default=0, help="CPU-generator seed for initial noise")
+    seed_group.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        help="opt-in ordered CPU-generator seeds; writes one v1 bundle under seed-<n>/ per seed",
+    )
     parser.add_argument("--revision", help="full Hugging Face source commit SHA; inferred from cache if available")
     parser.add_argument(
         "--device",
@@ -497,22 +748,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     args = parser.parse_args(argv)
     try:
-        manifest = prepare_conditioning(
-            model_dir=args.model_dir,
-            output_dir=args.output_dir,
-            prompt=args.prompt,
-            width=args.width,
-            height=args.height,
-            seed=args.seed,
-            revision=args.revision,
-            device=args.device,
-            dtype_name=args.dtype,
-            mps_eager_attention=args.mps_eager_attention,
-        )
+        if args.seeds is not None:
+            manifests = prepare_conditioning_batch(
+                model_dir=args.model_dir,
+                output_dir=args.output_dir,
+                prompt=args.prompt,
+                width=args.width,
+                height=args.height,
+                seeds=args.seeds,
+                revision=args.revision,
+                device=args.device,
+                dtype_name=args.dtype,
+                mps_eager_attention=args.mps_eager_attention,
+            )
+        else:
+            manifest = prepare_conditioning(
+                model_dir=args.model_dir,
+                output_dir=args.output_dir,
+                prompt=args.prompt,
+                width=args.width,
+                height=args.height,
+                seed=args.seed,
+                revision=args.revision,
+                device=args.device,
+                dtype_name=args.dtype,
+                mps_eager_attention=args.mps_eager_attention,
+            )
     except Exception as exc:
         print(f"qwen_image21_prepare_conditioning: error: {exc}", file=sys.stderr)
         return 1
-    print(manifest)
+    if args.seeds is None:
+        print(manifest)
+    else:
+        for manifest in manifests:
+            print(manifest)
     return 0
 
 

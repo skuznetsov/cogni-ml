@@ -80,6 +80,106 @@ private def qwen_image21_resident_fixture
   {config, weights}
 end
 
+private def qwen_image21_resident_mixed_qkv_fixture(bf16_slots : Array(Int32) = [0, 2])
+  config = ML::GGUF::QwenImage21BlockConfig.new(
+    hidden_dim: 32,
+    heads: 1,
+    head_dim: 32,
+    intermediate_dim: 5,
+    axes_dims: StaticArray[12, 10, 10],
+  )
+  weights = ML::GGUF::QwenImage21BlockWeights.new(
+    bf16_slots.includes?(0) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 1), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    bf16_slots.includes?(1) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 2), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    bf16_slots.includes?(2) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 3), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(32, 32, 4), 32, 32),
+    Array(Float32).new(32) { |index| 0.8_f32 + index.to_f32 / 160.0_f32 },
+    Array(Float32).new(32) { |index| 0.9_f32 + index.to_f32 / 180.0_f32 },
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(10, 32, 5), 10, 32),
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(32, 5, 6), 32, 5),
+  )
+  {config, weights}
+end
+
+private def qwen_image21_resident_q8_qkv_fixture
+  qwen_image21_resident_mixed_qkv_fixture([] of Int32)
+end
+
+{% unless flag?(:cpu_only) %}
+  private def qwen_image21_attention_kernel_output(
+    kernel_name : String,
+    q : Array(Float32), k : Array(Float32), v : Array(Float32),
+    image_ids : Array(Int32), key_valid : Array(UInt8),
+    total_tokens : Int32, query_tokens : Int32, query_offset : Int32,
+    heads : Int32, head_dim : Int32,
+    group_count : Int32, thread_count : Int32,
+  ) : Array(Float32)
+    ML::Metal::Device.init!
+    buffers = [] of ML::MetalBuffer
+    begin
+      q_buffer = ML::MetalBuffer.from_array(q)
+      buffers << q_buffer
+      k_buffer = ML::MetalBuffer.from_array(k)
+      buffers << k_buffer
+      v_buffer = ML::MetalBuffer.from_array(v)
+      buffers << v_buffer
+      image_ids_buffer = ML::MetalBuffer.new(image_ids.size.to_i64 * sizeof(Int32))
+      buffers << image_ids_buffer
+      image_ids_buffer.write_bytes(image_ids.to_unsafe.as(Pointer(UInt8)), image_ids.size * sizeof(Int32))
+      key_valid_buffer = ML::MetalBuffer.new(key_valid.size.to_i64)
+      buffers << key_valid_buffer
+      key_valid_buffer.write_bytes(key_valid.to_unsafe, key_valid.size)
+      output_buffer = ML::MetalBuffer.new(query_tokens.to_i64 * heads * head_dim * sizeof(Float32))
+      buffers << output_buffer
+
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      pipeline = ML::Metal::ComputePipeline.new(
+        kernel_name, ML::GGUF::QwenImage21MetalBlock::SOURCE,
+      )
+      encoder.set_pipeline(pipeline)
+      encoder.set_buffer(q_buffer, 0)
+      encoder.set_buffer(k_buffer, 1)
+      encoder.set_buffer(v_buffer, 2)
+      encoder.set_buffer(image_ids_buffer, 3)
+      encoder.set_buffer(key_valid_buffer, 4)
+      encoder.set_buffer(output_buffer, 5, ML::Metal::BufferAccess::Write)
+      encoder.set_value(total_tokens.to_u32, 6)
+      encoder.set_value(query_tokens.to_u32, 7)
+      encoder.set_value(query_offset.to_u32, 8)
+      encoder.set_value(heads.to_u32, 9)
+      encoder.set_value(head_dim.to_u32, 10)
+      encoder.set_value((1.0_f64 / Math.sqrt(head_dim)).to_f32, 11)
+      encoder.dispatch_threadgroups({group_count, 1, 1}, {thread_count, 1, 1})
+      encoder.end_encoding
+      command.commit_and_wait
+      output_buffer.read(query_tokens * heads * head_dim)
+    ensure
+      buffers.each(&.release)
+    end
+  end
+{% end %}
+
+describe ML::GGUF::QwenImage21MetalAttentionPolicy do
+  it "keeps tiled attention opt-in and falls back outside its admitted shape" do
+    policy = ML::GGUF::QwenImage21MetalAttentionPolicy
+    legacy_kernel = ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL
+    tiled_kernel = ML::GGUF::QwenImage21MetalAttentionPolicy::TILED_KERNEL
+    policy.kernel_name(128, 11, 5, nil).should eq(legacy_kernel)
+    policy.kernel_name(128, 11, 5, "0").should eq(legacy_kernel)
+    policy.kernel_name(64, 11, 5, "1").should eq(legacy_kernel)
+    policy.kernel_name(128, 7, 5, "1").should eq(legacy_kernel)
+    policy.kernel_name(128, 11, 3, "1").should eq(legacy_kernel)
+    policy.kernel_name(128, 11, 5, "1").should eq(tiled_kernel)
+  end
+end
+
 describe ML::GGUF::QwenImage21MetalBlock do
   it "limits automatic Q8 register reuse to validated device and batch policy" do
     q8 = ML::GGUF::QwenImage21MetalQ8
@@ -284,6 +384,103 @@ describe ML::GGUF::QwenImage21MetalBlock do
       time_weight, time_weight, weights.text_norm, [block],
     )
     certificate.compatible?(image, encoder, input, layout, changed_weights, 5).should be_false
+  end
+
+  it "dispatches mixed BF16/Q8 QKV projections in resident mode with Q8 batching on or off" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    identity = qwen_image21_resident_bf16_weight(
+      [1.0_f32, 0.0_f32, 0.0_f32, 1.0_f32], 2, 2,
+    )
+    ML::GGUF::QwenImage21MetalBF16.matmul(
+      identity, [2.0_f32, -3.0_f32, 4.0_f32, 5.0_f32], 2,
+    ).should eq([2.0_f32, -3.0_f32, 4.0_f32, 5.0_f32])
+
+    config, _ = qwen_image21_resident_mixed_qkv_fixture
+    token_count = 16
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 11) % 37) - 18).to_f32 / 53.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 7) % 41) - 20).to_f32 / 127.0_f32
+    end
+    positions = Array(StaticArray(Int32, 3)).new(token_count) do |index|
+      StaticArray[0, index, index // 2]
+    end
+    image_ids = Array(Int32).new(token_count, 0)
+    key_valid = Array(Bool).new(token_count, true)
+
+    prior_route = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    begin
+      {[0], [1], [2], [0, 2]}.each do |bf16_slots|
+        config, weights = qwen_image21_resident_mixed_qkv_fixture(bf16_slots)
+        reference = ML::GGUF::QwenImage21BlockCPU.forward(
+          hidden, token_count, modulation, positions, image_ids, weights, config,
+          key_valid: key_valid,
+          backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
+        )
+
+        {"0", "1"}.each do |route|
+          ENV["QWEN_IMAGE21_Q8_BATCH"] = route
+          actual = ML::GGUF::QwenImage21MetalBlock.forward(
+            hidden, token_count, modulation, positions, image_ids, weights, config,
+            key_valid: key_valid,
+          )
+          actual.hidden.zip(reference).each do |value, expected|
+            value.should be_close(expected, 8e-4_f32)
+          end
+          actual.stats.command_buffers.should eq(1)
+          actual.stats.intermediate_readbacks.should eq(0)
+          actual.stats.final_readbacks.should eq(1)
+        end
+      end
+    ensure
+      if prior_route
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = prior_route
+      else
+        ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      end
+    end
+  end
+
+  it "keeps the all-Q8 resident QKV outputs bitwise identical across batch routing" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    config, weights = qwen_image21_resident_q8_qkv_fixture
+    token_count = 16
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 11) % 37) - 18).to_f32 / 53.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 7) % 41) - 20).to_f32 / 127.0_f32
+    end
+    positions = Array(StaticArray(Int32, 3)).new(token_count) do |index|
+      StaticArray[0, index, index // 2]
+    end
+    image_ids = Array(Int32).new(token_count, 0)
+    key_valid = Array(Bool).new(token_count, true)
+    prior_route = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    begin
+      ENV["QWEN_IMAGE21_Q8_BATCH"] = "0"
+      reference = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, token_count, modulation, positions, image_ids, weights, config,
+        key_valid: key_valid,
+      )
+      ENV["QWEN_IMAGE21_Q8_BATCH"] = "1"
+      actual = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, token_count, modulation, positions, image_ids, weights, config,
+        key_valid: key_valid,
+      )
+      actual.hidden.should eq(reference.hidden)
+      actual.stats.command_buffers.should eq(1)
+      actual.stats.intermediate_readbacks.should eq(0)
+    ensure
+      if prior_route
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = prior_route
+      else
+        ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      end
+    end
   end
 
   it "keeps every intermediate resident while matching the exact block" do
@@ -691,6 +888,46 @@ describe ML::GGUF::QwenImage21MetalBlock do
       stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
     ensure
       stack.close
+    end
+  end
+
+  it "matches tiled 128-wide attention to legacy on mixed masked offset queries" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    total_tokens = 11
+    query_tokens = 5
+    query_offset = 6
+    head_dim = 128
+    image_ids = [-1, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3]
+    key_valid = [1_u8, 0_u8, 1_u8, 0_u8, 1_u8, 1_u8, 0_u8, 1_u8, 1_u8, 0_u8, 1_u8]
+
+    [{1, 1.0_f32}, {3, 15.0_f32}].each do |heads, magnitude|
+      q = Array(Float32).new(query_tokens * heads * head_dim) do |index|
+        (((index * 17 + 5) % 61) - 30).to_f32 * magnitude / 43.0_f32
+      end
+      k = Array(Float32).new(total_tokens * heads * head_dim) do |index|
+        (((index * 23 + 9) % 67) - 33).to_f32 * magnitude / 47.0_f32
+      end
+      v = Array(Float32).new(total_tokens * heads * head_dim) do |index|
+        (((index * 29 + 3) % 71) - 35).to_f32 / 53.0_f32
+      end
+
+      legacy = qwen_image21_attention_kernel_output(
+        "qi21_block_causal_attention", q, k, v, image_ids, key_valid,
+        total_tokens, query_tokens, query_offset, heads, head_dim,
+        query_tokens * heads, head_dim,
+      )
+      tiled = qwen_image21_attention_kernel_output(
+        "qi21_block_causal_attention_tiled", q, k, v, image_ids, key_valid,
+        total_tokens, query_tokens, query_offset, heads, head_dim,
+        ((query_tokens + 3) // 4) * heads, 128,
+      )
+
+      legacy.all?(&.finite?).should be_true
+      tiled.all?(&.finite?).should be_true
+      max_abs = legacy.zip(tiled).max_of { |reference, value| (reference - value).abs }
+      STDERR.puts "qwen_image21_attention_tile_parity heads=#{heads} magnitude=#{magnitude} max_abs=#{max_abs}"
+      max_abs.should be < 1e-5_f32
     end
   end
 

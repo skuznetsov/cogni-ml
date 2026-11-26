@@ -1,0 +1,330 @@
+{
+  "format": "drama3-complete-decode-profile-v1",
+  "base_revision": "6ab91a4a",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Complete diagnostic capture and trajectory controls; shader phase attribution rejected; no speedup or strict upstream parity claim."
+  },
+  "adversary_verdict": "ROBUST within capture ownership/cleanup and narrowed profile scope; source and artifact review by a correlated same-lineage agent, root executed DoD and checked artifacts.",
+  "boundaries": {
+    "allowed_paths": [
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-complete-decode-profile.md",
+      "scripts/drama3/capture_decode_profile.py",
+      "scripts/drama3/analyze_shader_coverage.py",
+      "spec/drama3_decode_capture_spec.py",
+      "spec/drama3_shader_coverage_spec.py",
+      ".landmark/evidence/drama3-complete-decode-profile.json"
+    ]
+  },
+  "changed_paths": [
+    "LANDMARKS.md",
+    "docs/drama3-native-frontier.md",
+    "docs/drama3-complete-decode-profile.md",
+    "scripts/drama3/capture_decode_profile.py",
+    "scripts/drama3/analyze_shader_coverage.py",
+    "spec/drama3_decode_capture_spec.py",
+    "spec/drama3_shader_coverage_spec.py",
+    ".landmark/evidence/drama3-complete-decode-profile.json"
+  ],
+  "source_sha256": {
+    "LANDMARKS.md": "88d5c0694529fa2f1ea256a8fa38a8354dbd5fb33bb4bf0a60fe8932be89ee8b",
+    "docs/drama3-native-frontier.md": "89d90d2718a207a1bb8abcd7ba4e862637f879f0cd3d262d79c0be7915b13af8",
+    "docs/drama3-complete-decode-profile.md": "21f1e84f549f74c605e6ec2caf1dd66b2b82e09ec8414fed0571c6f554bdeeb6",
+    "scripts/drama3/capture_decode_profile.py": "098c9a740eb383f9309b869c37cbfda07c72d794fd94d177b9d41e58d018c905",
+    "scripts/drama3/analyze_shader_coverage.py": "27d36f18e5d7a68ca5cbef6489fb981ee6374c2f47c905c040d4a89e2416c4bb",
+    "spec/drama3_decode_capture_spec.py": "8c74d8e037bc34c1348bd7e10e8ebf2b38f7f72b309b44b5706be6ec46854568",
+    "spec/drama3_shader_coverage_spec.py": "ec283c480dfe22d0fd814f2c9d2e39c21be14a223d2f1a141355d3dff393cb2e"
+  },
+  "runtime_source_sha256_matching_executed_capture": {
+    "examples/drama3_backbone_gpu_trace.cr": "26460d555c3f504c33984e63ae1ae7447de0872e97ac866764b2f5f65f9c36ce",
+    "examples/drama3_codec_cross_compare.cr": "cccc6ae5be444f0d83a5d188730ade4ea0908877d8eb2aa25f830aeb1866c6cf",
+    "examples/drama3_codec_resident_trace.cr": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97",
+    "examples/drama3_codec_trace.cr": "a6394eb259120fc670dadcc21e4c11405c871dd41a0a67e18baf601e1b52ae70",
+    "examples/drama3_dac_layout_bench.cr": "697b3a43d95a2dc0b76b77c8b03c462b7d46d19232675ebd637fb0da51d9c087",
+    "examples/drama3_delta_benchmark.cr": "5ffdd4259cd631a3fab3dfdfca2640f7974fb5845d46f3fde70ca161ebe20078",
+    "examples/drama3_dense_benchmark.cr": "c56e7da4a3d6c0db7381b82f1499d4c64f7e6600fe81e7eed8ff0ddebac47c06",
+    "examples/drama3_dense_decode_compare.cr": "c62720621fdbf24a1450bbe26d4dc7f5eefd694b855c07db5775c883bdf83803",
+    "examples/drama3_dense_fusion_benchmark.cr": "df38ff41936f9aecc6eeff3f3821f87779413baf141f27f197d8f3ae91defc2d",
+    "examples/drama3_dense_trace.cr": "5b6ba998abb9213d35fa6e1f2034feeac0566dc20802c34449ea15804459e623",
+    "examples/drama3_embedding_benchmark.cr": "1beb7dd9bf50b38d8381a07232a9ebd01a4d725ff3e1ad9a06e1d720be78f3fe",
+    "examples/drama3_expert_launch_benchmark.cr": "7d57e74068486423e295c9351d8afeee947253d87c85397dba971213f877ab94",
+    "examples/drama3_expert_load_bench.cr": "5ff460114ea4bf60bd9bfda7c5d48905798a8f360c7adcc48c0c4e0fcaf9a338",
+    "examples/drama3_generate.cr": "4502385f6f512341700290ce3c8b96f426e2bf4585736afe20329c08179dd037",
+    "examples/drama3_generation_replay.cr": "4ff6a7b5674cb17b4bca4d8051ab9f12beaf14c7f37edd199f1226765060115c",
+    "examples/drama3_inspect.cr": "9023e290e11b6e0568800d92ec625ffa29b94eaa1314952d946bb5af05b11a71",
+    "examples/drama3_late_compare.cr": "5dff052953447b4301aef5ce3b8118c1cfaea42062212aa59998947449b75b39",
+    "examples/drama3_mlx_q4_probe.cr": "a6309b36ff63cae7b745f8ae81f68c7c43c923ae1f6b17d90f7c162db35cab52",
+    "examples/drama3_moe_ablation.cr": "e45074f4fdb8b043d0d3f27067fe58baf29c479f0277aebe0d10b4689a538e3f",
+    "examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+    "examples/drama3_prefill_benchmark.cr": "924cc8c8808a86fb69b738890a1f5dfd27004aa1a85b4d7ece6dac1c92ddedce",
+    "examples/drama3_prefill_worker.cr": "6be42f499fb16a09e95724543b6eaf1d8ccb382761ffd3f46dc832903825728d",
+    "examples/drama3_reference_compare.cr": "7a9720452519b9a59079b26a0ffdb12377fe90607890379794442297669f5d07",
+    "examples/drama3_resident_trace.cr": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe",
+    "examples/drama3_sampler_benchmark.cr": "bdf0fb8f6ab6ea8e817da1882a16e10ccdb50f9ac13ac626f87bf20e7f06b5ad",
+    "examples/drama3_sampler_compare.cr": "38a81ba1453bbd9b5827b5aa3cff2eba16c6920acbce5da3955517cfbb7a673d",
+    "examples/drama3_startup_probe.cr": "5533fd57b296e88caee78b0d449030e7c8cee0fdbb2da52bf159e4e9d223c476",
+    "examples/drama3_studio.cr": "fa9b2d3efd215a3c7dab418dfc8e6ac3dc6f08797544c223ab5d2778b3679644",
+    "examples/drama3_tower_dense_benchmark.cr": "eae03f642264bb2574dd79106872eeb0280ccd73a16b64c07d9d76d5858e1df8",
+    "examples/drama3_tower_pair_benchmark.cr": "8d1a8054988983c353a81c63bd9acf420e33a98939b05cfc10911ec2dac4545a",
+    "examples/drama3_tower_pair_compare.cr": "a11eff4fdd5c0c186db84188a17df2ebc0bf05379187e480baa89292dcbddf8e",
+    "examples/drama3_tower_resident_trace.cr": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296",
+    "examples/drama3_trace.cr": "9486aa43973ed1a9d83f47b40d61a8555d148b7865e939363131f2f0f8a963e6",
+    "examples/drama3_weight_wrappers.cr": "c2f11ec24212f8fd0554c93053c0794d286ea165973b6b8662e34c1a2c4e7ccd",
+    "examples/drama3_window_probe.cr": "65965d618a245f4f7e617c295d1664b29b0419f752f37c1c5d9d863b670ea24c",
+    "examples/support/drama3_codec_compare.metal": "659a9ec18a5efcf40d4d28b0e1a1b7fd05088f30709f9da9f79d30320017b5da",
+    "examples/support/drama3_dac_layout_compare.metal": "9fab6e5cde50f0817c947bf33aefa5151e118f2c73a389e80e277aaee63d33bb",
+    "examples/support/drama3_dense_fusion.metal": "8411dabfdedee24603221337d759fff038d8348955f9e4d59dfe6f162c30cff7",
+    "examples/support/drama3_expert_load.metal": "7ecd69bcd01f47498ca4b303aaaf1829335553dbd0d36ad536ff1817d5e10aaf",
+    "examples/support/drama3_late_compare.metal": "492f4edbb5757c8fff01667b42bfcd3af6addee3ba683ae4b4d3a8bfeed885bf",
+    "examples/support/drama3_moe_provenance.cr": "067b673d0ffaadcab6cb472a1b97d5d5eba063aa104f87c918bd57b96393c1de",
+    "examples/support/drama3_prefill_compare.metal": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+    "examples/support/drama3_reference_compare.metal": "d7ace81a672ea6cc14d9bcc8230603ebf541fcc7337c8a4c42cdf789fad3a306",
+    "examples/support/drama3_sampler_compare.metal": "c88d970ad2917134468d0ed9814d83350bd3a7637932ee74b04ed421025a914c",
+    "src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+    "src/ml/audio/drama3/backbone_prefill.cr": "0bcb2430f694f4ce2e39b47b469904ce0b9e1dde92807f7fbee31437a3a28ff3",
+    "src/ml/audio/drama3/backbone_resident.cr": "8e0d10e42e6d3f1d57f06298c09784edf410f18d4ad2addf430386d1c06123e3",
+    "src/ml/audio/drama3/codec.cr": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+    "src/ml/audio/drama3/codec_encoder_resident.cr": "01075f057ec834d36601f936fdc06e0be146c8ca59b903c551ae4758833d0114",
+    "src/ml/audio/drama3/codec_metal.cr": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+    "src/ml/audio/drama3/codec_resident.cr": "f7bbbe6053535ce914b710aa67dca0ac6ae8a2a9de4008f8482432768f2d299a",
+    "src/ml/audio/drama3/generator.cr": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+    "src/ml/audio/drama3/generator_resident.cr": "19d1cc67c12fb8300f3e614361ec057e3ce2bf34fdfb652d67f6a984c487ea88",
+    "src/ml/audio/drama3/host_profile.cr": "4c04a84cdef2ecb39ca4acb9e1f7bdf9b4dbf33925853cd3d4231c5fad9b9af5",
+    "src/ml/audio/drama3/kernels/affine.metal": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d",
+    "src/ml/audio/drama3/kernels/codec.metal": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+    "src/ml/audio/drama3/kernels/codec_encoder_resident.metal": "3aea85f418bef4c25ffa4b664b8cb2ddece84756d811ad0aa4c38461b6d6a252",
+    "src/ml/audio/drama3/kernels/codec_resident.metal": "a64219b96f8736f32b158b8c0be1136a8867f136ecb693e27d1b8ae4bf9d7bc9",
+    "src/ml/audio/drama3/kernels/generator_resident.metal": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+    "src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+    "src/ml/audio/drama3/kernels/prompt_resident.metal": "2d26d357fce08f2f7925ed76be2542734cfa5123d7611f2bcdaed958e0f305a6",
+    "src/ml/audio/drama3/kernels/reference_audio.metal": "c629d3a4d26460cc3a3fbe430bcc44dcbc1784817e994a5b192e20bd6b4f9d5f",
+    "src/ml/audio/drama3/kernels/resident.metal": "6504348c7df93182a3e71ae2ce77c9ecd61180dcc351636306cbff2a6e5e542b",
+    "src/ml/audio/drama3/kernels/resident_batch.metal": "4747afb25871af991aa8f5c4ec2f0796af0f1aa1b61ee636d2eb41c4a248869b",
+    "src/ml/audio/drama3/kernels/tower_resident.metal": "392089ec29e1883d7eac581367748eea78a7d20df217c3fe4b0f7de4ecafdc86",
+    "src/ml/audio/drama3/metal.cr": "68ffc22f962955c036e4eabc7d0b2edcdade5c572feb544d8fa4bd4891ea25cf",
+    "src/ml/audio/drama3/native.cr": "5b70f4cf69f1c9f02d4e0f1abcb4064ba8c8fdc51f1a5f88e5f57329ec2afd5e",
+    "src/ml/audio/drama3/profile.cr": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+    "src/ml/audio/drama3/prompt.cr": "1a91b258b2343e8f5a44c520224bfe046aa1d08a01ca101e8f963c725c25c2a1",
+    "src/ml/audio/drama3/prompt_resident.cr": "b4b352408220ea67d3f09046cb023e18b2877f3dacc1ba6b2fb07b98e023a65e",
+    "src/ml/audio/drama3/reference_audio.cr": "3962548d28aefbbde84d26f7ccefe0be299f02fa5bf4fb746f9222e72ef24d3f",
+    "src/ml/audio/drama3/resident.cr": "52285f5cdc5b43f558a000b20449833c8a18f681d47b55f60eddda60f9e5a3ad",
+    "src/ml/audio/drama3/resident_batch.cr": "6c55edbb1a6eb1d288926b76a6e3fe815ec752593275f527dea60a2080d13c4a",
+    "src/ml/audio/drama3/resident_host_encoder.cr": "2666ee5345c0b38e5b2767af99c62df7be102d0c63096dbc0593aab7b83197cf",
+    "src/ml/audio/drama3/studio/backend.cr": "6859826a22c8744d2169fd72e2e5fbf072a28f4eb2889e05b1925b50b4824a59",
+    "src/ml/audio/drama3/studio/engine.cr": "4daa7b46ad3825fc6ff33a576a4e2c1f6179eccf0094094a1359c4e6b542de5b",
+    "src/ml/audio/drama3/studio/media.cr": "534ede6b3dd196d0c60f5c8f59714039cd28a9a227fd7fe2b2bb9903443b59d6",
+    "src/ml/audio/drama3/studio/server.cr": "644a3f119a1571f36d786bfaad71a724218d319f1d5094c2161b50615af32b01",
+    "src/ml/audio/drama3/studio/store.cr": "256ca84e613e1f2eb0dbd747039f8f1ada87dd55c0559b30ca7dc8bed497c919",
+    "src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+    "src/ml/audio/drama3/tower_resident.cr": "2af0dd77a55723ba1eb9de6bd1f4895160d1a484b59c978da43e77dc027d6184",
+    "src/ml/audio/drama3/wav.cr": "766db1245d1493bbad68e8f27cb5c4dd7dd4e17b092dca4ce6962ecc68cf47ed",
+    "src/ml/audio/drama3/window_budget.cr": "6dfe46cd9ab2e012ea15a2400d1373f5f4cf37e28f156ec695c6ae5a4ff2b367",
+    "src/ml/audio/drama3/window_memory.cr": "a2d1bce59e3046bb16156e6d215b498dd73818f9841acd0e509c9a518621c8a0",
+    "src/ml/core/buffer.cr": "a28570a5b7163eef67aef7ad96af66d2168da68f104afbacc9714bbefb55334d",
+    "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13",
+    "src/ml/metal/compute_graph.cr": "8d5d308fac91629a502de1ed085786047c5b6f0f530253ae265c7f95098cb970",
+    "src/ml/metal/device.cr": "43711e4ddb51d2c31cc7b262f72efcbe9ca35d50bc3ce85be402b13e9126df32"
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/capture-v1/capture.json",
+      "sha256": "d31e4c2e9e97e557fd6e53a867fabac1edb9d53750f689ad5be99ecfc96a8c1d",
+      "bytes": 153278
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/profile-command-receipts.json",
+      "sha256": "f2830980310d80762998375aaf5fb293b1ab35335de7e79cf31d0cb242e3529b",
+      "bytes": 169357
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/capture-harness-executed-v1.py",
+      "sha256": "421a318a1825fc67cab3aded3c0e4aea8292361b13cea0d80174105058d5014e",
+      "bytes": 13371
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/profile-validation-v1.json",
+      "sha256": "6f3c474a9083fb5308a735a8f4caa6b3008b9c6bb8c2d9ee1a868aaa1ba10fd9",
+      "bytes": 3110
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/run_profile_validation.py",
+      "sha256": "b5089da6eff924ec5dd1bff7626e46eda189ed621975df3632d0896d47bfbd00",
+      "bytes": 2080
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/build_profile_evidence.py",
+      "sha256": "c32d869c95825b35107eab9b8c3a75b1e759d9b4841260bd47d45b976e7289b2",
+      "bytes": 9633
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/analyze_native_capture.py",
+      "sha256": "7c5aa2713feffaef048c57282229c728fa375d4aceb6fc3f851ce386575c6563",
+      "bytes": 3287
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/native-capture-analysis.json",
+      "sha256": "56124c9c01668c01e679ca99ad13500707d8438ef8036fd946ffcf0b8e6a60ea",
+      "bytes": 5303
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/compare_upstream_replay.py",
+      "sha256": "1ce1bfb4e96434fa075be6ad1a02de8f131d7362c4fab3925c06174cd289a514",
+      "bytes": 1969
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/upstream-no-regression.json",
+      "sha256": "ae7b5b021d016678d165066fbd978431caa5237e6076fd848721368e537fe4cf",
+      "bytes": 3705
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/upstream-tower-replay.json",
+      "sha256": "a69bd16111967a59fe90474ea8b3f148a1aebca37b3291d1febeaafe6e5c2c0d",
+      "bytes": 543859
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/shader-coverage-root-v2.json",
+      "sha256": "85f1dbee7db409efefe7017367d38df06dde4a1f744594459c248cb5417e025b",
+      "bytes": 6275
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/shader-coverage-root-receipt.json",
+      "sha256": "9969c864c2bf0837c3d68450a0636b92c1343bb4f4d6b42deb8aa164c9c873e4",
+      "bytes": 1248
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/trace-design/shader-coverage-v2.json",
+      "sha256": "85f1dbee7db409efefe7017367d38df06dde4a1f744594459c248cb5417e025b",
+      "bytes": 6275
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/capture-v1/timeline.stderr",
+      "sha256": "87c5cb5187f336df3b8becccd94d6fd23207fb7dd09e43d7fe4cf965880838d2",
+      "bytes": 223319
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/capture-v1/trace-toc.xml",
+      "sha256": "f72725844c7b0ed69d31b95db3826c766fc79087e52267b7d7b45d6f64fe2591",
+      "bytes": 37859
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+      "sha256": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "bytes": 41228
+    }
+  ],
+  "selected_exports": {
+    "metal-shader-profiler-intervals": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-decode-profile-20261017/capture-v1/metal-shader-profiler-intervals.xml",
+      "sha256": "701f1ff161c7ff3dd254e0d4143421915ead0e85ac81d1c17a7cdee6ffb3324c",
+      "bytes": 48198588
+    },
+    "metal-application-intervals": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-decode-profile-20261017/capture-v1/metal-application-intervals.xml",
+      "sha256": "2cfc734b34a2e2ea8b3b6d50b5271aae96bd600e485a12da2091b2642760b7af",
+      "bytes": 163212
+    },
+    "metal-application-command-buffer-submissions": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-decode-profile-20261017/capture-v1/metal-application-command-buffer-submissions.xml",
+      "sha256": "d29850acb87b883a72866c5bfd513640a5cf79657d0be16f2676e6b56526cd54",
+      "bytes": 87070
+    },
+    "metal-gpu-intervals": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-decode-profile-20261017/capture-v1/metal-gpu-intervals.xml",
+      "sha256": "cedbb62f8ea2dbd6b42daf730fc4f452dca4511d01be6a9b7e1468fb969c3734",
+      "bytes": 86049721
+    }
+  },
+  "capture": {
+    "requests": 8,
+    "warm_trajectory_matches": 5,
+    "worker_exit0_count": 3,
+    "commands_completed_waited_each": 122,
+    "control_read_bytes": 496,
+    "terminal_read_bytes": 494160,
+    "audio_seconds": 2.786394557823129,
+    "profiler_off_warm_wall_seconds": [
+      26.733516833744943,
+      23.661634707823396
+    ],
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+    "raw_trace_removed": true,
+    "executed_harness_sha256": "421a318a1825fc67cab3aded3c0e4aea8292361b13cea0d80174105058d5014e",
+    "current_harness_guard_scope": "Later partial-start and live-recorder cleanup guards are CPU-tested only; they were not exercised by the saved capture."
+  },
+  "upstream": {
+    "scope": "Pinned 87-row tower fixture, prefill row85 and decode row0; no-regression against saved metrics, not full upstream parity.",
+    "raw_comparisons_equal": 2025,
+    "native_exact_sites": 675,
+    "strict_upstream_pass": false,
+    "unchanged_failure_sites": 3,
+    "tolerances_changed": false
+  },
+  "rejected_route": {
+    "claim": "Phase-specific Shader Timeline family attribution",
+    "counterexample_rows": 5033,
+    "counterexample_labels": 16,
+    "reason": "Codec-labelled sampled intervals overlap mapped generation windows despite source ordering DAC after generation; no shader-row command ID proves ownership.",
+    "superseded_artifact": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/trace-design/shader-coverage-v1.json",
+    "failure_policy": "Suppress per-family/per-shader phase tables; do not choose a selector or infer DAC execution from clipped intervals."
+  },
+  "dod": {
+    "actual_capture_command": [
+      "scripts/run_safe.sh",
+      "python3",
+      "900",
+      "40960",
+      "scripts/drama3/capture_decode_profile.py",
+      "--binary",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/studio-watchdog",
+      "--model",
+      "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "--baseline",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+      "--template",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/gpu-kernels-20261016/Drama3 GPU Kernels.tracetemplate",
+      "--output",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/capture-v1"
+    ],
+    "capture_signal": "exit0, 8 complete exact requests, 5 identical warm ledgers, 3 worker exits0, raw trace removed",
+    "cpu_validation_command": [
+      "python3",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/run_profile_validation.py"
+    ],
+    "cpu_validation_signal": "10 capture guards and 11 coverage guards pass; native analysis and upstream comparison exit0",
+    "full_export_replay": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/shader-coverage-root-receipt.json",
+    "artifact_check_command": [
+      "python3",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/build_profile_evidence.py"
+    ],
+    "artifact_check_signal": "PROFILE_ARTIFACTS_PASS",
+    "generic_packet_validator": "Unavailable: scripts/validate-landmark-graph.sh and repository packet template do not exist. JSON/source/artifact checks do not prove runtime claims."
+  },
+  "watchdog_fix": {
+    "revision": "6ab91a4a",
+    "evidence": ".landmark/evidence/metal-watchdog-exit.json"
+  },
+  "trust": {
+    "F": "Observed commands and hash-bound reports; no formal performance model",
+    "G": "One pinned short request plus bounded tower fixture",
+    "R": "Root execution and correlated same-lineage review; no independent replication"
+  },
+  "limits": [
+    "Active-host timings are observations, not profiler overhead, isolated family runtime or stable throughput.",
+    "Phase GPU command-window unions can overlap and are not an additive request-time model.",
+    "Native-to-submission association is order-based; shader phase ownership remains rejected.",
+    "Strict upstream failures remain; native exactness proves bounded no regression only.",
+    "Raw trace cleanup on process-group SIGKILL requires manual recovery after children stop.",
+    "A filesystem failure during final trace deletion can prevent the final manifest save; cleanup is not total under arbitrary I/O failures.",
+    "The checkpoint is identified by revision; this replay does not independently authenticate every weight payload."
+  ],
+  "next_falsifier": "Captured-input homogeneous decode replay with production kernels, batched drains, existing GPU timestamps and exact GPU checks; then unchanged upstream metrics and profiler-off full-WAV pairs before promotion.",
+  "refresh_on": [
+    "source/compiler/runtime/model/fixture/input/tolerance/queue/device/OS changes",
+    "artifact loss or digest mismatch",
+    "host-load drift for timing claims"
+  ],
+  "rollback": "Diagnostic scripts/docs are separable from the isolated watchdog lifetime commit. Inference kernels and defaults unchanged."
+}

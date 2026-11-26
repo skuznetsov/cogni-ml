@@ -43,11 +43,11 @@ fi
 
 if [[ "${force_build}" == "1" || ! -x "${probe_bin}" ]]; then
   echo "building ${probe_bin}" >&2
-  (cd "${repo_root}" && CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build bin/qwen35_deltanet_fixed_basis_probe.cr ${build_flags} -o "${probe_bin}" --link-flags="${link_flags}")
+  (cd "${repo_root}" && CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr ${build_flags} -o "${probe_bin}" --link-flags="${link_flags}")
 fi
 if [[ "${force_build}" == "1" || ! -x "${route_cli}" ]]; then
   echo "building ${route_cli}" >&2
-  (cd "${repo_root}" && CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build bin/qwen35_proposal_route_memory.cr ${build_flags} -o "${route_cli}" --link-flags="${link_flags}")
+  (cd "${repo_root}" && CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build experiments/qwen35/qwen35_proposal_route_memory.cr ${build_flags} -o "${route_cli}" --link-flags="${link_flags}")
 fi
 
 if [[ -z "${prompts_file}" ]]; then

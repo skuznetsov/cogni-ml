@@ -1,0 +1,355 @@
+{
+  "format": "drama3-gdn-scan-v1",
+  "created_at_utc": "2026-10-18T15:52:46+00:00",
+  "base_revision": "e4131aaafe1c32a017daa39e57658c73139f9dd3",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Standalone actual-input GPU recurrence experiment at the pinned shape/input/device. Dense affine scan is rejected for promotion on these short blocks; serial tile is bit-exact in the tested scope with a descriptive local timing lead. No production integration, refreshed upstream parity, full-prefill/WAV gain, audio-quality or universal scan claim.",
+    "adversary_verdict": "ROBUST within this scope",
+    "attestation": "Locally generated receipts and correlated source review; not an independently attested build or replicated GPU run."
+  },
+  "decision": {
+    "dense_affine_scan": "diagnostic only; no promotion",
+    "serial_tile": "retain as next bounded production-prefill integration candidate",
+    "production_sources_changed": false,
+    "production_default_changed": false,
+    "rollback": "Omit standalone diagnostic; no production route to disable.",
+    "next_falsifier": "Integrate ordered serial tile into known-input prefill. Preserve convolution history and every output/state bit, charge preparation/normalization/projection/commit, then refresh upstream boundary and complete-WAV pairs."
+  },
+  "changed_paths": [
+    "LANDMARKS.md",
+    "docs/drama3-native-frontier.md",
+    "docs/drama3-optimization-roadmap.md",
+    "docs/drama3-gdn-scan.md",
+    "examples/drama3_gdn_scan_probe.cr",
+    "examples/support/drama3_gdn_scan.cr",
+    "examples/support/drama3_gdn_scan.metal",
+    "scripts/drama3/analyze_gdn_scan.py",
+    "spec/drama3_gdn_scan_spec.cr",
+    "spec/drama3_gdn_scan_report_spec.py",
+    ".landmark/evidence/drama3-gdn-scan.json"
+  ],
+  "source_sha256": {
+    "LANDMARKS.md": "559bbbf60f38eabf0f258b860d84e8c391ad04050e3a4442f99821d0bedc07cd",
+    "docs/drama3-native-frontier.md": "2ac442314a189d1837a9ac77ed0d6d15ba8feebbaedec3a5d55c01ec0c627814",
+    "docs/drama3-optimization-roadmap.md": "23d60185c0cb09a7ec8c916ebdbcd2ebcd1ea7e22d316bd728764863af498242",
+    "docs/drama3-gdn-scan.md": "080bdddc48e7f540a536f12c56ac9d0196abf5d5528207b5fcf86bf7253130d8",
+    "examples/drama3_gdn_scan_probe.cr": "84c6d7784a236d7e39d873aeb14388f9d363604c3c037e01833a8ea69571859b",
+    "examples/support/drama3_gdn_scan.cr": "dd8b4579430f91de4cab6cfad5eb20fc49485d45f913964b86dabb73a9a4113f",
+    "examples/support/drama3_gdn_scan.metal": "d02ac64f1690ab87f0a0634ceae09d24655830587ff95f5bbc3fda4e3d6702da",
+    "scripts/drama3/analyze_gdn_scan.py": "17f766f424b776736f30e921699db3ba5be7d05db4ba4845473e0ef4d2bb9d38",
+    "spec/drama3_gdn_scan_spec.cr": "20ad84a1ad3aef544fa5c1fedfa5d22087d33f1180e6b857623cb5b404754feb",
+    "spec/drama3_gdn_scan_report_spec.py": "0fee518249b63fd4b2900aae737c62887ac8b8fe4874e1e4b8e70703d61eb64e"
+  },
+  "compiled_selected_source_sha256": {
+    "examples/drama3_gdn_scan_probe.cr": "84c6d7784a236d7e39d873aeb14388f9d363604c3c037e01833a8ea69571859b",
+    "examples/support/drama3_gdn_scan.cr": "dd8b4579430f91de4cab6cfad5eb20fc49485d45f913964b86dabb73a9a4113f",
+    "examples/support/drama3_gdn_scan.metal": "d02ac64f1690ab87f0a0634ceae09d24655830587ff95f5bbc3fda4e3d6702da",
+    "examples/support/drama3_prefill_compare.metal": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+    "src/ml/audio/drama3/backbone_resident.cr": "f19e27277fc0b9f4b1c3c617b05a7df2bf97700cd681e756b7c58a1db53e3e53",
+    "src/ml/audio/drama3/backbone_prefill.cr": "0bcb2430f694f4ce2e39b47b469904ce0b9e1dde92807f7fbee31437a3a28ff3",
+    "src/ml/audio/drama3/resident.cr": "4c6fe1fd88fb734cd17a64e7baffa4f15b0ab2e370e61e3d77254ce734393c83",
+    "src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+    "src/ml/audio/drama3/generator_resident.cr": "19d1cc67c12fb8300f3e614361ec057e3ce2bf34fdfb652d67f6a984c487ea88",
+    "src/ml/audio/drama3/prompt.cr": "1a91b258b2343e8f5a44c520224bfe046aa1d08a01ca101e8f963c725c25c2a1",
+    "src/ml/audio/drama3/prompt_resident.cr": "b4b352408220ea67d3f09046cb023e18b2877f3dacc1ba6b2fb07b98e023a65e",
+    "src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+    "src/ml/audio/drama3/tower_resident.cr": "2af0dd77a55723ba1eb9de6bd1f4895160d1a484b59c978da43e77dc027d6184",
+    "src/ml/audio/drama3/native.cr": "5b70f4cf69f1c9f02d4e0f1abcb4064ba8c8fdc51f1a5f88e5f57329ec2afd5e",
+    "src/ml/audio/drama3/resident_batch.cr": "6c55edbb1a6eb1d288926b76a6e3fe815ec752593275f527dea60a2080d13c4a",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d",
+    "src/ml/audio/drama3/kernels/resident.metal": "ae7d503ea3b014fb0aaa9622dc18bab7cbd31bdbc7fd54b3b357f0aa04a13d62",
+    "src/ml/audio/drama3/kernels/resident_batch.metal": "4747afb25871af991aa8f5c4ec2f0796af0f1aa1b61ee636d2eb41c4a248869b",
+    "src/ml/audio/drama3/kernels/tower_resident.metal": "392089ec29e1883d7eac581367748eea78a7d20df217c3fe4b0f7de4ecafdc86"
+  },
+  "compiled_source_binding_scope": "Nineteen listed diagnostic, capture, input-preparation, comparison and kernel sources checked against compiled bytes before setup and report creation. Not every transitive dependency.",
+  "runtime": {
+    "device": "Apple M2 Max, 38 GPU cores, 64 GiB unified memory",
+    "macos": "26.6.2 (25G83)",
+    "xcode": "27.1 (27A9275)",
+    "crystal": "1.22.0, LLVM 23.1.3",
+    "bridge": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o",
+      "sha256": "16613762decfabc1d44d6615ef0af95986fdccafc07ad93d9f007c5440a055f3"
+    },
+    "checkpoint": "cguldogan/drama-3-mlx-q4@5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "model_root": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "model_file_sha256_from_probe": {
+      "config.json": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "model-00001-of-00005.safetensors": "bcb7e680d4f07ea21404070a407ab327572cb7d7b577d73e145871b2456b5012",
+      "model-00002-of-00005.safetensors": "67ca8709ee770c21fb09b68d08fc50faf3102451f150745dcb6971dbf8e5894a",
+      "model-00003-of-00005.safetensors": "0c0e1055b617bbf7e507ab9ac611d290124b985f63cbdb52cb5275d558202e76",
+      "model-00004-of-00005.safetensors": "116f376cf435fc7f2dfc09ffa985e5d1c908fd9580877b3fcb9df37e9be029f2",
+      "model-00005-of-00005.safetensors": "e20c3406557e2b1e44f446f2e1af8e7832ef545047f8c146c9e704a692a63b2d",
+      "model.safetensors.index.json": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer.json": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6"
+    },
+    "model_hash_scope": "Config/tokenizer/index and five backbone model shards hashed after each probe; DAC unused. Both receipts match; not independently rehashed at closure.",
+    "heavy_run_policy": "Root-only serial run_safe with external scratch, local weights and 15 percent free-memory floor. Uncontrolled shared-host load; unrelated processes and live Studio untouched."
+  },
+  "input": {
+    "text": "Hello, this is a voice test.",
+    "prompt_ids": [
+      248045,
+      8678,
+      198,
+      13761,
+      279,
+      3766,
+      1414,
+      310,
+      8540,
+      248046,
+      198,
+      248045,
+      846,
+      198,
+      248083,
+      21251,
+      11,
+      411,
+      369,
+      264,
+      7497,
+      1228,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248081
+    ],
+    "layers": [
+      0,
+      38
+    ],
+    "geometry_value_heads_value_dim_key_heads_key_dim": [
+      32,
+      128,
+      16,
+      128
+    ],
+    "ranges": [
+      {
+        "base": 0,
+        "rows": 29,
+        "initial": "actual zero state"
+      },
+      {
+        "base": 7,
+        "rows": 19,
+        "initial": "actual nonzero incoming state"
+      }
+    ],
+    "block_sizes": [
+      8,
+      16,
+      "whole range"
+    ],
+    "controls_by_depth": {
+      "0": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DELTA_TRANSPOSE": "1",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_EXPERT_THREADS": "64",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_GDN_POST_FUSION": "0"
+      },
+      "2": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DELTA_TRANSPOSE": "1",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_EXPERT_THREADS": "64",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_GDN_POST_FUSION": "0"
+      }
+    }
+  },
+  "correctness": {
+    "release_metal_examples": 6,
+    "offline_examples": 10,
+    "validation_groups_per_depth": 12,
+    "native_sequential_replay_vs_capture": "bit-exact output/final state in every group",
+    "serial_tile": {
+      "validation_groups_total": 24,
+      "timed_pairs_including_warmups_total": 80,
+      "all_outputs_and_final_states_bit_exact": true
+    },
+    "affine_scan": {
+      "native_gate_failures_per_depth": 6,
+      "groups_per_depth": 12,
+      "all_receipts_pass_unchanged_tolerance_metric": true,
+      "max_absolute_error_output_prefix_state": 3.8146973e-05,
+      "max_error_over_tolerance": 0.05352709,
+      "nonfinite": 0,
+      "first_output_drift": "Size 8: local row 16 from zero S0, row 8 from nonzero S0. Size-16 nonzero starts first differ at row 16. One-block and size-16 zero-state controls do not exercise composed-prefix replay."
+    },
+    "native_gate": "zero output/state/prefix finite bit differences; nonfinite rejects",
+    "tolerance_metric_only": "6e-5 + 3e-4 * abs(reference), unchanged; does not override native bit gate",
+    "cross_depth_validation_receipts_identical": true,
+    "fresh_mlx_comparison": false,
+    "fresh_wav_request": false,
+    "upstream_status": "The prior strict row-1/layer-39 mismatch remains open in the earlier GDN-post qualification; no new upstream run here.",
+    "audible_observation": "User reports no quality defect in examples they heard. This is separate listening evidence, not a strict numerical pass or proof that the mismatch never affects audio."
+  },
+  "gpu_residency_and_boundaries": {
+    "activation_readbacks": 0,
+    "capture_adds": "GPU copy dispatches and approximately 120 MiB of all-row state tables for two layers, outside timing arms.",
+    "encode_guard": "Runtime graph/readback ledgers must be identical around capture and each mode encoder. Comparison reads and timing completion occur outside those encoders.",
+    "terminal_graph_by_depth": {
+      "0": {
+        "depth": 0,
+        "submitted": 495,
+        "completed": 495,
+        "pending": 0,
+        "max_pending": 0,
+        "completion_waits": 495,
+        "retained_bytes": 0,
+        "max_retained_bytes": 0
+      },
+      "2": {
+        "depth": 2,
+        "submitted": 495,
+        "completed": 495,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 495,
+        "retained_bytes": 0,
+        "max_retained_bytes": 22490870308
+      }
+    },
+    "terminal_readback_bytes_by_depth": {
+      "0": {
+        "diagnostic": 19920,
+        "control": 688
+      },
+      "2": {
+        "diagnostic": 19920,
+        "control": 688
+      }
+    },
+    "scratch_bytes_scope": "Only two affine summary buffers and prefix states: 40/30 MiB at size 8 for 29/19 rows, 20 MiB at size 16, 10 MiB at one block. Excludes output/final states, captures, model resources and validation.",
+    "retained_byte_scope": "Conservative CogniGraph backing-resource accounting; not physical unified-memory allocation. Terminal retained bytes are zero.",
+    "existing_production_control_reads": "Unchanged per-frame EOS and finite-control boundaries; diagnostic does not claim their removal."
+  },
+  "timing": {
+    "source": "Join JSON arm indices to unique positive GPU-command durations in the matching preserved stderr log.",
+    "cohorts_per_depth": 16,
+    "warmup_pairs_per_cohort": 2,
+    "measured_pairs_per_cohort": 8,
+    "measured_pairs_total_both_depths": 256,
+    "arm_order": "ABBA: reference-first for pair index modulo four 0 or 3, candidate-first otherwise.",
+    "serial_tile_pooled_descriptive_median_ratio_by_depth": {
+      "0": 1.0581027226266078,
+      "2": 1.054786149859668
+    },
+    "useful_size8_affine_slowdown_range": [
+      1.66,
+      2.7
+    ],
+    "caveat": "Descriptive warm resident recurrence-corridor timings, shared-host load uncontrolled. Depth-2 intervals may overlap and are not additive. No confidence interval, causal request speedup or decode gain claim.",
+    "cohort_statistics": "Full per-cohort gate/ratio/time statistics are in the hashed depth0-analysis.json and depth2-analysis.json; the qualification document contains the comparison table."
+  },
+  "verification": {
+    "commands": "Exact build/run/analysis commands and expected scope are in docs/drama3-gdn-scan.md; raw build/test/run logs are hashed below.",
+    "metal_dod": "Release specs for drama3_gdn_scan_spec.cr and existing drama3_prefill_spec.cr; 6 examples, 0 failures. Real model probes complete at depths 0 and 2.",
+    "offline_dod": "Ten analyzer tests plus both actual report/log analyses pass; candidate failures remain visible in output gates.",
+    "root_adversary": {
+      "total_checks": 21,
+      "damaged_receipts_rejected": 16,
+      "other_checks": "Two live selected-source/executable bindings, two warmup-drift gate checks, one cross-depth source/model/numerical receipt check."
+    },
+    "review": "Correlated mini-Quadrum source/math/evidence challenges and root command execution; final scoped review returned ROBUST. Arbitrary fabricated receipts are not authenticated by structural validation.",
+    "artifact_validation": "JSON parsing plus dereferenced file/source digest checks. No repository landmark graph validator exists; packet is a curated evidence index, not a proof."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/probe",
+      "sha256": "e3557b0821b62a344e7ad47a1cf3fc6971f349e16db45ff807e61729ebfc9a51"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/build-bound.log",
+      "sha256": "38f9a5965567d6642ad7d4f28ff702c534e3f6112c83bbcf137bf0ecacde5235"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/spec-combined.log",
+      "sha256": "973aca779f22c7066e0e4ba5d9194fb450148896d2af6638f2be2536127461a2"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/offline-final.log",
+      "sha256": "4158b6c52daa1856a151d5cdc8593280e647b59541d108837feb416cf4917425"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth0.json",
+      "sha256": "c44520420d7b1d37aac12e5ada635cf76f0ff21e0f5112019b69ccdc16626d18"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth0.log",
+      "sha256": "176ce85296b988fd7500422b59b0b8bb040aad5751b832f9c818fcf5a680ede2"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth0-analysis.json",
+      "sha256": "84eef167400f32e5fe1d37c7f8a7a6bfc58397eedef235096cc8604025552e27"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth2.json",
+      "sha256": "85c0cd3b13cedf70579ae272d04cd941ba5724784dafdd805e31a27c7097126d"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth2.log",
+      "sha256": "ee244567225c0a898b2935de311bb71cb3cbac3f215e845d8af780eda035579d"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/depth2-analysis.json",
+      "sha256": "bebd75bf104af2fd5a6cdab3361e0a4921593317a1745155f0633693f1124fb7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/adversary.py",
+      "sha256": "c3a738f890b98a862ce76c26ede2381aa4c52d40d7fba4b08262033c62566bed"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/adversary.json",
+      "sha256": "9ccb60d208ec6b7e84f773790402424fa3c0cede22105f3698f06b08d66925ab"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/adversary.log",
+      "sha256": "5abcd1b1c342a8e57cb0dcd8b7102abd2ec3ae4526fa97e050cb0bea5e025408"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-gdn-scan-20261018/make_packet.py",
+      "sha256": "ce533ec6f2a7616209995d0bb588be6de5cebfab14eda99607da4b831c3bd420"
+    }
+  ],
+  "refresh": {
+    "triggers": [
+      "source or selected-dependency drift",
+      "compiler/driver/device/checkpoint change",
+      "prompt/state-range/block-size/graph-depth/control change",
+      "missing or mismatched report/log/artifact"
+    ],
+    "operation": "Repeat scoped release GPU checks and actual-input depth-0/2 probes with fresh output names, then join each report to its matching timeline log. Production integration additionally needs upstream and complete-request checks.",
+    "failure_policy": "Keep diagnostic-only, reopen affected claims, preserve the current tolerances."
+  },
+  "continuation": {
+    "return_pointer": "docs/drama3-native-frontier.md",
+    "roadmap": "docs/drama3-optimization-roadmap.md",
+    "qualification": "docs/drama3-gdn-scan.md",
+    "unimplemented": [
+      "production serial-tile prefill integration",
+      "compact/WY temporal scan",
+      "surrogate stochastic verification",
+      "q1 overlap",
+      "GPU EOS blocks",
+      "streaming"
+    ]
+  }
+}

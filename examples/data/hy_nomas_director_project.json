@@ -1,0 +1,18 @@
+{
+  "schema": "hy_nomas_director_project_v1",
+  "project_id": "kite-to-sea",
+  "fps": 24,
+  "width": 1280,
+  "height": 720,
+  "duration_seconds": 3.0,
+  "prompt_changes": [
+    {
+      "at_seconds": 0.0,
+      "prompt": "A red kite lifts into a clear sky above a wide green field; steady distant camera."
+    },
+    {
+      "at_seconds": 1.4,
+      "prompt": "The red kite banks toward a blue coastline; preserve the same kite and gentle camera motion."
+    }
+  ]
+}

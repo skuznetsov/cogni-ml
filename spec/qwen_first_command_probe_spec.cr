@@ -3,7 +3,7 @@ require "../src/ml/gguf/qwen_first_command_probe"
 
 describe ML::GGUF::QwenFirstCommandProbe do
   it "keeps the unwind after successful wait, publication and cleanup, behind a build flag" do
-    source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
+    source = File.read(File.join(__DIR__, "../src/ml/models/qwen35/cpu/engine.cr"))
     wait = source.index("gpu_elapsed_ms = trace.observe(").not_nil!
     publish = source.index("QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)", wait).not_nil!
     rethrow = source.index("raise ex", publish).not_nil!

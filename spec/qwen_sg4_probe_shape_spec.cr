@@ -25,7 +25,7 @@ describe QwenSG4ProbeShape do
   end
 
   it "keeps full-shape dispatch distinct from the legacy 64-row slice" do
-    source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
+    source = File.read(Path[__DIR__] / "../experiments/qwen35/qwen35_sg4_tail_probe.cr")
     start = source.index("  if shape = direct_shape").not_nil!
     finish = source.index("\n  if ARGV == [\"--pipeline-info\"]", start).not_nil!
     branch = source[start...finish]

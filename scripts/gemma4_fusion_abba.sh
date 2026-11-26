@@ -66,7 +66,7 @@ if [[ ! -x "$PROFILE_BIN" ]]; then
     COGNI_RUN_SAFE_WAIT_QUIET_SEC="$QUIET_WAIT_SEC" \
     COGNI_RUN_SAFE_REQUIRE_QUIET="$QUIET_REQUIRE" \
       "$RUN_SAFE" "$CRYSTAL_BIN" "$TIMEOUT_SEC" "$MAX_MEM_MB" \
-      build bin/gemma4_metal_decode_profile.cr \
+      build experiments/gemma4/gemma4_metal_decode_profile.cr \
       -o "$PROFILE_BIN" \
       --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
   )

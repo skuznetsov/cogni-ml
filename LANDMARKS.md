@@ -6,6 +6,3337 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QUERY-FIXED-PHASE-2026-11-06] Frozen affinity heads fail phase-invariant content retrieval
+
+- The fixed-phase null freezes heads 12/15, frames 1/14/29 and K roll +17.
+  Native GPU gathers change K content before destination RoPE; the moving
+  control rolls K after RoPE. All nine native/source pairs pass unchanged
+  `atol=rtol=2e-5`, with byte-identical Q/K/scores and exact discrete metrics.
+  Largest metric difference is 2.69e-7; post-drain audits stay below 4.77e-7.
+  Identity Q/K exactly reproduce the saved post-RoPE capture. Moving-arm
+  score rolls, stable argmax and unchanged Q checks pass.
+- Strict relocated-content counts out of 144 fall from 109/118/121 to
+  14/12/14 for head 12 and from 138/139/136 to 2/2/2 for head 15 when phases
+  stay at the destination. Fixed-phase same-position counts remain
+  69/76/70 and 101/106/104. This refutes phase-invariant index retrieval for
+  these slices, not semantic information in general or visible acting.
+  One saved noisy T0 state, restricted same-frame F32 QK after BF16 RoPE;
+  no full attention/PV, independent-state tracking or transport is tested.
+- The opt-in native probe uses production uncontracted RoPE/BF16 helpers,
+  ten buffers (8,607,744 named bytes), eight dispatches, zero named encode
+  allocations/readbacks/waits, one terminal wait and four post-wait exports.
+  Twenty-eight CPU tests, five native format negatives and three valid-format
+  ancestry substitutions meet their expected signals. The reader checks
+  submitted integrity; the qualifier authenticates source/phase ancestry.
+- Twenty-three positive guarded stages preserve the cache-aware 10% floor,
+  2 GiB cap and 64 MiB swap stop, with no observed swap growth/final children.
+  Minimum sampled headroom 23,540,858,880 bytes; sampled group peak 481,494,048
+  bytes is not a native peak. No full generation or production change.
+  Same-lineage adversary is ROBUST within scope, correlated rather than
+  independent replication. Evidence:
+  `.landmark/evidence/2026-11-06-hy-nomas-query-fixed-phase.json`.
+- Return: `docs/hy-nomas-object-control-frontier.md`, fixed-phase diagnostic.
+  Do not promote raw post-RoPE affinity into actor transport. Next falsifier:
+  independent-state labeled nonzero-displacement matches, comparing pre-RoPE
+  or position-controlled features against same-location/equal-area shams.
+  Other saved states lack authenticated Q/K. Rollback: omit the opt-in probe;
+  keep the accepted visual take and original generation path. Refresh on
+  source/runtime, binary/objects, weights, input/phase bytes, geometry,
+  precision, selection policy or missing/mutated evidence. Linked-object
+  compilation and complete runtime bytes remain outside the certificate.
+
+### [LM-HY-NOMAS-QUERY-HEAD-ROBUSTNESS-2026-11-06] Frozen heads retain RoPE-associated affinity; transport remains unqualified
+
+- Freeze heads 12/15 and frames 1/14/29 before scores. All nine native/MPS
+  array cases pass at unchanged `atol=rtol=2e-5`; all scores are byte-identical,
+  largest metric difference 2.69e-7, post-drain audit error 4.77e-7. Exact
+  discrete metrics, per-head screen outcomes and four roll checks pass.
+  Twenty-three CPU tests and four forged real-fixture admissions pass.
+- Strict diagonal counts after RoPE are 109/118/121 and 138/139/136 of 144;
+  before RoPE they are 8/9/10 and 13/12/15. Both retain the frozen 108/144
+  screen; head 12 frame 1 has one-position headroom. These are distinct frame
+  ranges in one noisy T0 pass at sigma .206897, not independent states/scenes,
+  cross-frame labels or semantic tracking. The key roll moves phases with
+  content and proves equivariance only. Small floating summary differences
+  refute whole-dictionary exactness; numeric gates were not relaxed.
+- Twenty-one guarded stages retain the cache-aware 10% floor, 2 GiB cap and
+  64 MiB swap stop, with zero observed swap growth/final children. Minimum
+  headroom is 25,206,915,072 bytes; sampled group peak 191,186,288 bytes is
+  not a measured native peak. The frozen binary's buffers/drain are reused;
+  no production changes or full generation. Same-lineage review is ROBUST
+  within measurement scope and correlated, not independent replication.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-query-head-robustness.json`;
+  external `query-heads-ht33zt1c/qualified-artifacts-v1.json` SHA
+  `0efd537bed89d16c96932a63156583483f44f9d6621aa434c7d9cda2fab06fda`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, frozen-head diagnostic.
+  Next: K-content derangement with destination RoPE positions fixed on GPU;
+  then independent labeled nonzero-displacement matches beating same-location
+  and equal-area shams before any transport/acting claim. Other saved runs
+  lack authenticated Q/K. Rollback: omit the opt-in evaluation CLI.
+  Refresh on changed source/runtime, binary/objects, weights, bound inputs,
+  geometry/precision/selection policy or missing/mutated evidence. Inherited
+  object compilation/full runtime bytes remain outside the certificate.
+
+### [LM-HY-NOMAS-QUERY-AFFINITY-2026-11-06] Native first-frame affinity qualifies; actor transport remains untested
+
+- The opt-in GPU diagnostic computes F32 QK scores and six row metrics on
+  losslessly BF16-expanded [144,16,128] Q/K. Three synthetic controls and one
+  authenticated T0 block-0 capture have byte-identical native/source scores;
+  maximum metric difference is 1.20e-6 across controls and 1.79e-7 on T0.
+  Discrete columns and independent post-drain audits pass at unchanged
+  `atol=rtol=2e-5`. Fifteen CPU tests and seven native admission cases pass.
+- Source block pin is `a31c0fe0bcc493be188fd37ddba4ce2f674becb4`; timeline
+  preprocessing has a separate pin. Recorded T0 sigma is .206897. The
+  one-block source consumes saved native preblock inputs, not latent/noise
+  preparation. Rewrapping embedded latent bytes recovers the original
+  safetensors SHA `9e21e8b9...` exactly. Input publication binds source
+  tensors, weights, scripts and exact selected rows before qualification.
+- Strict self preference is 572/2304 head-position pairs (24.83%); heads
+  12/15 reach 120/144 and 136/144. These are exploratory results from one
+  state over 144 first-frame keys, not cross-frame tracking, validated
+  actor segmentation, full-attention mass or evidence of acting.
+- Native reuses four buffers (3,741,696 named bytes), two dispatches and
+  one terminal wait; zero named encode allocations/readbacks/waits. Ten
+  guarded stages preserve the cache-aware 10% floor with no observed swap
+  growth or final children. Source capture sampled peak is 1,732,561,032
+  bytes; short native runs do not establish peak memory or speedup.
+  Same-lineage review is ROBUST within this diagnostic scope, correlated
+  rather than independent. Inherited object compilation/full runtime
+  provenance and between-poll memory spikes remain outside the claim.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-query-affinity.json`;
+  external `query-correspondence-26ede1fe/qualified-artifacts-v1.json`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, query screening.
+  Next: test selected heads/layers on held-out states before any transport;
+  later require neutral/spatial-sham and protected-actor causal controls.
+  Rollback: omit the diagnostic CLIs; production unchanged. Refresh on
+  source/runtime, weights, scripts/binary/objects, inputs, geometry/precision
+  or missing/mutated bound evidence.
+
+### [LM-HY-NOMAS-SOFT-ROUTE-RENDER-2026-11-06] Four-step replay is exact; attention bias does not establish requested acting
+
+- Three separate zero/Alex/Resume arms complete four Euler steps through
+  all 54 BF16 blocks with fixed reference, conditioning, initial noise and
+  schedule. Eighteen source/native tensor pairs are byte-identical; all
+  twenty-two frozen replay gates pass at unchanged `atol=rtol=2e-5`.
+  Qualification SHA `2bf0aea53b2f4f3aa324dac1c9145e42f174d4b0df8c78e41d5e477fbb0ad792`;
+  both payloads SHA `7a6aaee1339832106c52578fa6b2aff2c6f925bb50346153c4ce6bffc8d26d09`.
+  Oracle is the pinned Tencent PyTorch 2.8 MPS BF16 adaptation, not stock CUDA.
+- Native reuses GPU states/scratch and has one chain, one terminal wait,
+  zero named encode allocations/readbacks and eighteen post-drain captures.
+  Four ordered stage passes are admitted; a fifth is rejected. Admission
+  budgets resident BF16 weights rather than Q4 storage. Named peak
+  20,279,905,400 bytes; sampled group peak 20,588,213,328 bytes. Source/native
+  and all three decoders preserve the cache-aware 10% floor, zero observed
+  swap growth and no final children. Opaque MPS resources and sampling gaps
+  remain outside these accounting guarantees; timings are not speed benchmarks.
+- Matched recovered-BF16 PixelUMM/noise produces three five-second takes.
+  Selected-frame review shows Alex gaze/expression differences without a
+  substantial head turn; Resume retains essentially the same small late
+  glove-to-chest gesture in all three. Whole-clip pooled RGB differences
+  locate image change, not acting. No full-playback, pose/contact, combined
+  bias, production controller or quality-improvement qualification.
+- Build, admission, 37 Python tests and one cursor example pass, with seeded
+  wrong-trajectory and resource/lineage negatives. All 106 source and 102
+  native records matched live bytes and saved copies before final formatter
+  alignment. A separate parsed-AST/per-line non-whitespace check binds the
+  archived originals to the formatted CLI/support; CPU tests and format pass
+  afterward. One Python trailing blank line is separately removed with an
+  identical positioned AST and passing tests/whitespace check. GPU results
+  remain scoped to the frozen v5 binary/snapshots.
+  Inherited compile commands and full runtime bytes are not reconstructed.
+  Same-lineage review is ROBUST within scope and correlated.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-soft-route-render.json`;
+  external `hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/qualified-artifacts.json`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, four-step replay result.
+  The root eight-arm report is historical, not the current render gate.
+- Next: stop dose escalation and investigate a real pose/part-trajectory
+  conditioner. Pinned upstream has camera trajectories; `joint_control_spec`
+  is sidecar-only benchmark metadata, not an actor actuator. Do not infer
+  full DiT retraining is necessary. First pose test needs one head-yaw track,
+  neutral/spatial-sham controls and protected Resume/background measurements.
+  Rollback: omit the diagnostic CLIs. Refresh on bound source/runtime,
+  weights, binary/objects, input/noise, bias, geometry/precision/schedule or
+  decoder changes; missing/mutated evidence reopens dependent claims.
+
+### [LM-PIXELUMM-RECOVERED-CACHE-2026-11-05] Persistent recovered BF16 cache passes explicit decoder admission
+
+- Deleted PixelUMM source, stem/head subsets and the 36-block BF16 payload
+  are restored under `/opt/mldata_ssd/models/hy-nomas/pixelumm-ft-bac719a8/`.
+  Full payload SHA `152ba021b52d9546e4c8821b17ab11f67f46486d521b500de3766f14dd2217ca`
+  equals the archived commitment. The replacement manifest SHA
+  `7cbf6d8a3587f0cd23e07120a9ad1a222b4ffadfa4c1c840609c425d16e3476d`
+  records CPU RNE provenance; the historical MPS manifest was not recreated.
+- The decoder's paired explicit path/SHA override preserves the default pin,
+  authenticates full payload and 468 weight records before Metal ownership,
+  and emits the actual cache identity. Release build, 26 Crystal examples,
+  nine compiled rejection cases, canonical name/shape/offset audit and a
+  positive CPU plan pass. Same-lineage adversary verdict is ROBUST for
+  admission only. No decoder run or video-quality claim.
+- Evidence `.landmark/evidence/2026-11-05-pixelumm-recovered-cache.json`;
+  external `decoder-cache-qualified-artifacts.json` binds commands, guards,
+  binary and recovery receipts. Four admission/build stages retain the
+  cache-aware 10% floor with zero sampled swap growth; polling cannot exclude
+  between-sample spikes. Rollback: omit the paired override. Refresh on
+  cache/source/runtime/validation/binary mutation or missing bound evidence.
+
+### [LM-HY-NOMAS-SOFT-ROUTES-2026-11-05] Bounded spatial action priors pass frozen numerical parity and locality
+
+- The opt-in BF16 action-logit prior adds a fixed per-query value only to
+  matching positive action-text keys inside the accepted M11 hard support.
+  Nil preserves the original Boolean path. Authored head/glove tents, doses
+  `ln(1.5)` / `ln(2)`, histogram-matched spatial shams and the resolved-effect
+  floor were frozen before observing effects; these are not pose tracks.
+- Eight arms through all 54 BF16 blocks yield 40 bit-identical source/native
+  tensors at unchanged `atol=rtol=2e-5`. Zero, repeated zero and the accepted
+  parent are exact in both implementations. First-block text and zero-prior
+  image rows stay exact. Later propagation is allowed and measured.
+- Alex-head low/high/sham velocity-change RMS: .158176 / .204026 / .064890;
+  high target/complement ratio 5.815283 versus sham 2.664713. Resume glove/
+  chest: .158965 / .257119 / .201574; ratios 3.899654 versus 2.397252.
+  Both source and native independently pass the frozen checks, including
+  high-target RMS above fixed parity-allowance RMS floors 5.927495e-5 and
+  5.845713e-5. This is finite numerical selectivity, not acting or improved
+  visible quality. Simultaneous nonzero priors are not qualified.
+- Native encoding retains one chain, one terminal wait and zero named
+  allocations or activation readbacks before the drain, followed by forty
+  captures. Named peak 20,208,934,020 bytes; sampled process-group peak
+  21,121,988,648 bytes, minimum cache-aware headroom 21,506,048,000 bytes.
+  Source sampled peak 4,435,905,200 bytes. Both stages retain the 10% floor,
+  64 MiB swap-growth stop, zero observed swap growth and no final children.
+  Counters omit opaque MPS resources and between-sample spikes; these
+  qualification timings are not a speed benchmark.
+- 87 focused Python tests, eight Crystal examples, release build, admission,
+  seven malformed-manifest rejections and the independent checker pass.
+  Fresh bridge object rebuild is byte-exact; executable rebuild sections
+  match while UUID/signature and whole-file hashes differ. One fresh bridge
+  and fourteen inherited parent objects form the recorded native build.
+  Same-lineage mini-Quad is ROBUST only for this frozen numerical scope.
+- Canonical evidence:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/`.
+  `qualified-artifacts.json` binds source/runtime, exact command/guard
+  receipts, inputs, build sections and rejected stages. Qualification SHA
+  `a5763db3a63ac91ed02069f0a72b890b226735296bd59a7c52c345c4da03c96e`;
+  common source/native payload SHA
+  `3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2`.
+  Curated index `.landmark/evidence/2026-11-05-hy-nomas-soft-routes.json`;
+  return [object-control frontier](docs/hy-nomas-object-control-frontier.md).
+- The separate four-step render now passes exact numerical replay; see
+  LM-HY-NOMAS-SOFT-ROUTE-RENDER-2026-11-06. Requested acting remains open;
+  pivot to explicit pose/trajectory support without escalating the dose.
+  Rollback: omit the diagnostic and optional bias. Refresh on input/parent,
+  priors, source/runtime, weights, precision, geometry, binary/objects or
+  evidence changes. Missing or mutated bound artifacts revoke the claim.
+
+### [LM-HY-NOMAS-DIRECT-ROUTES-2026-11-05] Saved-state DiT routes are source/native exact and show conditional actor-local sensitivity
+
+- Qualified scope: M11/M00/M10/M01/M11_repeat on the accepted sequential
+  Alex/Resume ROI take, with saved refined states, T0, timestep and noise
+  fixed. Only selected video-query to matching action-text-key edges toggle.
+  The run retains all 54 BF16 blocks, unchanged `atol=rtol=2e-5`, cache-aware
+  10% reserve and 64 MiB swap-growth stop. No scheduler, decoder or full render.
+- Pinned Tencent equations through the BF16 MPS adapter pass all five exact
+  accepted-parent replay checkpoints and all five exact A/A checkpoints.
+  Block-0 text and video rows outside disabled routes remain exact;
+  elementwise block-0 image interaction is zero. Independent Float64
+  recomputation and a seeded numerical negative pass. This is not stock
+  CUDA reproduction, acting success or evidence of better visual quality.
+- Conditional relative RMS velocity effects in the Alex/Action1 window:
+  Action1 18.19582%, Action2 1.02300%, interaction 9.54723%. In the
+  Resume/Action2 window: 1.06056%, 9.28511%, 2.06126%. Outside both actor
+  regions: 1.42065%, 1.18584%, 1.38269%. M00 still retains fixed refined
+  text and shared/global/history conditioning. Nonzero later interaction
+  and outside effects reject hard isolation or additive route shares.
+- Native/source comparison is bit-exact at all 25 captures from the 54-block
+  run: five per arm, covering velocity and image/text outputs of blocks 0
+  and 53. All five accepted-parent and native A/A checkpoints, block-0
+  text/protected-image invariants and zero block-0 interaction pass a
+  separate byte-authenticated Float64 checker. Release build, CPU self-test,
+  actual-fixture admission, three malformed-manifest rejections and 54
+  focused CPU tests pass. A numerical perturbation and metadata-only parent
+  substitution are rejected. Same-lineage final review is ROBUST within
+  this frozen numerical scope, not an independent reproduction.
+- First native failure was a diagnostic label-boundary collision: source
+  `-1` denotes 720 active global video queries, while the native bridge uses
+  negative labels for padding and zero-scatters context. Differences began
+  only in frames 0/10/11/28/29. Translating those active query labels to `0`
+  before binding preserves every Boolean mask edge and restores parity.
+  Production padding semantics and generation kernels are unchanged.
+- One native command chain, one terminal drain, zero named allocations or
+  activation readbacks during encoding, then 25 checkpoint reads. Named
+  peak is 19,625,061,552 bytes, excluding opaque MPS resources. Sampled
+  process peak is 20,325,119,608 bytes; swap growth is zero. The unchanged
+  cache-aware 10% floor, 22 GiB process cap and 64 MiB swap-growth stop pass.
+  These counters and one qualification timing are not a speed benchmark or
+  an instantaneous total-GPU-peak certificate.
+- Evidence and restart pointer:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/`.
+  `source-qualified.json` SHA-256 is
+  `efcf746fd334218d25b0a922647f10962c6d5102144f7d80cff67bb327a40c89`;
+  `qualification.json` binds the final code/binary/actual linked objects,
+  frozen inputs, commands, guards and independent math. Preserve the older
+  `qualification-source.json` and failed `native.json` as historical
+  evidence. Qualified `native-fixed.json` SHA-256 is
+  `b879232edbeb83d78ef108e80d8c5396628b94d8826e2171ab6b672b6377de87`.
+  The small curated index is
+  `.landmark/evidence/2026-11-05-hy-nomas-direct-routes.json`.
+- Deleted DiT assets were restored into the separate persistent directory
+  `/opt/mldata_ssd/models/hy-nomas/`, outside disposable `cogni-ml/`
+  experiments. The original pinned checkpoint SHA and all 55 BF16 cache
+  files match the frozen fixture; `recovery-verified.json` records the
+  checks. Legacy paths are compatibility aliases. This is not an inventory
+  or recovery claim for every other model in the video pipeline.
+- Next controller candidate after parity: a bounded soft spatial routing
+  dose response, followed by a short visible pose/glove test. Numerical
+  selectivity does not establish articulation; pivot to explicit pose or
+  trajectory support if that remains weak. Rollback: omit the diagnostic
+  probes; production generation and the accepted take remain unchanged.
+  Refresh on source/runtime, weights, inputs/layout, precision, binary,
+  linked objects or evidence changes. See
+  [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+
+### [LM-HY-NOMAS-REFINER-C-FACTORIAL-2026-11-05] Fixed shared conditioning preserves Action2 transfer into Action1
+
+- The authenticated V224 Action2-only pair now has five cases: natural A0,
+  exact no-op A1, natural B, B text with frozen A `c` (X10), and A text with
+  frozen B `c` (X01). The override is at the source individual-token-refiner
+  `c` input and the matching native post-conditioning-add boundary. All
+  25 source/native checkpoints are bit-identical; all 14 native factor
+  invariants and the source parent replay/no-op are exact at unchanged
+  `atol=rtol=2e-5`.
+- At block 1, Action1 relative RMS effects are 0.378594% for text at fixed
+  `cA`, 0.028422% for `c` at fixed A text, 0.378625% combined and 0.037549%
+  interaction. Global effects are 0.382001%, 0.030372%, 0.382068% and
+  0.036175%. With `c` fixed, only text self-attention can transfer information
+  across rows. Freezing `c` alone leaves the measured prefix effect nearly
+  intact for this pair; these are conditional effects, not additive channel
+  percentages or a cause of weak visible acting.
+- One weights encode/command chain, zero named GPU allocations, activation
+  readbacks or waits during encode; one terminal drain then 25 reads. The
+  named plan is 1,472,201,732 bytes, excluding opaque MPS resources. The
+  cache-aware 10% floor, 6 GiB process cap and 64 MiB swap-growth stop remain;
+  observed swap growth is zero. No DiT, decoder or full render was run.
+- Release build, actual-fixture CPU admission, 46 focused CPU tests and
+  independent Float64 source-payload recomputation pass. The 24 block/span
+  effect summaries agree with native within 3.56e-15. Final same-lineage
+  adversary review is ROBUST within this numerical scope, not independent
+  reproduction, timing or semantic-object-control evidence.
+- Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/`.
+  `qualification.json` binds source/binary/object pins, commands and limits;
+  `native.json` SHA-256 is
+  `c5b5676b8b1ab962256675bd78c889903b8a9ef0c63737192e612759d7c95d09`.
+  See [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+  Next: same-latent direct DiT M00/M10/M01/M11 route ablation with fixed T0,
+  refined text and noise, before rendering. Rollback: omit the probes;
+  production control is unchanged. Refresh on source/runtime, weights,
+  input/layout, precision, binary or evidence changes.
+
+### [LM-HY-NOMAS-REFINER-TRANSFER-2026-11-05] An Action2-only instruction changes unchanged Action1 representations
+
+- The equal-geometry V224 semantic pair changes only Resume's chest-tap
+  instruction to keeping its gloves at its sides. Raw global/Action1 Qwen
+  rows `[0,132)` match bit-for-bit before padding normalization; actual
+  positions, masks and prefix token IDs also match. Source B is freshly
+  captured; whole sidecars, selected crops and accepted A generation input
+  are authenticated. Padding is explicitly normalized in both inputs.
+- Native and pinned Tencent `911cea64` MPS-adapted source match exactly in
+  all 15 A0/A1/B checkpoints. A/A is exact in both. At the second refiner
+  output, relative RMS change is 0.3786% for Action1 and 0.3821% for global
+  rows; shared `c` changes 3.9341%, while timestep-only `vec` is unchanged.
+  This establishes representational transfer for this pair, not the cause
+  of weak visible acting or the value of isolating actors.
+- The native probe reuses buffers in one chain with one terminal drain;
+  measured encode allocations of named GPU buffers, readbacks and waits are
+  zero. Opaque MPS allocations are outside that counter. The 1,464,800,260
+  byte named plan is not total GPU peak. Guards retain the cache-aware 10%
+  floor and 64 MiB swap-growth stop; observed swap growth is zero. No full
+  DiT, decoder or new render was run.
+- The release build, 39 focused CPU tests, real-fixture CPU admission,
+  geometry/A/A-floor rejection and comparator falsifiers pass. Source mean
+  input dtype is explicitly checked. Qwen capture is Transformers 4.57.3;
+  this is not a runtime receipt for the project's 4.57.1 pin or stock CUDA.
+  Final same-lineage adversary verdict is ROBUST for the frozen pair's
+  transfer/parity claim; it is not an independent reproduction.
+- Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-transfer-20261105/`.
+  `qualification.json` indexes bound artifacts, commands and limits.
+  `native.json` SHA-256 is
+  `9ef4a28d6aa1595b452907cf99421670d938c7341237f7ff254313ed159d1d12`.
+  See [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+  The shared-`c` factorial result is recorded above; direct DiT route
+  ablation remains next. Rollback: omit the probe; production control is
+  unchanged.
+  Refresh on source/runtime, weights, input/layout, precision or binary
+  change. A visual-control conclusion remains open.
+
+### [LM-HY-NOMAS-OBJECT-CONTROL-2026-11-05] Temporal/query masks do not establish independent actors
+
+- Source audit: SubjectN is textual identity; the published mask path selects
+  action text by time across the scene. Current stock PE controls one Subject1.
+  Native shared refiner conditioning and unmasked text attention precede DiT
+  masks; globally visible video keys permit later relay. The exported vec is
+  time-only. These are reachable paths, not a measured cause of weak acting.
+- Keep the accepted Alex/Resume ROI take. Controller changes remain proposed.
+  The first Action2-only refiner counterfactual is now qualified above;
+  causal attribution to visible acting still requires a matched experiment.
+  Existing BF16 receipts do not admit short separate-conditioning branches.
+- See [the object control frontier](docs/hy-nomas-object-control-frontier.md)
+  for sources, competing hypotheses, ranked controllers and per-step mini-Quad.
+  The original audit passed 29 focused CPU tests without a new GPU run. Runtime
+  constraints remain unchanged. Refresh on source, layout or precision changes.
+
+### [LM-HY-NOMAS-SEQUENTIAL-ACTORS-2026-11-05] Temporal masks match upstream; explicit actor anchors move Resume
+
+- The opt-in `hy_nomas_action_conditioning/v2` profile admits exactly two
+  sequential final-T1 actions, bound to the authenticated ordered T0 roster
+  Subject1 Alex / Subject2 Resume. It validates nonempty action bodies,
+  wrappers, timestamps, offsets, windows and conditioning hashes. V1 stays
+  the default and retains its parser, identity and labels. An actual saved
+  v1 Python re-export is byte-identical to its previous profile.
+- Native query/key labels match every visible pair in the pinned source
+  range matrix (4,544 queries by 9,127 keys). All video/history keys and the
+  current global head remain visible; the masks separate time windows,
+  not spatial actors. Interactive upstream prompts control Subject1 only;
+  separate captioning/SFT examples contain multiple subject IDs. Neither
+  fact establishes general multi-character control.
+- Two frozen V224 probes, with identical T0, noise and action timestamps,
+  each match the pinned `911cea64` full-BF16-autocast MPS adapter bit-for-bit
+  in 24 comparisons: 17 sampled boundaries, four Euler updates and three
+  timeline checks. Each A/A passes and one altered value is rejected at
+  unchanged `atol=rtol=2e-5`. The instrumented native core records zero
+  encode allocations, readbacks and preterminal waits, with one drain.
+  This reuses the previously qualified frozen DCAE bank; it does not
+  requalify the image encoder, arbitrary prompts or stock CUDA/Magi.
+- The compact prompt misassigns Resume's glove/chest action to Alex.
+  Explicit appearance and position inside each action body make Resume
+  raise its own glove to its printed chest. Alex's human hand still smears.
+  Numerical parity is ROBUST for these fixtures; the intended complete
+  acting and hand-quality result remains open. Reviews are same-lineage.
+- Requested source-BF16 prefixes outside V263/V150/experimental V224 now
+  fail before model preparation instead of silently disabling source
+  rounding. This is a token-count guard, not general V224 qualification.
+  Guarded final checks pass: 37 Crystal examples, 13 Python tests, release
+  CLI build and v2 plan. The cache-aware 10% floor and 64 MiB swap-growth
+  stop remain; observed swap growth is zero in both numeric probes.
+- Evidence: `/opt/mldata_ssd/cogni-ml/rolewright-sequential-actions-20261105.w7m2k9qa`.
+  Replay `compare-v2.argv.json` and `anchor/compare-anchor.argv.json` with
+  their bound artifacts. Report SHA-256 values are
+  `f3b6608d29ced3e0e859f3db9e8ccfc4668131f1b4b4167dfe7bbc3454b572e0`
+  and `4ab2d2d6a81f44212730afcf19b83676c090a32e20a30831073ced96cf2b9f1e`.
+  `anchor/contact.png` and `anchor/rolewright-alex-and-resume-5s.mp4` retain
+  the partial visual improvement. Roll back by selecting v1. Refresh on
+  prompt, conditioning, weights, source, runtime, precision or binary
+  changes.
+- The same-latent PixelUMM control authenticates the full 180-frame NCTHW
+  bank and gathers its first 60 latent frames on MPS. The pinned Torch
+  2.6 source adapter, all 36 blocks, 11 overlapping windows and decoder
+  head match all 106,168,320 native display values exactly (maximum and
+  mean error zero); all 468 source/cache weight-word checks pass. Source
+  raw BF16 pixels are converted through the pinned multiply/add/clamp
+  before comparison with native display pixels. The 23 CPU admission
+  tests pass, including missing/false/string gather metrics and incorrect
+  bank extents. No in-chain host synchronization was added. The guarded
+  source replay stayed above the 10% cache-aware floor with zero swap
+  growth. Its report SHA-256 is
+  `415a6b81392435b37d1f072867232620fadf4b477274274b840c58137cbecf44`;
+  replay `anchor/decoded/source-prefix-torch26.argv.json`. The preceding
+  Torch 2.8 attempt was rejected before loading the model by the runtime
+  pin and is not comparison evidence. The paired media is
+  `anchor/native-left-upstream-right-5s.mp4`. On these exact latents the
+  hand smear is not a native-decoder-specific defect; acting remains open.
+- The scratch-only matched query-ROI experiment keeps anchored conditioning,
+  noise, text queries and global video/history keys unchanged. Fixed authored
+  Alex/Resume rectangles remove only 228,315 action-text visibility pairs;
+  the actual native labels and explicit source mask match all 4,544 by 9,127
+  pairs, with no additions, an A/A pass and an altered-mask rejection.
+  A third native/source DiT gate matches all 24 real comparisons bit-for-bit
+  at unchanged `atol=rtol=2e-5`; A/A passes and one altered value fails.
+  Native DiT and decode each record zero tracked encode allocations,
+  readbacks and preterminal waits with one terminal drain. Their sampled
+  peaks are 24.94 and 18.42 GiB separately, with zero swap growth and the
+  unchanged cache-aware 10% floor.
+- The query ROI removes the extra Alex hand visible at 2.75 s in the
+  anchored temporal-only take. Resume raises its own glove to its chest;
+  a complete tap/return and a distinct Alex head turn remain unqualified.
+  This is a fixed-camera, custom mask experiment, not stock upstream spatial
+  control, detected identity or a production API. Globally visible video
+  keys and other conditioning paths can still relay actions between regions.
+  The numerical review is ROBUST for the observed run; the same-lineage
+  visual review is partial. Do not widen this to general character control.
+  Evidence: `roi/compare-gpu.json`, SHA-256
+  `2bea5367da4dea43783243b6aefa0daa06e29eadf7879160e88eba23cbc51bd2`,
+  plus `roi/launch-binding.json` and the guarded argv files. The paired clip
+  `roi/temporal-left-roi-right-5s.mp4` shows temporal-only left, ROI right
+  (SHA-256 `5ecebdeef2f82eea178bdf40f56310fcbd9ecaa66ae9275bdd024ee9492796c0`).
+  Refresh on mask/geometry changes as well as the existing input/runtime
+  triggers. Next: score head-turn and tap/return endpoints independently.
+  `roi/verified-run-files.json` hashes the 22 native comparison files as an
+  explicitly post-comparison snapshot, not a rerun or prior attestation.
+- The CPU token-span audit rules out Action2 truncation on this input:
+  the 108-row hidden-state crop drops the system/user-header prefix after
+  Qwen sees the full sequence. Retained [49,132) and [132,224) spans contain
+  both complete action bodies and close tags. This does not establish that
+  DiT follows them. Evidence: `roi/conditioning-crop-audit.json`, SHA-256
+  `25af873dcdd1e913fc5f6daec58a6fdaa3c2c219841ab2d881059b49fa3d7018`.
+- The user prefers the matched ROI take. A follow-up changes only Action1
+  to look down and then turn toward Resume; CPU checks preserve Action2,
+  timing, token boundaries, ROI and all non-Qwen inputs. The fourth V224
+  native/source gate again passes all 24 comparisons bit-for-bit; full
+  mask agreement and both numerical controls pass at unchanged tolerances.
+  A pre-decode check rehashes the current binding and native inventory,
+  binds the latent bank to report/receipt, and rejects stale binding,
+  latent and inventory copies. The same-lineage review rates this scoped
+  stale-evidence check ROBUST, not an independent report attestation.
+- The user's playback assessment supersedes the inconclusive 8-fps head
+  review: the accepted control (left in the head-pose pair) has a slight
+  Alex head turn followed by Resume hand motion; the rewrite (right) has
+  only Resume hand motion. Reject the rewrite as a regression of Alex's
+  beat on this fixture and keep the accepted ROI control. The sampled
+  review missed the subtle turn. The inspected frames preserve Alex's
+  desk hands and show Resume's glove reaching its chest in both takes;
+  a discrete tap/return remains open. Do not generalize to all prompts.
+  Native DiT/decode retain zero tracked encode allocations, readbacks and
+  preterminal waits, one terminal drain each, and sampled peaks of 24.94 /
+  18.41 GiB. The 10% floor holds with zero swap growth. Evidence:
+  `/opt/mldata_ssd/cogni-ml/rolewright-actor-beats-20261105.z3997ccv`.
+  `compare/compare-gpu.json` SHA-256 is
+  `4559d6e5f7f56375a67d14f5c75e4b558ecb2eabfbadf108c6fa43a9a9f8cdc5`;
+  `decode_candidate.py --validate-only` checks current files and negative
+  controls. `candidate/control-left-head-pose-right-5s.mp4` shows accepted
+  control left, rewrite right; inspect `candidate/action1-head-pose-full-contact.png`
+  for the corrected whole-head crop. The decoder reuses its earlier
+  qualification; this is neither a new decoder-source gate nor a full ad.
+  Refresh on input/mask/source/binary/runtime/precision changes.
+- Offline `scripts/video_block_diff.py` now scans all decoded frames with
+  pooled-pixel block differences and a bounded lag ring. On the existing
+  matched pair, lag-six head change over 0-2 s is 5.191 versus 1.013 on the
+  0-255 RGB scale (accepted/rewrite); glove change over 2-5 s is similar,
+  4.305 versus 4.169. Scale-one controls retain the distinction. Evidence:
+  `/opt/mldata_ssd/cogni-ml/rolewright-block-diff-20261105.wsem3mlz`.
+  This corroborates the playback observation without claiming pose or
+  acting quality. Pooling-hidden motion and brightness-only change are
+  explicit CPU counterexamples. Refresh on video/ROI/scale/lag/code changes;
+  this offline diagnostic adds nothing to the GPU inference path.
+
+### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
+
+- Tencent `911cea64` encloses the entire cached DiT forward in BF16
+  autocast. A blocks-only autocast control reproduced the previous native
+  trajectory exactly. With the source's full scope, the first divergence
+  was the refiner's masked mean. Substituting only the F32 mean cast at the
+  first linear input reproduced the five source refiner outputs bitwise.
+  On identical block-53 output and timestep vector, the old final head
+  also changed 44,954 of 138,240 velocity values.
+- The opt-in source-BF16 sequence now rounds the patch projection and
+  uses the qualified refiner for padded V263/V150. The refiner keeps the
+  masked sum and division in F32 until the next BF16 linear input.
+  The final head keeps LayerNorm and the modulation product and shift
+  in F32 until its last BF16 linear input. These changes add no command
+  chain boundary and remove the separate final norm rounding dispatch.
+- A fresh native `--dit-only` replay used the original RoleWright PNG,
+  live DCAE, mask, BF16 weights and noise. It reproduced the saved-DCAE
+  diagnostic's four Euler captures and full native bank byte-for-byte.
+  The GPU comparator reported zero error across all 24 comparisons,
+  including patch, text, vector, sampled cache/block boundaries, first
+  velocity, all four Euler updates and the active timeline. The
+  PyTorch 2.8.0 MPS oracle uses the pinned source operators with the
+  source's full autocast scope and an explicit SDPA adapter. The unchanged
+  `atol=rtol=2e-5` gate rejected a single-value perturbation.
+- The replay measured 376.55 s for the reference encoder and 52.20 s
+  for DiT on M2 Max. Each chain recorded zero tracked encode allocations,
+  readbacks and preterminal waits, and one terminal drain. Sampled peak
+  footprint was 25.21 GiB with 17.00 GiB minimum cache-aware headroom
+  and no swap growth under the 10% floor.
+- Native PixelUMM decoded the authenticated bank with the original
+  decoder noise in 166.29 s. The sampled peak was 18.41 GiB, minimum
+  cache-aware headroom was 18.85 GiB, and swap did not grow. The decoder
+  recorded zero tracked encode allocations, readbacks and preterminal
+  waits. The exported 512x288 clip contains the 120 generated T1 frames
+  at 24 fps. Alex visibly turns from the laptop toward the camera, then
+  looks back toward the laptop. Resume stays mostly still. The clip
+  preserves the previous strong-prompt take's broad acting pattern.
+- Evidence and exact commands are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-final-euler-20261104.c7zj7lnM`.
+  Re-run `production-replay-autocast.command.json` with fresh output and
+  `compare-production-autocast.command.json` using the replay output.
+  Require `gate_passed`, zero differing bits in the 24 comparisons and
+  one rejected perturbation. The JSON report SHA-256 is
+  `e94b11341362d9bc709ab916639bb9e6a79d104483f1aa7091d5142fffc53912`.
+  The clip and ordered frame contact sheet are
+  `rolewright-alex-head-turn-5s.mp4` and `rolewright-contact.png`.
+- This gate covers this two-segment fixture and the MPS oracle. Refresh
+  on changes to the input, mask, weights, precision, runtime or source
+  attention schedule. Other refiner prefix lengths and stock CUDA/Magi
+  remain outside the gate.
+
+### [LM-HY-NOMAS-FINAL-EULER-SOURCE-BF16-2026-11-04] Final projection and first Euler update match the source on frozen T1
+
+- At `70e45046`, the final head under `--reference-source-bf16` preserves BF16
+  boundaries for SiLU, LayerNorm, both linear projections and modulation.
+  The two projections accumulate in F32 and round once after bias.
+  Modulation rounds the scale factor, product and sum separately. The head
+  reuses its buffers, adds one in-place norm dispatch and adds no host wait.
+- On authenticated RoleWright T1 inputs from the 54-block gate below, the
+  native head and Euler plan match Tencent `911cea64` on PyTorch 2.8.0 MPS
+  without autocast. All nine raw comparisons are byte-exact, including
+  velocity and the 138,240 values in the first updated latent. The unchanged
+  gate is `atol=rtol=2e-5`. The previous head missed the gate on velocity
+  by up to 0.03308201. Injecting the exact source velocity into the previous
+  native Euler plan already reproduced the source update bit-for-bit.
+- The native probe records zero explicit preterminal waits, readbacks and
+  encode-time named buffer allocations. The file-cache-aware 10% guard
+  observed 38.23 GiB minimum headroom and zero swap growth. The comparison
+  rejects a one-value perturbation. The default F32 route retains all nine
+  previous output digests. The production CLI built and planned the
+  frozen `--dit-only` input, and 109 CPU plus two Metal specs passed.
+- Evidence and exact command arguments are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-final-euler-20261104.c7zj7lnM`.
+  Replay `native-ndarray.command.json` and `compare-ndarray.command.json`
+  with fresh output paths and require `jq -e .gate_passed` on the report.
+  The comparison SHA-256 is
+  `28ebc8035d444f29eb6e79890aed015f241fbfa684beb5da75cdc29af44b566e`.
+- This gate uses frozen head inputs without autocast. The full-autocast
+  sequence gate above supersedes it for the RoleWright production path.
+  Refresh if the source, runtime, weights, inputs or precision path changes.
+
+### [LM-HY-NOMAS-FULL-DIT-SOURCE-BF16-2026-11-04] All 54 staged DiT blocks match the source at the T0/T1 boundary
+
+- At native revision `ae7505c1`, the serial source-BF16 DiT with the
+  production loader and one shared GPU weight stage matched Tencent
+  `911cea64` via PyTorch 2.8.0 MPS on frozen RoleWright block inputs.
+  The full-depth test used all 54 authenticated BF16 weight sets and the
+  source action mask. T0 history K/V and first T1 denoise block image and
+  active-text outputs matched bit-for-bit at every layer, 216 tensors and
+  1,508,032,512 values. Maximum absolute error was zero at unchanged
+  `atol=rtol=2e-5`.
+- The 2-, 32- and 54-layer native runs matched on their overlapping
+  prefixes. The source oracle loaded one block at a time and interleaved
+  each layer's T0 write and first T1 read, preserving dependency order
+  within both streams. It reproduced the eight archived two-block
+  reference tensors before continuing. The comparator checked the pinned
+  inputs, ordered weight digests, action profile identity, capture geometry,
+  raw payload digests, finite values and both memory guard receipts. It
+  rejected a changed action profile digest and a reversed weight order.
+- The native frozen-input harness ran both forwards on one command chain.
+  Encode recorded zero explicit waits, tracked MetalBuffer allocations and
+  CPU readbacks. Its scratch-only observer read the existing cache and
+  output banks after the single terminal wait. The two forwards through
+  that wait took 17.47 s on M2 Max, excluding setup and capture. The
+  native guard sampled a 23.31 GiB peak and 14.10 GiB minimum headroom
+  with a 26 GiB cap, a file-cache-aware 10% reserve and no swap growth.
+- Evidence and exact commands are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-bf16-20261104.VNSd5y9q`.
+  Recheck from the repository root with `native_compare_full.py` using
+  `native_full.gpu.2.result.json`, `source-full-j.json`,
+  `source-full-j.guard.jsonl` and a fresh report path. The comparison SHA-256 is
+  `0088f2727f3882eaca1acd7ae90654ac4a52ae0e6e3cde9816a3b3b8b019f1c8`.
+  The focused CPU specs passed 46 examples.
+- This gate covers the DiT boundaries on frozen inputs. The native prelude,
+  final projection, Euler updates, later T1 steps, decoder and rendered
+  motion need separate gates. Next, compare the first T1 velocity and Euler
+  update on the same input. Refresh this gate if the source, runtime,
+  weights, frozen inputs, action masks, geometry or precision path changes.
+
+### [LM-HY-NOMAS-SERIAL-SOURCE-BF16-2026-11-04] Source-BF16 parity through the serial T0 writer and T1 reader
+
+- `hy_nomas_sequence_generate --reference-source-bf16` selects the
+  source-BF16 serial workspace and history graph for two-segment image
+  continuation. T0 uses source SiLU, projection, FFN and residual
+  boundaries. T1 reads the same per-layer cache slots with BF16
+  attention. Persistent K/V still stores widened BF16 values in F32.
+- With frozen RoleWright inputs, real BF16 weights, and action masks,
+  the normal serial owner and continuation provider match Tencent
+  `911cea64` via PyTorch 2.8.0 MPS bit-for-bit across 28 tensors
+  (184,016,896 values), covering both T0 K/V pairs and both T1 block
+  outputs on the first denoising step. The unchanged gate is
+  `atol=rtol=2e-5`. The T0 block-0 prospective K/V also match their
+  cache copies bit-for-bit. The stock F32 path reproduces all 30 prior
+  stock captures bit-for-bit.
+- Each route used one command chain for T0 and T1 with zero explicit
+  waits, named MetalBuffer allocations or CPU readbacks during encode.
+  Diagnostic reads followed the single terminal wait. The BF16 probe
+  sampled a 3.51 GiB peak with no swap growth under the cache-aware
+  10% reserve, 6 GiB process cap, and 64 MiB swap-growth limit.
+- The checks ran from the repository root using the scratch bundle under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-rolewright-source-bf16-20261104.urj4z3vo`.
+  Commands were `python3 -B build.py`, `python3 -B launch.py serial-stock`,
+  `python3 -B launch.py serial-source-bf16`, then
+  `python3 -B compare.py serial-stock serial-source-bf16` with paths
+  to the bundle scripts. The comparison SHA-256 is
+  `8819c3e1c384788bebb758891871849a768ba07b4ae9c4ab0b28969f759a78cf`.
+- The production CLI builds and admits the masked input in CPU-only
+  planning at 24.37 GiB of named DiT buffers. The GPU probe binds
+  two pretrained weight arenas directly and reduces provider admission
+  to two layers. The 54-layer staging path and rendered motion remain
+  outside this gate. Refresh on code, upstream, runtime, fixture, mask
+  geometry, or weight changes.
+
+### [LM-HY-NOMAS-SERIAL-T0-T1-2026-11-04] Serial history copy is exact and the writer and reader arithmetic diverge
+
+- A two-layer build uses `HyNomasMPSSerialWorkspace` and the continuation
+  provider to connect frozen RoleWright T0 to the first T1 step. The probe
+  reduces the provider's layer admission from 54 to two and uses directly
+  bound BF16 weight arenas. It retains the stock write/read schedule and
+  F32 cache layout. GPU scratch is shared across blocks and T0/T1 use one
+  command chain with no intermediate readbacks or explicit waits.
+- The earliest captured T0 block-0 difference against Tencent `911cea64`
+  on PyTorch 2.8.0 MPS is conditioning SiLU (654 of 2,048 values outside
+  tolerance per stream, maximum absolute error 0.000232). Conditioning
+  input and both pre-attention LayerNorm outputs are bitwise equal.
+  Both K and V differ before append. The F32 cache copies the block-0 K/V
+  buffers bit-for-bit. Rounding only at the join/split boundary still fails
+  the T0 K/V and the T1 block outputs at `atol=rtol=2e-5`.
+- With exact per-layer T0 K/V and T1 Q/K/V injected, all four cache
+  captures are bitwise exact. The stock F32 history graph still differs in
+  8,672,441 and 8,811,188 of 9,154,560 attention values in blocks 0 and 1,
+  respectively. The packed BF16 diagnostic graph matches both outputs
+  bit-for-bit through the same provider and with the same history slots.
+  This separates a reader-side precision/order mismatch from the writer's
+  earlier divergence.
+- Replay on the external SSD under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-rolewright-20261104.xEHAstMi`.
+  Run `python3 -B compare.py serial-stock serial-bf16-join`,
+  `python3 -B compare.py frozen-qkv-stock frozen-qkv-bf16`, then
+  `python3 -B check_result.py`. The comparison SHA-256 values are
+  `4e7443cfb7a4cab21845b149fca08925466227ba40ba702a4961e70a1cf36bae`,
+  `9a0698418422e2c1c01ce1e3734f9beaeacc5603e89580b1773fc1304a094e73`, and
+  `bb6493e868b9099430db9c19735d32eb79223d2d6c7a777e889e4d81c7953b9e`.
+  Main serial A/B sampled a peak of 3.67 GiB with zero swap growth under
+  a 6 GiB cap, a cache-aware 10% reserve, and a 64 MiB swap-growth limit.
+- Next, connect the source BF16 conditioning and projection boundaries
+  to the serial writer, then attach the packed BF16 reader and recheck
+  both T0 K/V pairs and T1 block outputs. Scope is two blocks on this
+  frozen fixture. Keep the rendered-motion prompt A/B separate. Refresh
+  on binary, upstream, runtime, fixture, layout, precision or weight changes.
+
+### [LM-HY-NOMAS-T0-T1-NATIVE-BLOCKS01-2026-11-04] Native T0 K/V feeds both T1 blocks
+
+- On the frozen RoleWright preludes and the same BF16 weights, the T0
+  diagnostic writes block 0's K/V, runs its post-attention path, and feeds
+  the resulting GPU image/text buffers to block 1's K/V writer. Both
+  physical BF16 cache pairs cover 4,583 active rows per layer. The two
+  BF16 pairs, their F32 GPU read stages, and all 24 T1 step-0 captures
+  match Tencent `911cea64` through PyTorch 2.8.0 MPS bit-for-bit at the
+  unchanged `atol=rtol=2e-5` gate. The comparison covers 32 tensors.
+- T1 registers the native cache read stages before encoding and selects
+  the matching layer's slot. Only frozen inputs and weights are uploaded
+  during setup. There are no intermediate CPU transfers or explicit
+  waits, and both phases share one Metal command chain with one terminal
+  wait. T1 still uses BF16-to-F32 GPU read stages for its history ABI.
+  Selecting block 0's cache for T1 block 1 preserves the native caches,
+  block 0, and block 1's current Q/K/V bit-for-bit but takes 9,108,949
+  values in block 1's attention outside tolerance.
+- The first square T0 graph hit the 6 GiB cap at a sampled 6.46 GiB.
+  The passing probe uses 256-row BF16 query chunks over the active T0
+  prefix with all rows visible. It sampled a 5.56 GiB peak and zero swap
+  growth under the same 6 GiB cap, 10% cache-aware reserve and 64 MiB
+  swap-growth limit. The sampled footprint is for the diagnostic, not a
+  full-model memory budget.
+- Replay `python3 -B compare.py` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t0-t1-native-two-blocks-20261104.77OcZYzW`
+  verifies the hashes, guard receipts, padding and wrong-slot control
+  against the pinned source captures. The passing `comparison.json`
+  SHA-256 is `a89f572311bb2e387867d0e47702ec468001be4879a46180780301db34c15b83`.
+  See LM-HY-NOMAS-SERIAL-T0-T1-2026-11-04 for the serial continuation
+  provider comparison on this two-block fixture. Scope is the
+  native diagnostic, not the production sequence or rendered motion.
+  Keep the prompt-enhancer A/B separate. Refresh on source, runtime,
+  binary, input, weights, precision, geometry, or artifact changes.
+
+### [LM-HY-NOMAS-T1-DIT-BLOCKS01-2026-11-04] Frozen RoleWright T1 blocks 0–1 match upstream MPS
+
+- At T1 step 0 (t=1000), one native Metal chain runs both DiT blocks on
+  frozen RoleWright inputs. Block 1 reads block 0's image and text output
+  buffers directly. All 24 captures match Tencent `911cea64` through its
+  PyTorch 2.8.0 MPS adapter bit-for-bit, including the 4,320 image rows and
+  150 active text rows at width 2,048 from each block. Both attention outputs
+  have zero padding. The gate remains `atol=rtol=2e-5`.
+- The oracle writes distinct per-layer T0 BF16 K/V from the authenticated
+  frozen T0 prelude. Its 4,583 active rows per layer match the rows consumed
+  by T1. Block 0 also matches the prior verified native T0 writer. Selecting
+  block 0's history for block 1 preserves current Q/K/V exactly but fails
+  9,108,949 attention values. Recomputing the T0 prelude in the new harness
+  changed block 0's history and was excluded to preserve fixture identity.
+- Native execution uses two attention workspaces for distinct diagnostic
+  bindings and one terminal wait, with no intermediate CPU transfer.
+  The cache-aware 10% guard, 6 GiB process cap and 64 MiB swap-growth limit
+  held across source and native runs. The passing native run sampled a
+  4.59 GiB peak with zero observed swap growth.
+- Replay: `compare.py` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t1-two-blocks-20261104.Yz5Nsflx`
+  verifies the capture digests, 18 previous anchors, per-layer cache reads,
+  guards and wrong-slot control. The passing `comparison.json` SHA-256 is
+  `74a03588bb606b597ed12cba7ace6a49b4ddda8edfa96378f789ba569d6a8c33`.
+  See LM-HY-NOMAS-T0-T1-NATIVE-BLOCKS01-2026-11-04 for the run with both
+  native T0 writers. The diagnostic covers no later blocks or rendered
+  motion. Keep the prompt-enhancer A/B separate. Refresh on source,
+  runtime, binary, input, weight, precision or artifact changes.
+
+### [LM-HY-NOMAS-T1-DIT-BLOCK0-2026-11-04] Frozen RoleWright T1 block 0 matches upstream MPS
+
+- An isolated native diagnostic from `a3e9dc28` connects block-0 Q/K/V,
+  action-masked history attention, output projections, both residuals,
+  and the FFNs. At T1 step 0 (t=1000), 28 captures match the pinned
+  Tencent `911cea64` source running on the PyTorch 2.8.0 MPS adapter.
+  Both outputs feeding block 1 are bit-exact: 4,320 image rows and 150
+  active text rows at width 2,048. The source input and history digests
+  match the previous attention probe; native attention padding is zero.
+- Omitting the BF16 rounding of the gated product leaves the attention
+  projections exact but fails the first residual on 570,854 image and
+  67,808 text values. F32 GELU with a final BF16 cast fails 4,345,529
+  image and 266,167 text values against source BF16 GELU at unchanged
+  `atol=rtol=2e-5`. The passing probe feeds BF16 FC1 output into the BF16
+  GELU graph and rounds both the gated product and the residual sum.
+- One terminal GPU wait and no intermediate CPU transfers. Guard:
+  cache-aware 10% reserve, 6 GiB process cap, 64 MiB swap stop. The native
+  probe sampled a 2.80 GiB peak footprint with no observed swap growth.
+  These diagnostic measurements do not establish production memory or speed.
+- Evidence and replay scripts: local external-SSD directory
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t1-post-block0-20261104.PZZ1QDSU`,
+  especially `comparison.json`, `compare.py`, and the guarded run logs.
+  The probe is outside the production path. See
+  LM-HY-NOMAS-T1-DIT-BLOCKS01-2026-11-04 for the two-block continuation.
+  No full T1, original Magi/CUDA, motion or quality claim. Refresh on source,
+  binary, runtime, inputs, weights, cache, geometry, precision or artifact changes.
+
+### [LM-HY-NOMAS-REFINER-FC2-RESIDUAL-2026-11-04] Both refiner blocks match the source on T0 V263
+
+- The default-off FC2/residual control requires source MLP SiLU control
+  and reuses existing kernels for BF16 RNE after FC2 bias, the gated
+  multiply and the residual add. The first mismatch without it is FC2.
+- All 37 trace records match the pinned MPS-adapter oracle byte-for-byte
+  through block1 output, including the 2,621,440 values consumed at the
+  block0 output/block1 input alias. The raw gate passes at `atol=rtol=2e-5`.
+- Disabled preservation and enabled repeat each match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved under the cache-aware 10% memory guard.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc2-residual.json`.
+  Rollback: omit `--refiner-source-fc2-residual-control`. Next: qualify
+  the T0 DiT reference K/V writer on the matched refiner output. Refresh
+  on source, binary, runtime, input, weights, layout, precision or evidence changes.
+
+### [LM-HY-NOMAS-REFINER-SILU-2026-11-04] Block0 is exact through MLP SiLU
+
+- Default-off BF16 RNE at the F32 SiLU output matches the pinned
+  MPS-adapter oracle byte-for-byte for all 10,485,760 block0 values
+  on frozen T0 V263. It requires the source FC1 control.
+- First mismatch moves to FC2 at unchanged `atol=rtol=2e-5`. GPU replay
+  matches FC2 and the second residual exactly with BF16 RNE at FC2 output
+  and after the gated multiply and add. Final-only residual rounding fails.
+- Disabled preservation and enabled repeat each match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved under the cache-aware 10% memory guard.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-silu.json`. Rollback:
+  omit `--refiner-source-mlp-silu-control`. Next: connect FC2 and gated
+  residual rounding and check block1 input. Refresh on source, binary,
+  runtime, input, weights, layout, precision or evidence changes.
+
+### [LM-HY-NOMAS-REFINER-FC1-2026-11-04] Block0 is exact through FC1
+
+- The default-off source FC1 control reuses the post-bias BF16 epilogue.
+  Block0 FC1 matches the pinned MPS-adapter oracle byte-for-byte across
+  10,485,760 values on frozen T0 V263, including padding.
+- The first raw mismatch is block0 SiLU at unchanged `atol=rtol=2e-5`.
+  A GPU replay rounds the captured SiLU output to BF16 and matches
+  all source values at zero tolerance. FC2, the second residual and
+  the connected block1 input still differ.
+- Disabled preservation and enabled repeat match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved. Guard: cache-aware 10%, 6 GiB process
+  group cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc1.json`. Rollback:
+  omit `--refiner-source-fc1-control`. Next: connect SiLU RNE and
+  compare FC2 and the second residual. Refresh on source, binary,
+  runtime, input, weights, layout, precision or evidence changes.
+
+### [LM-HY-NOMAS-REFINER-NORM2-2026-11-04] Block0 is exact through norm2
+
+- The default-off source norm2 control reuses the BF16 RNE affine store.
+  Block0 norm2 matches the pinned MPS-adapter oracle byte-for-byte across
+  2,621,440 values on frozen T0 V263, including padding.
+- The first raw mismatch is block0 FC1 at unchanged `atol=rtol=2e-5`.
+  GPU replay rounds the native post-bias FC1 output to BF16 and matches
+  all 10,485,760 source values at zero tolerance. Connected block1 still
+  receives a divergent input, identical to native block0 output.
+- Disabled preservation and enabled replay match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved. Guard: cache-aware 10%, 6 GiB process
+  group cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-norm2.json`. Rollback:
+  omit `--refiner-source-norm2-control`. Next: connect BF16 RNE at FC1
+  and test SiLU, FC2, the second residual and block1 input. Refresh on
+  source, binary, runtime, input, weights, layout, precision or evidence
+  changes.
+
+### [LM-HY-NOMAS-REFINER-PROJECTION-RESIDUAL-2026-11-04] Block0 exact through first residual; norm2 is next
+
+- Default-off source projection/residual control reuses the post-bias
+  BF16 epilogue and rounds the first gated product and sum in one Metal
+  dispatch. On frozen T0 V263 block0 projection and residual1 each match
+  all 2,621,440 values byte-for-byte. Block1 receives a different input
+  and both complete block outputs still fail.
+- First divergence: block0 norm2, including padding, at unchanged
+  `atol=rtol=2e-5`. Isolated GPU BF16 RNE of the captured native norm2
+  output gives 0/2,621,440 mismatches at zero tolerance.
+- Native disabled preservation and fresh enabled repeat are byte-exact
+  across 62 records. Named bytes and [0 encode allocations, 0 reads,
+  0 preterminal waits, 1 terminal drain] are preserved. Guard: cache-aware
+  10%, 6 GiB process-group cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-projection-residual.json`.
+  Rollback: omit `--refiner-source-projection-residual-control`. Next:
+  connect norm2 RNE and qualify the FFN boundaries and block1 input.
+  Scope is the pinned MPS-adapter capture. Refresh on source, binary,
+  runtime, input, weights, layout, precision or evidence changes.
+
+### [LM-HY-NOMAS-CONNECTED-REFINER-ATTENTION-2026-11-03] Block0 context is exact; projection is next
+
+- Default-off source attention writes main256 and vector7 into one native
+  context on the existing chain. On frozen T0 V263, block0 Q/K/V and the
+  entire context match the pinned MPS-adapter source byte-for-byte. Both
+  attention paddings are exactly zero. Block1 receives a different input.
+- The first valid failure moves from attention to projection (528,996 of
+  538,624 values at unchanged `atol=rtol=2e-5`). GPU replay makes the
+  projection exact after BF16 rounding and the residual exact after separate
+  BF16 rounding of gate multiplication and addition. Final-sum rounding alone
+  still fails on 6,196 valid values. Both connected block outputs remain open.
+- 28 Crystal examples, 79 Python tests, and bytewise disabled preservation
+  and enabled repeat pass. All captures report 944,620,612 named bytes and
+  [0 encode allocations, 0 reads, 0 preterminal waits, 1 terminal drain].
+  Guard: cache-aware 10%, 6 GiB cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-connected-refiner-attention.json`.
+  Rollback: omit `--refiner-source-attention-control`. Next: native projection
+  and residual BF16 rounding, then norm2, FFN and block1. Refresh on changes
+  to source, binary, runtime, input, weights, layout, precision or evidence.
+
+### [LM-HY-NOMAS-VECTOR-TAIL-ATTENTION-2026-11-03] Native tail7 exactly matches source; full context diagnostic is exact
+
+- Default-off `HyNomasVectorAttentionPlan` matches actual PyTorch 2.8.0 MPS
+  source tail7 exactly: 0/14,336 mismatches. GPU comparison assembly with
+  qualified native main256 is exact across all 538,624 context values.
+  This is not native connected 256 + 7 assembly or refiner integration.
+- Source vector attention scales Q before QK, uses F32 online softmax/PV,
+  then BF16 context rounding. The old general graph still fails on
+  7,499/14,336 tail values, max .4375 at unchanged `atol=rtol=2e-5`.
+  Never consume the vector operator's uninitialized second return as P.
+- 34 Crystal examples, 75 Python tests, five prior exact gates, fresh-process
+  14-record/payload equality and original ten-record preservation pass.
+  Added output: 57,344 bytes; combined named bytes: 113,505,024; encode
+  counters [0 allocations, 0 read APIs, 0 preterminal waits, 1 terminal wait].
+  Guard: cache-aware 10%, 6 GiB cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu`.
+  Rollback: omit `--vector-tail-control`. Next: native context assembly,
+  projection/residual, then connected refiner on frozen inputs. No full
+  generation, speed or quality claim. Correlated review; inherited pinned
+  MPS-adapter oracle, not CUDA/Magi. Refresh on source/binary/runtime/input/
+  weight/mask/layout/precision changes or evidence loss/mutation.
+
+### [LM-HY-NOMAS-CONNECTED-BF16-ATTENTION-2026-11-03] Native main256 P/PV exact; final context needs explicit RNE
+
+- Default-off `HyNomasAttentionMPSPlan#bf16_boundaries_control` is qualified
+  on the frozen block0 T0 V263 Q/K/V. Its general-263 graph matches actual
+  source main256 P (1,077,248 values) and context (524,288 values) exactly.
+  Instrumented P and context-only graphs have identical contexts. This is
+  not a native implementation of source query chunks 256 + 7.
+- A plain BF16-result/F32-output cast left the context equal to unrounded
+  F32 PV: 458,766 main256 mismatches, max .030776023864746094. GPU BF16
+  rounding made it exact. An explicit UInt32 RNE expansion inside the final
+  graph now makes the context boundary observable. Do not infer a physical
+  BF16 store, dispatch count or hidden accumulation dtype from graph types.
+- Actual source vector tail7 remains failed: 7,499/14,336 context mismatches,
+  max .4375 at unchanged `atol=rtol=2e-5`. Never consume its uninitialized
+  second return as P. The control stays off; complete-refiner parity remains
+  open. No full refiner, generation, motion, quality or speed claim.
+- Fresh build, 32 Crystal examples, 71 Python tests, GPU comparison and exact
+  fresh-process repeat pass. Original ten F32/input records are unchanged
+  with the control off/on. Named bytes: 113,447,680; encode counters [0 named
+  allocations, 0 read APIs, 0 preterminal waits, 1 terminal wait]. Guard:
+  file-cache-aware 10%, 6 GiB cap, 64 MiB swap stop; observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80`.
+  Next: actual vector-tail context, then connected refiner. Scope is one
+  pinned MPS-adapter capture; same-lineage review is correlated. Refresh on
+  source/binary/runtime/input/weight/mask/layout/precision change or evidence
+  loss/mutation. Rollback: leave the flag at its false default.
+
+### [LM-HY-NOMAS-REFINER-ATTENTION-2026-11-03] Main256 first differs at effective BF16 scaled logits; vector tail remains separate
+
+- Matched source-exact block0 Q/K/V, T0 V263. Six standalone native F32
+  QK/softmax/PV controls reproduce current PyTorch 2.8.0 MPS controls with
+  max error zero. The actual source adapter replay also reproduces the
+  earlier captured attention exactly, using query chunks 256 + 7.
+- F32 QK -> scale -> BF16 logits -> BF16-boundary P/PV reproduces actual
+  main256 probabilities/context exactly on this finite input. Native
+  common-source-P PV after BF16 rounding is exact. Raw-QK rounding before scale fails unchanged
+  `atol=rtol=2e-5`: 32,258/1,077,248 main256 P mismatches, max .1015625.
+  Hidden raw-QK tensors and softmax accumulation dtype are not observed.
+- Source tail7 uses a distinct vector kernel; its second return is not
+  probabilities and is not consumed. General-tail context differs from
+  actual source on 7,499/14,336 values, max .4375. Do not extrapolate the
+  main256 explanation to this tail.
+- Diagnostic only; production attention is unchanged and the complete raw
+  refiner gate remains failed. Five Crystal examples, 66 Python tests,
+  fresh build and GPU sensitivity checks pass. Native six-control encode:
+  83,049,088 named bytes, counters [0,0,0,1]. All neural math and metrics on
+  GPU; only terminal diagnostic capture/export reaches CPU. Guard retains
+  cache-aware 10%, 6 GiB cap, 64 MiB swap stop; no observed swap growth.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e`.
+  Next: default-off same-graph scaled-logit/probability boundaries, actual
+  main256 P/PV gate, then vector-tail parity. No full generation or quality
+  claim; MPS adaptation, not CUDA/Magi parity. Refresh on source/binary/
+  runtime/input/weight/mask/layout/precision change or evidence mutation.
+
+### [LM-HY-NOMAS-STATIC-DIAGNOSIS-2026-11-02] Full reference decoder display is exact; stronger action restores a visible turn
+
+- The previous mask comparison also changed action wording. A matched
+  mask-off ablation leaves the new slow/head-only action effectively static;
+  old T1 wording at D576 with the new T0 caption preserves a small Resume
+  gesture. Eight versus four source steps does not restore a head turn.
+  These controls do not isolate action wording from D320/D576 or establish
+  an inherent model limitation.
+- An exact 60-latent / 240-frame / 11-window / 36-block PixelUMM control
+  completes 468 source/cache BF16 word checks. Its original raw `[-1,1]`
+  versus native display `[0,1]` mismatch is invalidated, with original bytes
+  retained. The corrected repository GPU helper authenticates saved source
+  raw, applies pinned BF16 multiply/add/clamp and reproduces all 106,168,320
+  native display values byte-exact (max/mean zero; SHA `41c96e58...1092c`).
+  Final admission/representation suites pass 57 CPU tests; final plan-only
+  admission passes. The full source body precedes the correction; no fresh
+  full-model execution of the corrected wrapper is claimed. Native raw,
+  full DiT and stock CUDA/Magi parity remain unqualified.
+- A matched source BF16 mask-off control changes only the T1 wording bundle
+  to an explicit head/shoulders turn away from the laptop toward the camera.
+  T0 is axis-2 byte-exact; D320, four steps, weights, noise and decoder stay
+  fixed. Ordered generated-T1 frames show a visible turn followed by a return
+  to the laptop; the requested hold is absent and Resume remains still.
+  Correlated Adversary: ROBUST for this scoped pairing and visual observation.
+  No deterministic production prompt builder inserts the former body locks;
+  they were authored in the test prompt.
+- The stronger masked native take also visibly turns Alex toward the camera
+  and returns toward the laptop; Resume is still and the requested hold is
+  absent. T1-only clip excludes technical T0. Correlated Adversary: ROBUST for
+  this visual observation. The masked source BF16 take through the common
+  native decoder also visibly turns then returns (scoped visual ROBUST).
+  T0 is exact against masked source BF16, but T1
+  fails unchanged `atol=rtol=2e-5`: max 3.20703125, RMS 0.1434121877,
+  126,770/138,240 mismatches, all finite. Native intermediates/K/V remain F32.
+  Native request 658.21 s, sampled peak 25.367 GiB, minimum cache-aware
+  headroom 16.222 GiB, zero swap growth; instrumented encode allocations,
+  readbacks and preterminal waits stay zero in all three GPU chains.
+- Source audit: default app retains all 30 T0 latent frames, uses fixed-image
+  writer sigma/timestep `0.206897`/`206.897` and CFG 1. Explicit low-memory
+  mode samples 18 prior frames; a historical live selection is not proved.
+  a31 app semantics match adapted 911 settings, not identical callgraphs.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-static-diagnosis.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-static-diagnosis-20261102.grp_w5zj`.
+  Next: localize the first native/source BF16 boundary difference; retain the
+  unchanged `atol=rtol=2e-5` gate, 10% cache-aware floor, 25.5 GiB cap and
+  64 MiB swap-growth stop. Complete advertisement and full native DiT BF16
+  equivalence remain open. Refresh on source/binary/input/noise/weight/
+  geometry/precision/backend/compiler/runtime/device change or artifact loss.
+
+### [LM-HY-NOMAS-ACTION-MASKS-2026-11-02] Structured reference mask matches source; Alex head turn remains absent
+
+- Opt-in caption T0 / single Subject1 Alex Action1 T1 now authenticates pinned
+  `a31c0fe0` prompt shaping, tokenizer offsets and temporal windows. Raw
+  offsets `[57,260]` clamp to `[57,152]` exactly as source; video windows are
+  `[0,3)` gap, `[3,27)` action and `[27,30)` gap. Compact history/video/text
+  ordering and GPU tile masks preserve global/action visibility and padding.
+- CPU checks: 101 Crystal, 15 Python, 18 edit/checkpoint regressions and three
+  compiled CLI negatives pass; native build/plan pass. The 259-query GPU
+  probe crosses the 256-row tile boundary and passes the pinned source F32
+  oracle at maximum absolute error `7.62939453125e-6`, zero failures under
+  absolute-only `2e-5`. Masked/unmasked sentinel outputs differ. Tracked
+  encode allocations/readbacks/preterminal waits are zero; one terminal drain.
+  Correlated mini-Quad: ROBUST within this bounded mask/admission scope.
+- Native request completes in 533.26 s, sampled peak 25.362 GiB, minimum
+  cache-aware headroom 15.273 GiB, zero swap growth under the 10% floor and
+  25.5 GiB process cap. Source BF16 MPS control completes 54 T0 and 216 masked
+  T1 block calls. T0 is exact; T1 fails unchanged `atol=rtol=2e-5`: max
+  0.51953125, RMS 0.0224052633, 121,206/138,240 mismatches. The first error
+  is not localized; native full DiT intermediates/history remain F32.
+- Root inspection of 25 ordered T1 frames from each take finds no substantial
+  Alex head turn. Both use the same native PixelUMM/noise/RoPE after executed
+  pairing assertions. Tested acting outcome: BROKEN. This neither qualifies
+  full upstream video parity nor excludes the common decoder/source adapter
+  or reference initialization. No speedup or complete animation claim.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-action-masks.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-action-masks-20261102.2hpyx7c6`.
+  Next: compare T0 writer/history and first T1 BF16 boundaries on identical
+  inputs. Keep `--allow-unqualified-reference`; omission of the paired mask
+  arguments restores the previous untimed action control. Historical action
+  tails, multi-subject/action scripts and longer masked timelines are rejected.
+  Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss. Samples do not bound
+  between-poll memory peaks or opaque MPS storage.
+
+### [LM-HY-NOMAS-REFERENCE-ACTION-2026-11-02] Separate caption and action conditioning; animation remains incomplete
+
+- User playback and root inspection of 25 ordered frames reject the first
+  reference-conditioned RoleWright output as effectively static. Nonzero
+  pixel/latent differences are not evidence of the requested acting.
+- Upstream `a31c0fe0` initializes T0 with the image caption, then supplies a
+  separate action turn. The new opt-in two-segment native path authenticates
+  both conditions, retains T0 history and includes fresh T1 text K/V. It
+  prepares the second refiner and GPU buffers before encoding. CPU checks:
+  87 focused Crystal examples, 22 edit/checkpoint regressions, six Python
+  admission tests and four compiled CLI negatives pass; build/plan pass.
+  Correlated scoped Adversary: ROBUST for the fixed contract and admission,
+  not full animation or numerical parity.
+- The guarded native take preserves the old action state, seven non-Qwen
+  tensors and clean T0. It adds only a late Resume gesture; Alex stays almost
+  still. Request 517.88 s, sampled peak 25.463 GiB, minimum cache-aware headroom
+  20.625 GiB, zero swap growth. Tracked encode allocations/readbacks and
+  preterminal waits remain zero, with one terminal drain per model phase.
+- A same-input full source BF16 DiT MPS adaptation at `911cea64` / Torch 2.8.0
+  completes five forwards. T0 is exact; T1 fails unchanged `atol=rtol=2e-5`
+  (121,423/138,240 mismatches, max 1.31640625, RMS 0.03925890). Native full
+  DiT intermediates/history are F32. Earlier Torch 2.6 block probes do not
+  qualify this runtime. Decoding source latents through the common native
+  PixelUMM/noise/RoPE also leaves Alex almost still. This does not isolate
+  the remaining cause or qualify stock Flash3/CUDA upstream.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-reference-action.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-reference-action-20261102.pruxm9c2`.
+  Next: identical-input T0 writer/history and first-T1 layer comparisons at
+  BF16 boundaries. Keep `--allow-unqualified-reference`; omit the new action
+  arguments for the old shared-text control. No complete acting/speed/parity
+  claim. Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss. Guards remain a
+  cache-aware 10% floor, 25.5 GiB process cap and 64 MiB swap-growth limit;
+  samples do not bound between-poll peaks or opaque MPS storage.
+
+### [LM-HY-NOMAS-REFERENCE-ATTENTION-2026-11-02] Physical BF16 history attention matches captured upstream branch
+
+- The opt-in `reference-bf16-attention` block-0 probe consumes physical
+  first-T0 BF16 K/V with byte-identical Q on 4,849 active rows (4,320 image
+  + 529 text, 16 heads, Dh128). All 9,930,752 output values are byte-exact
+  against an isolated invocation of the pinned upstream Torch branch on MPS;
+  maximum/RMS error and mismatches are zero at unchanged `atol=rtol=2e-5`.
+  The prior source Q/K/V capture is a trusted fixture, not independent proof
+  of full-model execution. Padded 5,600-row Torch and Flash3 are not qualified.
+- A fused SDPA node failed 997,904 values (max 0.5) with exact Q/K/V.
+  The installed Torch 2.6.0 MPS source uses BF16 QK, F32 scaling, BF16 logits,
+  BF16 softmax/PV. Reproducing those graph boundaries eliminated the error.
+  Pinned backend sources and a same-run runtime-identity observation are in
+  the evidence; the source receipt itself does not embed the runtime build.
+  Do not generalize this captured-run result to arbitrary Torch versions.
+- Distinct per-token/head/channel physical V values, poisoned prospective
+  sources, tail canaries and latest-chain release guards pass. Hash-repaired
+  output corruption produces one mismatch; changed Q is rejected. Checks:
+  73 CPU Crystal, 49 Python, nine Metal; 22 BF16 + 22 F32 regression captures
+  and four physical history/read tensors remain exact. Correlated scoped
+  Adversary: ROBUST; root executed the GPU checks.
+- Prepared Q/output add 39,723,008 named bytes; diagnostic total
+  2,441,745,920 excludes opaque MPS resources. Native counters are zero
+  tracked encode allocations/readbacks/preterminal waits and one terminal
+  drain. Source/native guards retain 6 GiB / cache-aware 10% / 64 MiB limits
+  with zero sampled swap growth; sampling does not bound between-poll peaks
+  or establish speed or production memory use.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-reference-attention.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm`.
+  Next falsifier: output projection/residual and FFN on identical inputs,
+  then complete block and per-layer histories. No append, full T0 handoff,
+  other layers, generated T1, full video or RoleWright quality claim. Keep
+  `--allow-unqualified-reference`; rollback omits the diagnostic mode.
+  Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss.
+
+### [LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01] Physical block-0 BF16 K/V store/read matches upstream
+
+- The opt-in `reference-bf16-history` diagnostic stores 4,849 active rows
+  (4,320 image + 529 valid text, excluding padded rows) in physical BF16
+  K/V and reads them into fixed F32 stages. Both BF16 tensors are byte-exact
+  against the pinned upstream cache function; both 9,930,752-value F32 reads
+  have zero error/mismatches at unchanged `atol=rtol=2e-5`. Fresh controls
+  retain all 22 exact BF16 and 22 exact F32 pre-attention captures.
+- The source invokes the actual pinned cache function for T0 store and a
+  read-only call after zeroing current Q/K/V in place. Stored history stays
+  unchanged; the consumer sees it followed by the zero current suffix.
+  This uses the prior source Q/K/V capture as a trusted fixture, not an
+  independently attested execution. Attention math is intercepted.
+- Metal tests distinguish source buffers from physical cache storage and
+  cover partial-projection failure, single-write, alias/extent and lifetime
+  guards. A consumed history attempt cannot be retried; a later cache-read
+  chain must drain before workspace release. Hash-repaired BF16/F32 value
+  mutations are rejected by actual comparisons. Checks: 71 CPU Crystal,
+  43 Python and eight Metal examples. Correlated scoped Adversary: ROBUST.
+- Named history storage/read buffers add 119,169,024 bytes; diagnostic total
+  2,402,022,912 excludes opaque MPSGraph resources. Native counters are
+  zero tracked encode allocations/readbacks/preterminal waits, one terminal
+  drain. Sampled native peak 1.559 GiB, minimum cache-aware headroom
+  38.876 GiB, zero swap growth under 6 GiB / 10% / 64 MiB guards. These
+  measurements do not bound between-poll peaks or establish a speedup.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-history.json`; artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs`.
+  Next falsifier: attention on identical Q and stored K/V, then residual/FFN
+  and per-layer history. No multi-segment append, all-layer parity, full T0
+  preprocessing/RNG, generated T1 or character/style claim. Keep
+  `--allow-unqualified-reference`. Refresh on source/binary/input/weights/
+  geometry/precision/cache/backend/compiler/runtime/device changes or local
+  artifact loss; hashes cannot recover local-only evidence.
+
+### [LM-HY-NOMAS-REFERENCE-BF16-PREATTENTION-2026-11-01] Source mixed-precision block-0 boundaries match exactly
+
+- The opt-in `reference-bf16-preattention` workspace reproduces source BF16
+  SiLU, modulation/projection, QK RMS and RoPE boundaries on the authenticated
+  native-exported T0 preblock inputs: 4,320 image tokens, 529 valid text
+  tokens, 1,280 text-storage rows, original BF16 block-0 weights. All eight
+  pre-QKV and 14 main captures are exact at unchanged `atol=rtol=2e-5`.
+  The ordinary F32 control is also exact on all 22 captures. Replaying the
+  old BF16 captures still fails all 22; no comparator tolerance was widened.
+- Fixed GPU rounding/linear buffers add 114,753,536 named bytes, for a
+  diagnostic total of 2,282,853,888 bytes excluding opaque MPSGraph storage.
+  Both final probes report zero tracked encode allocations/readbacks/
+  preterminal waits and one terminal drain under the cache-aware 10% floor,
+  6 GiB process-tree cap and 64 MiB swap-growth limit. No speed claim follows.
+- The workspace rejects full-forward, serial/history attachment, attention
+  and residual execution. Source-BF16 RMS rejects unwritten padded rows.
+  Fixed an observed per-subclass lifetime-root registry split and restored
+  the encoder with `ensure` after an injected MPS RMS failure. Checks pass:
+  61 CPU Crystal examples, 44 Python tests, nine Metal-linked workspace and
+  default-path examples. Correlated scoped Adversary: ROBUST.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json`;
+  local artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-bf16-20261101.3450pdjh`.
+  Its next store/read falsifier is now covered by
+  `LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01`; remaining block
+  attention/residual/FFN and per-layer cache parity stay open. Prospective K/V
+  do not qualify append, full T0 preprocessing/RNG, T1 or character/style
+  preservation. Keep `--allow-unqualified-reference`; `f32-accum` remains
+  unqualified. Refresh on source/binary/input/weights/geometry/precision/
+  cache/backend/compiler/runtime/device changes or local artifact loss.
+
+### [LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01] Exact saved-latent decoder; first BF16 block-0 divergence localized
+
+- Native PixelUMM and the pinned source MPS control decode the authenticated
+  DCAE latent to byte-identical raw and display pixels: 53,084,160 values
+  each, including the unblended first 20 frames. The source uses the existing
+  gathered-tile QK/softmax/PV F32 adapter, not unmodified eager flex-attention.
+  Native wall/GPU time 63.515/63.466 s; sampled peak 17.029 GiB. This is a
+  saved-latent diagnostic, not a fresh encoder handoff or video speed claim.
+- Exported T0 noise arithmetic matches upstream exactly on the same epsilon
+  (138,240 values). All 14 block-0 main and eight pre-QKV boundaries are exact
+  against widened F32 source controls. F32 cache comparisons use pre-store
+  constituents; native K/V are prospective, with no history append. This does
+  not qualify stock RNG or complete T0 patch/refiner preprocessing.
+- The original native BF16 comparison fails all 14+8 boundaries at unchanged 2e-5
+  tolerances. Earliest capture: modulation SiLU, 777/2048 outside tolerance,
+  max 0.0003126636. On the tested 2,048-element vector, a same-input GPU
+  discriminator shows both input and output BF16 rounding are needed for an
+  exact SiLU match; output-only
+  rounding still fails. No production arithmetic was changed. Source norms
+  and QKV inputs are F32 under autocast, so blanket BF16 is not justified.
+- Fresh guarded native/source runs retain the file-cache-aware 10% floor,
+  process caps and zero swap growth. Native chains report zero tracked
+  allocations/readbacks/preterminal waits and one terminal drain. Opaque MPS
+  resources and between-sample peaks remain outside named counters. Focused
+  checks pass: 53 Crystal examples, 43 Python tests, fresh native builds and
+  strict comparison admission. Correlated diagnostic Adversary: ROBUST.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json`; artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1`.
+  That slice's next falsifier was opt-in BF16 SiLU input/output boundaries, then modulation,
+  normalization, QKV, QK RMS, RoPE and actual cache store against source.
+  Follow `LM-HY-NOMAS-REFERENCE-BF16-PREATTENTION-2026-11-01` for the
+  now-qualified prospective-K/V scope; actual cache storage remains open.
+  Keep `--allow-unqualified-reference`; no T1/full video or RoleWright
+  character/style claim. Prepared clean scene remains unencoded. Refresh on
+  source/binary/input/weights/geometry/precision/cache/backend/runtime/device
+  changes or artifact loss; hashes cannot recover local-only evidence.
+
+### [LM-HY-NOMAS-REFERENCE-ENCODER-2026-11-01] Native image initialization with qualified DCAE-V boundaries
+
+- Downloaded the pinned 4,277,389,995-byte original DCAE-V checkpoint and
+  verified its 169-tensor encoder-only BF16 derivative (1,833,331,160 file
+  bytes). Native prepared MPS/Metal encoding matches pinned upstream
+  `a31c0fe0` / PyTorch 2.8 MPS byte-for-byte at input, post-stage-5 tiles
+  and latent for T4/32x32, T80/32x32 and T120/512x288. The full reference
+  includes both temporal-cache carry transitions. Tolerances remain 2e-5.
+- The full native encode records 306.621 s wall / 306.584 s GPU, zero
+  tracked encode allocations/readbacks/preterminal waits, and one terminal
+  drain. Named diagnostic buffers total 4,663,709,504 bytes; the production
+  Session plan is 4,654,862,144 bytes. Sampled peak 8.8276 GiB, minimum
+  cache-aware headroom 32.7720 GiB and zero swap growth under 12 GiB / 10% /
+  64 MiB / 900 s guards. Opaque MPS resources and between-poll spikes are
+  outside those guarantees. This is initialization cost, not video speed.
+- The opted-in native CLI accepts an authenticated RGB8 image manifest and
+  encoder; normalization/repetition, clean BF16-to-F32 T0 scatter, cache
+  noise and exactly one writer stay on GPU. T0 skips denoising; T1 onward
+  retains generated-segment guards. Encoder owners release after its drain,
+  retaining only a 276,480-byte latent through the DiT drain. Failed waits
+  retain in-flight owners. No full video was generated in this slice.
+- Full-J synthetic timeline arithmetic, 52 CPU Crystal examples, 29
+  Metal-linked checkpoint/cache examples, 14 Python tests, fresh builds and
+  authenticated CPU-only integrated planning pass. Fixed missing conv1/
+  downsample bias, compiled MPS feed reordering, and cross-phase counter
+  validation. Correlated source adversary: ROBUST for the tested encoder,
+  CLI schedule and owner lifetimes; not independent or full video evidence.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json`; local
+  artifacts: `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo`.
+  Keep `--allow-unqualified-reference` required. Follow
+  `LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01` for the now-qualified saved-latent
+  decoder scope and failed BF16 cache gate, then a short
+  controlled continuation from an approved single scene. Do not substitute
+  another text-only RoleWright take. Character/style quality, display-only
+  T0 trim, full+partial tiles, other geometries and combined edit/Cinematic
+  modes remain open. Preserve the 10% floor and one GPU model process.
+  Refresh on source/binary/input/weights/geometry/cache/backend/runtime/
+  device changes or local artifact loss; hashes do not recover lost files.
+
+### [LM-HY-NOMAS-PROMPT-EDIT-QBIT-2026-11-01] Compact edited B state reproduces regenerated C after restart
+
+- Four fresh native DiT intervals qualify the single authenticated B prompt
+  edit with QBit states after A and edited B. Continuous QBit roundtrips and
+  the split compact restart match bitwise at eight Euler captures, both B/C
+  slices and all 829,440 timeline values. The 552,960 A latent bytes and each
+  interval's unused post-stop noise remain exact. Post-B binds the prompt,
+  `[557,585,557]` text-turn schedule and actual 9,782-token history extent.
+- Complete compact A/B states occupy 2,005,497,939 / 4,007,409,948 bytes,
+  53.57% / 53.72% less than their exact controls. Live history remains F32.
+  QBit vs exact edited output fails unchanged `atol=rtol=2e-5` (full-bank max
+  absolute difference 3.53125); that lossy diagnostic is separate from exact
+  QBit control/restart parity and establishes no perceptual equivalence.
+- A narrow CLI admission permits compact restore plus interior QBit rounds
+  only on a restored final interval; initial/nonterminal combinations still
+  reject. Four real wrong-prompt/branch/boundary/old-state preflights reject
+  before Metal/model setup. Nineteen hostile checker cases, 95 total Python
+  tests, 44 Crystal examples, fresh release builds and native matrix pass.
+  Header/payload authentication is local consistency, not proof of arbitrary
+  forged KV semantics or signed provenance.
+- Fresh GPU codec restore matches its in-memory reconstruction bitwise;
+  fresh variable-text GPU history matches pinned upstream attention/cache
+  at unchanged tolerance (max error `7.45058e-9`, K/V exact). Prior real
+  Qwen/refiner results are reused after source/input/payload authentication.
+  These do not establish full upstream DiT/decoder/video parity.
+- Every DiT interval records zero instrumented encode allocations/readbacks/
+  preterminal waits and one terminal drain. Sampled peak 30.1257 GiB, minimum
+  cache-aware headroom 15.7548 GiB, swap growth zero under 32 GiB / 10% /
+  64 MiB / 900 s guards. Opaque MPS allocations and between-sample spikes
+  remain outside those guarantees; setup and terminal file I/O use CPU.
+- Matched 15-second exact-edited-left/QBit-edited-right media binds both
+  consumed banks, decoder weights/noise/settings and finite raw pixels.
+  First 100 pixel frames match bitwise; final20 A frames overlap B. B/C raw
+  RMSEs 0.0146474/0.0415079 are diagnostic only. Fresh decoder sampled peak
+  18.8089 GiB and zero swap under 26 GiB / 10% / 64 MiB / 1200 s guards;
+  encoder counters remain 0/0/0 with one terminal drain. Both originals and
+  the synchronized comparison have 360 frames at 24 fps; visual motion
+  quality remains open.
+- Return: `docs/hy-nomas-generation-frontier.md`. Artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa`.
+  Correlated adversary is ROBUST for tested state/restart and media integrity
+  with the declared pixel-overlap boundary. All 54 collected artifacts and
+  15 final source pins rehash correctly. Canonical evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-prompt-edit-qbit.json`.
+  Exact checkpoints remain default. UI, multiple/combined edits, isolated
+  QBit prompt causality, speedup and perceptual quality remain open. Refresh
+  on source/binary/prompt/input/noise/weights/codec/geometry/backend/device
+  changes or local artifact loss. Local hashes cannot recover artifacts.
+
+### [LM-HY-NOMAS-PROMPT-EDIT-2026-11-01] One changed B prompt preserves A and regenerates C with exact restart
+
+- Five fresh native BF16 DiT processes qualify an authenticated B prompt
+  replacement, with visible text lengths `[557,585,557]` and a new cached text
+  turn for B and original-prompt C. Restore post-A; invalidate all original
+  B/C history. All 552,960 A latent bytes and unused future noise remain exact.
+  Continuous and split/restarted B/C match bitwise at all eight Euler updates,
+  both segment slices and the full 829,440-value timeline. B and C both change
+  from the original control; the unedited full bank matches its prior control.
+- The prompt identity binds authenticated conditioning bytes, valid text rows
+  and following-turn policy to every post-B checkpoint. Post-A remains reusable.
+  Five real rejection cases fail before model setup; hostile tests reject a
+  coordinated forged after-B contract and descendant link. Release builds,
+  36 focused Crystal examples and 59 Python regression tests pass.
+- Native Qwen matches all 27 upstream BF16 states and its 1,280-token crop
+  bitwise. Real B585/C557 refiner text/vec outputs match pinned upstream MPS
+  bitwise at timesteps 1000/206.897. A tiny changing-text attention/history
+  fixture matches upstream at unchanged `atol=rtol=2e-5` (max error
+  `7.45058e-9`, cached K/V exact). These are scoped boundary checks, not full
+  upstream DiT/decoder or video parity.
+- All five DiT runs record zero instrumented encode allocations, readbacks
+  and preterminal waits, with one terminal drain each. Sampled peak 29.9163
+  GiB, minimum cache-aware headroom 17.0209 GiB, swap growth at most 0.82 MiB
+  under 32 GiB / 10% / 64 MiB / 900 s guards. Opaque MPS allocations and
+  between-sample spikes remain outside these counter/sample guarantees.
+- Matched 15-second original-left/edited-right videos use authenticated banks;
+  the prior original decode is reused only after full-bank bitwise equality.
+  First 100 pixel frames match exactly; A's final 20 pixel frames can change
+  through decoder overlap despite immutable A latents. Finite raw outputs,
+  360-frame/24 fps exports and current media hashes pass fresh revalidation.
+  User motion/instruction-following review remains open.
+- Same-lineage correlated adversary: ROBUST for the bounded native edit,
+  refiner and produced-pair integrity. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json`.
+  Exact checkpoints remain default; UI and multiple/combined edits remain
+  open. Edited QBit execution is qualified in the later landmark above.
+  Refresh on code/binary/input/noise/weights/
+  codec/geometry/backend/device change or local artifact loss. Local hashes
+  cannot recover artifacts. Commands: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-SEGMENT-EDIT-VIDEO-2026-11-01] Matched original/edited B/C videos preserve the unaffected prefix
+
+- Two serial native decoder-only runs consume the authenticated original
+  `[1,3]` and edited restart `[2,3]` terminal banks. One 90-latent/360-pixel
+  schedule uses 17 windows with matching executable bytes, BF16 block/head
+  weights, F32 stem, conditioning, noise and settings. Pinned upstream window
+  geometry agrees; full upstream neural/video parity remains open.
+- All 44,236,800 raw F32 values in pixel frames `[0,100)` match bitwise.
+  Overlap `[100,120)` and both B/C regions change nonvacuously. B/C RMSEs
+  0.105157857/0.135158929 describe an intended new take, not numerical parity
+  or quality. A's latent prefix remains exact; overlap can change its final
+  20 decoded frames. The fresh original full raw output also matches the
+  prior exact 15-second native control bitwise.
+- Finite 637,009,920-byte outputs, both 512x288/24 fps/15-second originals,
+  synchronized comparison and lossless raw previews pass authentication and
+  export checks. Left is original, right is edited B/C. Selected stills keep
+  the scene/characters; user motion review remains the next quality gate.
+- Fresh release build and 48 Python tests pass. Both runs record zero
+  instrumented encode allocations/readbacks/preterminal waits and one drain.
+  Sampled peak 18.8106 GiB, minimum cache-aware headroom 29.0074 GiB, zero swap
+  growth under 26 GiB / 10% / 64 MiB / 1200 s guards. Sampling and opaque MPS
+  limitations persist; this ordered pair supports no speedup conclusion.
+- Same-lineage correlated adversary: ROBUST for bounded pair integrity.
+  Evidence: `.landmark/evidence/2026-11-01-hy-nomas-segment-edit-video.json`
+  and `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/qualification-summary.json`.
+  Native/checker/export pins bind their respective executions; local-only
+  hashes cannot recover artifacts. Refresh on code/binary/input/noise/weights/
+  codec/geometry/backend/device changes or artifact loss. Commands and open
+  prompt-edit/QBit boundaries: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-SEGMENT-EDIT-2026-11-01] A retained prefix supports a new B/C take with exact restart lineage
+
+- Five fresh BF16 DiT processes share one authenticated six-segment input bank
+  and scene prompt. Reuse post-A state, substitute unused F initial noise for
+  B on the GPU, and regenerate B/C. Continuous and split/restarted edited runs
+  match bitwise at all eight Euler updates and all 829,440 timeline values.
+  Both B and C change from the original control; A and future noise stay exact.
+- Applied edit identity binds every descendant checkpoint. The actual edited
+  post-B state is rejected by the base branch and another donor branch before
+  model setup. Exact/QBit contract gates pass specs; the real edit matrix is
+  exact only. The unedited full timeline matches the prior native control
+  bitwise. Exact checkpoints and shared conditioning remain defaults.
+- The existing gather offset is the only added GPU choice: original and edited
+  B/C both encode 19,457 command segments. All five runs have zero instrumented
+  encode allocations/readbacks/preterminal waits and one terminal drain each.
+  Sampled peak is 29.2121 GiB, minimum cache-aware headroom 19.4075 GiB, swap
+  growth zero under 30 GiB / 10% / 64 MiB / 900 s guards. Opaque MPS allocations
+  and between-sample spikes remain outside those counter/sample guarantees.
+- Release builds, 48 Crystal examples and 47 Python tests pass. Pinned upstream
+  gather/scatter expressions match the tiny native GPU fixture with error 0;
+  RoPE evidence is source-level global-offset selection only. Tolerances stay
+  `atol=rtol=2e-5`. Same-lineage correlated adversary verdict is ROBUST within
+  this slice; full upstream neural parity, edited video quality and new edited
+  QBit execution are open.
+- This is a noise take with one shared prompt, one edit and an unused donor,
+  not prompt editing. At most five active segments fit the six-segment bank.
+  A's last 20 decoded pixel frames may change because decoder windows overlap.
+  Matched continuous-bank decoding is qualified in the video landmark above;
+  user motion review remains open. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-segment-edit.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/qualification-summary.json`.
+  Refresh on code/binary/input/noise/weights/codec/geometry/backend/device
+  change or artifact loss. Commands: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-COMPACT-VIDEO-2026-11-01] Matched 15-second checkpoint videos pass integrity; user sees practically no visual difference
+
+- Two serial native decoder runs consume the authenticated terminal exact and
+  compact `[2,3]` restart timelines. One 90-latent/360-pixel-frame global
+  schedule uses 17 windows; both arms share the executable, BF16 block/head
+  weights, F32 stem and original noise. No new DiT generation ran. The pinned
+  upstream pure window helper agrees with the schedule; this is geometry-only
+  evidence, not full upstream numerical video parity.
+- All 100 unaffected opening pixel frames match exact/QBit bitwise. Each arm's
+  first 220 frames matches its prior 10-second raw control bitwise. Windows at
+  latent starts 25/55 cross A/B and B/C; future segments can change the previous
+  segment's last 20 pixel frames despite immutable DiT latent prefixes.
+- Raw pixel RMSE versus exact is A 0.000922836, B 0.016688471, C 0.047378404.
+  Selected lossless frames show small contour/background differences without
+  obvious gross scene destruction. On 2026-11-01 the user reported practically
+  no visual differences in the 15-second pair after two compact boundaries.
+  This observation is limited to this scene/configuration; exact mode stays
+  default and the `2e-5` tolerance is unchanged.
+- Both 15-second 512x288/24 fps originals and synchronized comparison pass
+  frame-count/duration/hash checks. The re-encoded comparison is exact-left,
+  QBit-right. Raw F32 files and lossless previews remain for fine detail.
+- Sampled peak is 18.8096 GiB, minimum cache-aware headroom 25.1403 GiB, swap
+  growth zero under a 26 GiB cap, 10% reserve, 64 MiB swap-growth stop and 1200 s
+  deadline. Instrumented encode allocations/readbacks/preterminal waits are
+  zero; terminal waits are one per process. Opaque MPS allocations and sample
+  gaps remain limitations. No speedup is claimed from this single ordered pair.
+- Release build, 39 Crystal examples, 19 Python tests and formatting pass;
+  correlated adversary review is ROBUST for pair authentication. Local-only
+  evidence: `.landmark/evidence/2026-11-01-hy-nomas-compact-video.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/qualification-summary.json`.
+  Refresh on source/binary/codec/input/noise/weights/geometry/backend/device
+  change or artifact loss. Scope, commands and next gate:
+  `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-COMPACT-RESUME-2026-11-01] Compact GPU QBit checkpoints reproduce the roundtrip control through two restarts
+
+- Eight fresh BF16 DiT processes cover A/B/C (3 x 5 seconds, four Euler steps
+  each). Exact restart matches its continuous control bitwise; compact restart
+  matches continuous QBit roundtrips bitwise across all 12 updates and the full
+  829,440-value timeline. A and untouched future noise are preserved. No new
+  decoder or complete-video run occurred.
+- Actual checkpoint bytes fall from 4,319,223,820 to 2,005,497,939 after A and
+  from 8,141,283,340 to 3,755,273,865 after B (2.154x / 2.168x). Packing happens
+  in each existing F32 row slot; only row headers/codebook/stats are additional
+  GPU storage. The exact latent/noise bank is retained. Live attention K/V
+  remains F32; no live-residency or speedup claim is made.
+- Loss relative to the exact-cache control grows: B RMSE 0.0885057 / relative
+  L2 0.0758877; C RMSE 0.230108 / relative L2 0.188021. Both fail the unchanged
+  2e-5 tolerance. Serialization introduces no additional loss to this QBit
+  treatment. This matrix did not assess perceptual quality; the later matched
+  15-second user review is recorded in LM-HY-NOMAS-COMPACT-VIDEO above.
+- All eight native intervals record zero instrumented encode allocations,
+  readbacks and preterminal waits, with one terminal wait. Sampled peak is
+  29.567 GiB, minimum cache-aware headroom 14.548 GiB, swap growth zero, under
+  the unchanged 30 GiB cap / 10% reserve / 64 MiB swap-growth / 900 s guards.
+  Opaque MPS resources are outside allocation counters; samples miss spikes.
+- Focused checks pass 37 Crystal examples and 17 Python tests; both legacy
+  callers build. The small GPU codec matches 768 values and timeline bitwise.
+  Pinned source-body F32/MPS cache-attention outputs/K/V have maximum error 0;
+  full real-DiT BF16/CUDA/Magi or PixelUMM upstream parity is not established.
+- ROBUST within bounded same-host/frozen-executable qualification, with
+  same-lineage correlated review and rehashed F32 artifacts. Native/checker
+  pins and per-arm binary hashes are verified; external runner digests are
+  finalization-time records, not original-execution attestations. Exact mode
+  stays default. Refresh on code/codec/input/weights/geometry/backend/device
+  changes or artifact loss. Cross-build migration, crash recovery and Studio
+  integration remain open. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-compact-resume.json`; commands and
+  next quality boundary: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-QBIT-CONTINUATION-2026-10-31] Bounded adaptive-cache comparison integrity passes; user finds the pair visually indistinguishable
+
+- The exact control/save/restart reproduces all four B updates and the full
+  timeline bitwise. The QBit arm preserves A and untouched future noise, but B
+  differs (RMSE 0.0885057, relative L2 0.0758877, max absolute error 2.25195)
+  and fails the unchanged `2e-5` tolerance. This is lossy continuation, not
+  exact-equivalent output.
+- Exact and QBit timelines passed same-decoder/noise/settings provenance,
+  finite raw-pixel, and video-export integrity checks for 10 seconds at
+  512x288/24 fps. On 2026-11-01 the user reported no visible difference in this
+  pair. This does not establish general quality or full-upstream CUDA/PixelUMM
+  parity.
+- Logical K/V bytes fall from 4,314,857,472 to 2,001,104,400 (2.156x including
+  headers), with 41,207,936 extra resident bytes. F32 caches and the
+  4,319,223,820-byte exact restart bundle remain; no live-memory or compact
+  restart win is established. No speedup claim is made.
+- Exact-path refresh matches the stored pinned source-body compact-MPS oracle
+  for all 276,480 selected latents and matches prior native-decoder pixels by
+  SHA-256. These stored references do not establish a new full-upstream run.
+  Defaults remain exact F32. Refresh on code/binary/codec/input/weights/backend/
+  device change. Evidence: `.landmark/evidence/2026-10-31-hy-nomas-cache-qbit.json`;
+  scope and commands: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-SEGMENT-RESTART-2026-10-31] Post-A state reproduces B after a fresh-process restart
+
+- A bounded real BF16 54-layer DiT matrix compares uninterrupted A-to-B,
+  A/save/exit, and fresh restore/B with identical authenticated inputs. All
+  four B Euler updates and the complete latent timeline are bitwise equal;
+  A's 138,240-value prefix is unchanged. Tolerances remain `atol=rtol=2e-5`.
+  No decoder, Studio or complete video generation ran.
+- The 4,319,223,820-byte bundle streams the full timeline and the valid F32 K/V
+  prefixes of all 54 layers directly from/to shared Metal storage. Whole-file
+  and per-record hashes, exact identity/inventory, fresh-owner restore and
+  post-writer cursor gates reject partial or incompatible state. Import errors
+  poison the owner. A last-frame latent alone cannot reproduce continuation.
+- Instrumented encode allocations/readbacks/preterminal waits are zero, with
+  one terminal wait per native process. The real matrix passes the 30 GiB cap,
+  10% reserve, 64 MiB swap-growth stop and 900 s deadline: sampled peak
+  24.792 GiB, minimum cache-aware headroom 18.571 GiB, swap growth zero.
+  Counters exclude opaque MPS allocations; sampling cannot bound every spike.
+- The synthetic 54-layer restart also matches B+C bitwise. Its full continuous
+  output and final K/V match the pinned upstream F32 MPS cache-attention
+  adapter bitwise; changed/zero K/V and changed future inputs are detected.
+  This does not establish full real-DiT BF16/CUDA upstream continuation parity.
+  Focused CPU checks pass: 28 Crystal examples and 15 Python tests.
+- ROBUST within same-host, unchanged-executable qualification; the executable
+  pathname hash does not qualify hot replacement of a loaded binary. Cross-build
+  migration, crash/power-loss recovery and Studio integration remain open.
+  Next falsifier: edit A, invalidate dependent B state, and compare regeneration
+  from the earliest valid boundary. Refresh on code/binary/input/weights/policy/
+  geometry/backend/device change. Evidence and exact commands are indexed in
+  `.landmark/evidence/2026-10-31-hy-nomas-segment-restart.json` and
+  `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-PIXELUMM-RECOVERY-AA-2026-10-31] Short-idle decodes are slower at lower observed GPU frequency
+
+- Two fresh decoder-only processes, short-long and long-short order, use one
+  warmup and two same-owner requests each. Short-idle walls are 155.390/161.184 s;
+  long-idle walls are 145.518/145.703 s. Interior mean active frequencies are
+  1253.8/1200.8 MHz versus 1355.7/1352.0 MHz, with 100% observed GPU residency.
+  This is descriptive evidence for frequency-associated drift, not causal
+  thermal attribution or an explanation of the earlier twofold slowdown.
+- Fresh hashes of all six full displays equal the saved source-MPS oracle.
+  Every pass retains 11,731 segments, 42 stable owners, zero tracked encode
+  allocations/readbacks/preterminal waits and one terminal wait. Sampled peak
+  process footprint 21.154 GiB, minimum cache-aware headroom 25.800 GiB, swap
+  growth zero; 26 GiB cap and 10% reserve remain unchanged.
+- Strict RAW4 deadline/receipt checks admit actual 1.004--1.011 s and
+  120.010--120.011 s gaps. The 2-second observer has 714/714 valid samples;
+  short-idle interiors are unresolved. Owned sampler group absence is checked
+  before raw finalization. No model or observer remains running.
+- Recovery sleep worsens total throughput. Next: reduce GPU FFN/attention work
+  under matched frequency/warmup, preserving parity and queue policy. Changed
+  source/weights/inputs/oracle invalidates parity; changed host, binary, MPS or
+  scheduling conditions requires new timing. See
+  `.landmark/evidence/2026-10-31-pixelumm-recovery-aa.json` and
+  `docs/hy-nomas-generation-frontier.md` for checks, artifacts and limitations.
+
+### [LM-HY-NOMAS-QUALITY-20S-CONTINUATION-2026-10-30] Native 20-second export passes structural checks; motion trajectory remains vulnerable
+
+- VERIFIED within bounded scope: four linked five-second AR segments produce
+  480 finite, nonconstant 512x288 frames at 24 fps. Four segments changed from
+  initial noise; the unused latent-bank suffix stayed unchanged. Decoder
+  coverage is 23 global windows at latent starts 0, 5, ..., 110. Instrumented DiT
+  and decoder encodes show zero allocations/readbacks/preterminal waits and one
+  terminal wait per phase. These checks establish execution/file integrity,
+  not perceptual quality.
+- Guard passed: 742.0248s total (37.1012s/video-second), 33.676 GiB sampled peak,
+  11.782 GiB minimum cache-aware headroom and 9.31 MiB swap growth under a 10%
+  reserve, 35 GiB cap, 64 MiB swap-growth cap and 1200s timeout. Sampling does not
+  bound inter-sample spikes; timing is one uncontrolled run.
+- Native PixelUMM matches pinned upstream BF16 raw merged pixels on the same
+  latent and decoder noise against revision
+  `911cea6458a89c2663513ff7099561ec190dd491`, with maximum error 0; 468
+  source-weight checks pass at unchanged 2e-5 tolerances. Scope is the gathered
+  spatial-tile F32 QK/softmax/PV MPS adapter, not unmodified CUDA/FlexAttention
+  parity.
+- Matched four-step simple/structured prompt A/B changes only text conditioning;
+  the simple arm reproduces its saved control. Twenty-second prompt uses one
+  shared no-action scene description with 342 valid Qwen tokens, without
+  per-segment directorial control. User full-motion review identifies the same
+  tram exiting beyond frame, then returning backward along its previous
+  track/path to the scene middle, not as another tram on the nearer
+  opposite-direction tracks. The requested trajectory is VULNERABLE; cause
+  remains unresolved among model, prompt and native continuation. This
+  corrects the selected-frame inference; do not infer disappearance, identity
+  loss, or a rail switch.
+- Full upstream continuation parity is not established. Native history is F32 vs
+  pinned upstream BF16, and authenticated MPS-generated noise banks do not
+  reproduce stock upstream CPU-seed RNG values. Do not promote the path as the
+  default. Next discriminator: source-faithful upstream segment2 using the same
+  shared prefix, comparing cache state, intermediates and raw output.
+- Run identity: parent HEAD0757d5682be0c521927b035de3fb6cbcc07ea17e; binary
+  SHA256 `72d429dbafbe21cf7055b880d4e2f75a6eceeba987fe53ba3608b01e88e96a37`;
+  run validation matched all 45 frozen/current source files before formatting.
+  `formatting-lineage.json` verifies five files equal mechanical formatting of
+  their frozen source and forty remain unchanged. A separate release rebuild,
+  71 Crystal examples, 32 Python tests (one skipped), and format checks pass.
+  No model rerun is inferred from this formatting or rebuild.
+- Evidence `/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty`
+  (`validation.json`, `identity.json`, `correlated-adversary.json`). Saved
+  packet `.landmark/evidence/2026-10-30-hy-nomas-quality-continuation.json`.
+  Refresh on source/binary/input/precision/geometry/backend/device/guard change;
+  timing also decays with load, cache state and thermal conditions.
+
+### [LM-HY-NOMAS-STEPS-64-96-128-2026-10-30] Longer BF16 schedules qualify numerically without a uniform sampled detail gain
+
+- VERIFIED bounded five-second512x288/24fps previews at64/96/128, matching
+  saved32 prompt/seed42/inputs/conditioning/noise/shift5/CFG1 and one-step
+  PixelUMM. Saved32 is authenticated, not rerun. Larger counts exceed the
+  distilled checkpoint's documented4/6/8; default8 and Q4 cap8 remain.
+- BF16 scheduler/shared cursor admit1..128, reject0/129 before Metal or chain
+  append. Fresh96-step qualification found a real first-half CPU linspace
+  contraction mismatch: sigma26/29 one ULP, timestep26 error6.1035156e-5.
+  Math.fma fixes it with an exact fail-before regression; tolerances stay2e-5.
+  Five native GPU Euler controls at8/32/64/96/128 match every intermediate
+  exactly. CPU fmaf family coverage1..128 is a separate candidate check.
+- Guarded seconds425.846/746.990/889.429, or85.169/149.398/177.886 per video
+  second. One fresh process/count, ascending order, uncontrolled caches/load
+  and decoder drift; descriptive only. Saved32 timing is another cohort.
+- Six sampled stills/count show no uniform64/96/128 improvement over32;
+  warped windows/people/lettering persist, with no clear continuous rail pair
+  in visible sampled street portions. Foreground is often occluded. Motion,
+  collision behavior and full upstream neural-video parity remain open.
+- All guards pass10% reserve/23GiB cap/64MiB swap-growth stop/1800s timeout:
+  3,950 samples,20.331006GiB sampled peak,16.498596GiB minimum cache-aware
+  headroom, swap growth0. One terminal wait/phase, tracked encode allocations/
+  reads/early waits0. Root counts are observational metadata, not a work-count
+  invariant; sampled memory does not bound between-poll peaks.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-steps-64-96-128-20261030:
+  summary/final-check, viewing/timing notes, receipts, guards, media and fresh
+  fixtures. Parentcccc3c87;107-file index plus four reused32 references SHA256
+  c844c6430c7d4ae6f01f5c2df04ccaf55742a457806c0e6b22214e5b02cf64f4.
+  Release builds,32 focused CPU examples, nine compiled negative cases, five
+  GPU controls, three guarded exports, final validator and format checks pass.
+  Same-lineage Mini-Quad ROBUST within scope; no independent replication.
+  Return docs/hy-nomas-generation-frontier.md, extended-preview section.
+  Next artifact falsifier: fixed generated latent/noise through upstream/native
+  raw PixelUMM. Per-step BF16 lost updates are a separate unmeasured hypothesis;
+  compact GPU counters read after the existing wait would discriminate it.
+  Refresh on scoped source/input/artifact/geometry/precision/backend/device/
+  toolchain/guard changes; timing also decays with load/cache/order/thermal state.
+
+### [LM-HY-NOMAS-STEPS-8-16-24-32-2026-10-30] Longer BF16 schedules complete without a clear 32-over-24 quality win
+
+- VERIFIED bounded five-second512x288/24fps previews at8/16/24/32, fixed
+  authenticated inputs/seed42/conditioning/noise/shift5/CFG1 and one-step
+  PixelUMM. The eight-step pixels and MP4 reproduce the previous experiment.
+  Larger counts are experimental beyond the distilled checkpoint's4/6/8.
+- BF16 admits1..32; default8 and Q4's cap8 remain. Cursor rejects pass33,
+  wrong block order and new-chain reuse without exactly one preceding wait.
+  Fresh pinned-source MPS Euler controls match all intermediate latents and
+  schedules exactly at unchanged2e-5. Full upstream neural-video parity open.
+- Guarded seconds144.123/198.684/255.249/323.692, or28.825/39.737/51.050/
+  64.738 per video second. One sample/count, ascending order and decoder/cache
+  drift: descriptive only, excluding MP4 export and live text encoding.
+- Six sampled stills/count show similar24/32 detail with persistent people,
+  window and lettering artifacts. No clear32-over24 win, motion-quality,
+  monotonic-quality or artifact-cause claim. Keep default8.
+- All four guards pass10% reserve/23GiB cap/64MiB swap-growth stop/900s:
+  1,772 samples,19.966656GiB sampled peak,14.811356GiB minimum cache-aware
+  headroom, swap growth0. One terminal wait/phase, tracked encode allocations/
+  reads/early waits0. Sampled footprint excludes between-poll guarantees.
+- N32 has32895 observed roots, one below empirical1028*N. Tracker counts
+  root identities, not model operations; all32 ordered step events complete.
+  Reject the extrapolation as an invariant; exact MPS/tracker cause unresolved.
+  No counter/runtime/numerical tolerance changed to accept this observation.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-steps-8-16-24-32-20261030;
+  summary/final-check/root-segmentation-audit, receipts, guards, media, Euler
+  fixtures and70-file evidence index SHA256
+  6932a7bcbc61843c5478da6ee23c289342771cdf800908b6ca4fe78139101ed2.
+  Parent617c81c9. Release builds,31 focused CPU examples, eight negative cases,
+  four GPU Euler controls and four guarded exports pass. Same-lineage Mini-Quad
+  ROBUST within scope; quality ordering remains VULNERABLE.
+  Return docs/hy-nomas-generation-frontier.md, extended-preview section.
+  Next: fixed generated latent/noise through upstream/native raw PixelUMM.
+  Refresh on scoped source/input/artifact/geometry/precision/backend/device/
+  toolchain or guard changes; timing also decays with load/cache/order.
+
+### [LM-HY-NOMAS-STEPS-2-4-6-8-2026-10-30] Matched BF16 previews expose a poor two-step sample, not the cause of all artifacts
+
+- VERIFIED bounded 512x288/24fps five-second 2/4/6/8 DiT-step generation with
+  identical authenticated inputs, seed42, saved Qwen state26, decoder noise,
+  shift5/CFG1 and one-step PixelUMM. Eight-step pixels and MP4 reproduce the
+  preceding BF16 preview byte-for-byte. Full upstream video parity is open.
+- New --steps defaults8; this measured build admits1..8 before Metal. A
+  fail-before six-step test found direct rational division differs from
+  upstream CPU torch.linspace. The corrected two-ended F32 schedule matches
+  fresh pinned-source MPS sigma/dt/timestep and every BF16 Euler state exactly
+  for all four counts at unchanged2e-5. Legacy v1 fixture still passes.
+- Guarded seconds are150.543/153.912/155.626/156.632 for2/4/6/8, approximately
+  30..31.3s per video second. Order8/2/4/6, one sample/count and decoder
+  drift73.980..89.889s prohibit a causal speedup claim. MP4 export and live
+  text encoding are excluded; no longer-video throughput claim.
+- Six sampled stills/count show severe two-step smearing, clearer four-step
+  detail and sharper six/eight-step output with persistent geometry/people/
+  lettering artifacts. No motion, monotonic-quality or root-cause conclusion.
+  Two is outside upstream's documented distilled4/6/8 quality settings.
+- All guards pass10% reserve/23GiB cap/64MiB swap-growth stop/900s timeout:
+  sampled peak19.874432GiB, minimum cache-aware headroom17.087662GiB, swap0.
+  One terminal wait per phase; tracked encode allocations/readbacks/early
+  waits0. Opaque MPS resources and terminal export remain outside counters.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-step-comparison-20261030;
+  summary.json, build-identity.json, oracles, guards, videos and contact sheets.
+  Parent9c6d4271. DoD: release builds,13 focused CPU examples, four fresh GPU
+  Euler fixtures plus legacy control, negative CLI/oracle cases and four
+  guarded120-frame exports pass. Same-lineage Mini-Quad ROBUST within scope.
+  Return docs/hy-nomas-generation-frontier.md, matched-preview section.
+  Next: user-authorized8/16/24/32 extension; preserve default8 and qualify
+  wider scheduler/loader bounds before generation. Artifact localization
+  requires fixed generated latent/noise through upstream/native raw decoder.
+  Refresh on source/input/artifact/geometry/precision/backend/device/toolchain
+  or guard changes; timings also decay with load, cache and launch order.
+
+### [LM-HY-NOMAS-PIXELUMM-B2-PHASES-2026-10-29] B2 moves host API waiting without a qualified full-forward speedup
+
+- VERIFIED bounded full-J J21120, 36-block plus global-head diagnostic: two
+  fresh 15-request normal/reverse processes retain BF16 weights, F32 FFN,
+  GPU-resident handoff, one terminal wait and zero tracked encode allocations,
+  pre-wait activation reads or stage-metric reads. No full generation ran.
+- Graph calls fall 7025->3785 and roots 4579->2779. Observer-off mean request
+  times are 54.506625/55.870329 s normal and 62.911368/58.049763 s reverse
+  (baseline/B2; two samples per path/order). CPU encode saves 0.097/0.140 s.
+  The sign-changing contrasts and post-profile carryover do not qualify speed.
+- Profiled attention continuation wall shrinks 53.314359->44.870862 s normal,
+  while projection/residual grows 0.345937->9.191624 s; reverse repeats the
+  relocation. All 2690 measured calls over 10 ms intersect prior GPU-root
+  intervals, excluding the current root. This is not active shader timing or
+  a physical driver/queue-cause proof. Unchanged FFN root intervals also drift.
+- All 516 retained finite stage captures match saved upstream BF16 words
+  exactly at unchanged atol=rtol=2e-5, revision
+  911cea6458a89c2663513ff7099561ec190dd491; no fresh upstream forward.
+  Sampled peak 27.148151 GiB, minimum cache-aware headroom 11.698792 GiB,
+  zero swap growth; 28.5 GiB cap and 10% reserve pass. Not an isolated B2
+  memory delta or between-poll bound; residual Metal allocation is unresolved.
+- DoD: release build, 49 focused Crystal examples, eight Python falsifiers,
+  pre-observer CLI rejection and both guarded GPU cohorts pass. An offline
+  summary-field repair follows measurement, with its own source snapshot and
+  receipt; measured runtime sources/binary/fixtures remain unchanged.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-phases-20261029;
+  phase-analysis.json SHA
+  7cf5cee581b0fdc4c590bc9272eaeecafee8a947cc39ae21c04fb3c3c925aad4,
+  post-analysis-receipt.json SHA
+  0b77416790ece9b030ba11699d9854857e673f08e6e4cc53f839c9d158ceedd3.
+  Return docs/pixelumm-window-batch-attention.md, phase diagnosis section.
+  Same-lineage Mini-Quad: ROBUST bounded observations/nonqualification;
+  VULNERABLE for "B2 cannot accelerate" or causal driver claims. Keep opt-in.
+  Next: quiet observer-off balanced repetitions for speed, bounded Metal System
+  Trace/per-encoder timing for the mechanism, without extra waits. Refresh on
+  scoped source/artifact/geometry/precision/backend/device/toolchain/guard or
+  schedule/lifetime changes; timing also decays with load and pacing.
+
+### [LM-HY-NOMAS-PIXELUMM-PENDING-WINDOW-2026-10-29] Full-J traces reproduce the callback-pending window, not its cause
+
+- VERIFIED CPU-only replay of four pinned order/paced-A/A reports finds all 3,041
+  continuations over 10 ms among 54,936 events at exactly 63 earlier
+  callback-pending roots, excluding the submitted root. All are nested
+  attention calls; the oldest root is current-63 and its callback arrives
+  during the call. Callback-to-return is 0.012458..0.210292 ms. No GPU ran.
+- Oldest-root candidates are pure gate/up 840, down 420, mixed FFN 420; preserve
+  mixed groups. Caller phase does not identify waited work or exclusive GPU
+  service. Excluding captured A/A reverse request 1, 66.323 ms caller CPU
+  versus 337.096 s long-call wall and small envelope-minus-union gaps do not
+  prove removable waits/ALU saturation.
+  No explicit 64-buffer queue setting exists; observed 63 is not a capacity
+  measurement. Identical pending histograms coexist with 42.792->60.195 s.
+- Shared analyzer uses integer ticks for pending/strict 10 ms boundaries,
+  censors fallback/unknown sources, preserves the FFN overlap-only caller,
+  and rejects vacuous empty-group claims. Heap-based independent recomputation
+  checks 1,204 saved exact finite 2e-5 records across 28 requests and lifecycle
+  counters. Old guard receipts retain 10%; no fresh GPU/upstream/payload audit.
+  Captured AA reverse request 1 is descriptive-only, excluded from timings.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-pending-window-20261029;
+  independent-check.json, order-analysis.json, aa-analysis.json,
+  cross-check.json, ffn-analysis.json and analysis-manifest.json.
+  Return docs/hy-nomas-performance-introspection.md, full-J pending section.
+  DoD: three analyzer suites pass 28 tests, three pinned-report CLIs exit 0,
+  cross_check.py matches all 12 traces, and git diff --check passes.
+  Next: matched full-J diagnostic-policy replay; 44.939->84.561->50.567 s has
+  no continuation trace. Old 43.356/69.456 s compares different inputs.
+  ROBUST only for pinned observations/offline contract, not causal speed.
+  No runtime/default/synchronization changes; refresh on scoped source,
+  artifact/clock/input/geometry/backend/device/schedule/toolchain changes.
+
+### [LM-HY-NOMAS-NOMINAL-HEADROOM-2026-10-29] Twofold nominal gap is not an upstream speed measurement
+
+- VERIFIED CPU-only recomputation at parent73909256: the 54.013s ideal versus
+  103.315s historical preview compares counted work/nominal13.6TFLOP/s with
+  measured neural time. It is not an attainable floor or native/upstream ratio.
+- Real J21120 isolated gate/up/down rates are11.457/10.803TFLOP/s of counted
+  work per GPU-root interval (84.24/79.43% nominal, not ALU utilization). No
+  transfer to J5760 or36-block latency is admitted. Halving the saved preview's
+  entire decoder/display phase implies1.485659x neural/1.292826x application
+  speedup conditionally; these are not measured gains.
+- Three correlated Quad audits separate unchanged-arithmetic failures from
+  rejected F16/SDPA accuracy paths. Drift44.939->84.561->50.567s remains open.
+  Decision: pause blind tile/fusion grids; next probe is native J5760 FFN A/A
+  with GPU checks, reused buffers, one terminal wait and no per-sample host
+  capture allocation/hash/GC. Its current fixture is initial-noise conditioning,
+  not generated DiT latents; it cannot diagnose the distinct full-J chain's
+  drift, which needs a matched-chain diagnostic-policy replay. Keep2e-5
+  gates/10% reserve; no generation ran.
+- DoD: external verify_headroom.py PASS for five pinned reports/516 records,
+  local links/anchors and git diff --check. Return
+  docs/hy-nomas-performance-introspection.md, current reassessment section;
+  evidence /opt/mldata_ssd/cogni-ml/hy-nomas-deep-quad-20261029/headroom-audit.json
+  SHA cc653be8c7c6af00b634c547281aa81c98fad7675ec08670036a266ecb57e2ae.
+  ROBUST for scoped arithmetic; causal/stable-speed claims remain VULNERABLE.
+  Refresh on source/operands/geometry/precision, backend/device/toolchain,
+  schedule/guard or artifact changes. No executable code or default changed.
+
+### [LM-HY-NOMAS-PIXELUMM-GATE-UP-ROWS-2026-10-29] Full-K row tiling preserves outputs but does not qualify as acceleration
+
+- VERIFIED bounded qualification of opt-in separate F32 gate/up graphs with
+  M4096 tiles, full K4096 and original BF16 boundaries at full J21120. Ordinary
+  MPS remains the default; rollback omits the diagnostic flag. No generation.
+- Full-J isolated FFN passes 24 finite bitwise-equal GPU comparisons and rejects
+  the NaN positive control. Median gate/up is 371.139729 ms baseline versus
+  372.344271 ms tiled (0.3246% slower; two measured samples per mode).
+- Two serial 36-block plus head crossovers pass 516 finite bitwise-equal saved
+  upstream comparisons at unchanged atol=rtol=2e-5. Each request retains one
+  terminal wait, direct GPU handoff, zero tracked named encode allocations or
+  preterminal activation reads and 43 existing post-wait diagnostic reads.
+  Saved Torch 2.6 MPS source-method outputs are not fresh independent-backend
+  inference, all intermediate boundaries or a generated-video quality check.
+- Complete-request median reductions are 14.8949% normal and 0.4832% reverse;
+  reverse fails the prospective 3% criterion. The apparent normal win includes
+  baseline drift 44.938757 -> 84.561390 -> 50.566983 s. No stable speedup,
+  slowdown, equivalence or production throughput claim is admitted.
+- Matched terminal-return-to-pre-recorder gaps are 50.001163..50.009773 s.
+  Both arms use legacy per-capture host diagnostic buffers and post-wait GC,
+  not pooled comparison arrays. These are outside timing but can carry state
+  into the next request. GPU-root intervals also grow; they do not identify
+  active shader cycles or establish thermal/queue-admission causality.
+- All 2,445 full-run samples pass the cache-aware 10% reserve, 27.5 GiB process
+  cap, 64 MiB swap-growth stop and 900 s deadline: peak 27.346103 GiB, minimum
+  headroom 14.280060 GiB, positive swap growth zero. Sampled bounds do not
+  guarantee opaque transients or future fit. Both processes exited normally.
+- Release builds, 67 integrated Crystal examples, 24 focused examples, six
+  Python tests, four CLI negatives and 14 CPU report-corruption challenges
+  pass. Correlated Mini-Quad ROBUST covers parity/guards/nonqualification;
+  stable performance attribution remains VULNERABLE. Source and binary are
+  archived; a later two-comment correction leaves all executable lines intact.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gate-up-rows-20261029;
+  results/gate-up-rows-analysis.json SHA 22c9ea1aa1abb21498dad4a6aa94a176317f808ad061bc77fe39712f1eeba181;
+  results/comment-only-annotation.json SHA 2e3ced87676ac0d82ad15300707733a735c3be55bc6a49c6bc361449302fdb5d.
+  Final CPU/CLI commands, exit codes and output: results/final-cpu-checks.json
+  SHA 8a90e5913bb23e3c177f8f2f0e45e78e843c71b68b1e833a41b32a513bdcaa44.
+  Return docs/hy-nomas-generation-frontier.md. Refresh on executable source,
+  artifacts/fixtures/weights, geometry/precision, schedule/lifetime, backend/
+  device/toolchain or guards; admit memory afresh. Next timing falsifier is a
+  short replicated FFN A/A retaining GPU checks while removing per-capture
+  host allocation/GC between measured samples, not a blind tile-size grid.
+
+### [LM-HY-NOMAS-PIXELUMM-PACED-AA-2026-10-29] Matched-spacing A/A narrows observed drift; delayed calls align with the queue boundary
+
+- VERIFIED bounded full-J 36-block plus head A/A: two serial six-request
+  processes hold baseline input/weights/geometry/scratch fixed and reverse
+  only API-observer placement. Ten post-wait-to-pre-recorder milestones are
+  50.003350..50.010330 s; the timestamp precedes recorder/timer setup, not the
+  exact first encode call. Overruns reject before submission. No generation.
+- Twelve requests pass 516 finite bitwise-equal retained saved-upstream
+  comparisons at unchanged 2e-5, one terminal wait, 4,579 roots, direct GPU
+  handoff, zero tracked named encode allocations/preterminal activation reads
+  and 43 existing post-wait diagnostics. Same 197 sources/three objects/binary;
+  five unique fixture payloads (57,168,398,336 B) are hash-verified. These are
+  saved upstream MPS controls, not fresh independent-backend inference.
+- Non-directly-captured requests are 42.121775..43.250136 s; the old 60.195153 s
+  outlier did not recur. Captured reverse request1 (43.559919 s) is excluded
+  from timing aggregates; later capture carryover remains possible. This does
+  not prove fixed gaps caused the narrower range or calibrate observer cost.
+- Across all four profiled arms, top-ten continuation calls start with 63
+  earlier callback-pending roots, excluding the current root about to commit.
+  No explicit 64-buffer setting is present. Callback observation time does not
+  distinguish queued from running work or prove queue admission. A deeper
+  queue is admissible as a speed candidate only if GPU-starvation gaps exist;
+  fewer calls alone can move waiting to the terminal boundary. Prior direct
+  MPS FFN reduced roots yet regressed request time by 7.7081%.
+- The captured reverse request1 joins all 4,579 native roots by label/CB-ID,
+  with GPU start/end residuals below 42 ns. Top-ten 206..218 ms host attention
+  calls align with prior FFN candidates (nine down, one gate/up); grouped GPU
+  intervals cover over 99.9996% of their host spans. This is interval coverage,
+  not active shader cycles or global phase dominance. Waiting-thread stacks
+  were disabled, so admission causality remains open. Next causal falsifier:
+  capture the blocked stack before changing capacity; optimize actual critical
+  GPU service, not the host marker or continuation count.
+- Full captured-request interval union is 43.539713 s over a 43.542493 s
+  envelope (2.780 ms uncovered). Single-candidate FFN gate/up and down unions
+  are 13.3822/7.0684 s versus attention 11.3844 s; 288 mixed roots stay separate.
+  This makes FFN a leading candidate, not an exclusive-utilization or causal
+  speedup claim. No material gap between reported GPU intervals justifies
+  queue enlargement yet; preserve whole-request acceptance and exact math.
+- All 2,239 native guard samples pass 27.5 GiB/10% cache-aware reserve/64 MiB
+  swap-growth/900 s-process bounds: peak 26.453175 GiB, min headroom 19.696732 GiB,
+  swap growth 0. Correct arithmetic excludes duplicate speculative pages;
+  sampled bounds do not guarantee opaque transients/future fit. Native exited.
+  Release, 73 Crystal examples, 12 Python tests, 12 integrity negatives, four
+  valid-fixture CLI negatives and format/diff/freshness checks pass. Correlated
+  Mini-Quad ROBUST applies to scoped artifact/lifecycle evidence, not causality.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-aa-spacing-20261029;
+  results/integrity-aa-final.json SHA 4dd9eeefe4ccc2a33823e6964cf52f06b1695dee95ccd244750e05ef6543791b;
+  results/analysis-final.json SHA 2f142641d1f4fcaff06e7b2520be1b0149d70f9e59b6d5a252d36ce52c149707.
+  results/gpu-reverse-req1-analysis.json SHA 4aaa05201afe595e4e494c998516307b882064da49f42522c465459e19c69a8f.
+  results/gpu-reverse-req1-phase-unions.json SHA 56ed147be6bd39eae5b58f51c58af91fb972912c59302701e1b6d9e066dae92e.
+  Return docs/hy-nomas-generation-frontier.md. Rollback omits AA flags; queue,
+  production selectors and GPU math stay unchanged. Refresh on scoped source/
+  artifact, fixture, geometry/precision, schedule/lifetime, clock/backend/
+  device/toolchain or guard change; every process needs live admission.
+
+### [LM-HY-NOMAS-PIXELUMM-ORDER-LOCALIZATION-2026-10-29] Drift appears inside MPS continuations; ordinal order alone does not explain it
+
+- VERIFIED bounded opt-in full-J 36-block plus head localization: two serial
+  same-input eight-request schedules, off warm/tails and profiled ABBA/BAAB.
+  All 16 requests pass 688 finite bitwise-equal retained saved-upstream gates
+  at unchanged 2e-5, with one wait, direct GPU handoff, zero tracked named
+  encode allocations/preterminal reads and 43 existing post-wait diagnostics.
+  Source/binary/objects/fixtures are identical across runs. This is not fresh
+  independent-backend inference, internal probability parity or generation.
+- Normal baseline request2 to request5 grows 42.792485 to 60.195153 s; attention
+  host marker grows 16.723315 s (96.096% of total increase), almost entirely
+  inside nested MPS continuation calls. Earlier-root GPU intervals cover
+  99.98794/99.98795% of raw attention continuation wall in normal/reverse runs;
+  caller CPU totals are only 0.140415/0.121149 s. Join excludes the submitted
+  root and uses the existing 2 us clock bound. This locates waiting, not an
+  exclusive kernel cost, exact device-state cause or our bookkeeping lock.
+- Reverse combined profiles stay 39.862891/40.381760 s; baseline profiles
+  42.345675/42.584312 s. A simple later-is-slower explanation is contradicted.
+  The mode association survives reversal, but one 60.195153 s baseline outlier
+  and run-state interactions leave stable speed/physical attribution
+  VULNERABLE. FFN host spans cannot bound FFN GPU work. Off-timer comparisons
+  take about 36 s and can affect device state; they do not calibrate profiling.
+  Matched-spacing A/A is recorded above. Physical attribution remains open.
+- All 2,612 guard samples pass the 27.5 GiB cap/10% reserve/64 MiB swap/900 s
+  bounds: peak 26.347140 GiB, min headroom 19.517944 GiB, swap growth0. The old
+  headroom label is wrong; audited arithmetic excludes duplicate speculative
+  pages. These are sampled bounds, not future-fit or opaque-transient bounds.
+  Release, 62 Crystal examples, four Python tests/15 damaged reports, eight
+  integrity negatives, three CLI negatives and format/freshness checks pass.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-order-profile-20261029;
+  results/integrity-final.json SHA 37b3b84cad62fe08540b22e8e0bb138b6e976c2e83fcefb42fdc8cbba8d2bd3c;
+  results/analysis-final.json SHA 13f8bb895f0033e11877b1489540016739bf164091f86bb50cd88c5f59394cce.
+  Return docs/hy-nomas-generation-frontier.md. Defaults remain off; rollback
+  omits profile mode. Refresh on scoped source/artifact, fixture, geometry,
+  precision, schedule/lifetime, clock/backend/device/toolchain or guard change;
+  each new process requires live admission. No full generation was run.
+
+### [LM-HY-NOMAS-PIXELUMM-COMBINED-FULL-2026-10-29] Full decoder combined attention is numerically exact; timing remains order-sensitive
+
+- VERIFIED bounded opt-in T6/H44/W80/J21,120 36-block PixelUMM plus head:
+  three identical-source/binary serial ABBA/BAAB/ABBA processes, 24 requests,
+  1,032 finite bitwise-equal retained upstream comparisons at unchanged 2e-5.
+  Direct block35/head GPU handoff, one wait, zero named encode allocations and
+  no preterminal reads pass; 43 existing CPU diagnostics stay after the wait.
+  Saved upstream MPS captures are not fresh independent-backend inference;
+  no probability parity, diffusion, full generation or full-pipeline fit claim.
+- Per-run median paired reductions +6.5132/+4.9058/+3.2761% pass the stated
+  descriptive 3%/both-orders/repeat screen. Only 4/6 pairs improve: range
+  -1.4346..+9.8273%; baseline-first median +9.1331%, candidate-first -0.0158%.
+  Causal/stable speed claim VULNERABLE; production defaults stay off.
+- One reusable distinct host-only expected/actual pair (330 MiB) replaces
+  per-capture temporary arrays; record authentication and exact extents remain.
+  Post-return GC alone had failed at 27.595798 GiB and is not pooled for timing.
+  Current 4,559 samples fit the unchanged 27.5 GiB cap/10% reserve/64 MiB swap/
+  900 s guard; peak 26.286456 GiB, min headroom 19.468338 GiB, swap growth0.
+  Host-heap growth does not recur in these processes; retention mechanism is
+  not proven. Headroom label is wrong, while pinned arithmetic and samples use
+  free_spec - speculative + file_backed; final audit explicitly bounds it.
+- Release, 60 CPU examples, 30 validator negatives, format/diff checks pass.
+  Correlated Mini-Quad ROBUST for bounded saved-output/lifecycle/guard scope.
+  Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-combined-full-reuse-20261029;
+  results/audit-final.json SHA 6c09bd6bbf51ce3372dbc94ab1dcda806f967346c904c666e66daabf984d1e40.
+  Return docs/hy-nomas-generation-frontier.md. Rollback omits combined mode;
+  refresh after scoped source/input/weights/runtime/device/geometry/precision/
+  schedule/guard changes or evidence loss, with live admission each new run.
+
+### [LM-HY-NOMAS-PIXELUMM-COMBINED-KV-SOFTMAX-2026-10-29] Combined attention rewrites pass the bounded request screen
+
+- Opt-in `pixelumm_fused_kv_gather_probe --scale-softmax` prepares the scale
+  graphs once, then toggles fused K/V gather and score-scale-inside-softmax
+  together after owner reset and before chain creation. Both arms retain the
+  same plans/scratch and QK/PV geometry. Production selectors remain off.
+- Two serial 40-request processes on the same measured binary/source give
+  paired median time reductions 4.1034% and 7.2021%, 16/16 wins each, positive
+  AB and BA medians. Request medians are 1.636905/1.585109 s and
+  1.500376/1.387504 s. The pooled paired median is 5.6375%; effect-size drift
+  remains unexplained. The percentage is not a ratio of arm medians. Scope is
+  four whole J5760 block passes: two windows, native block0 output to block1.
+  This passes the prospective 3% screen and confirming repeat, without a full
+  decoder/head or generation-speed claim. Next gate is connected decoder/head.
+- All 400 compared saved-upstream stage/output slots are finite and bitwise
+  equal at atol=rtol=2e-5; no combined internal-F32 or raw K/V-panel equality
+  is asserted. One terminal wait and one 464-byte post-wait metrics read per
+  request, zero tracked encode-time named allocation/preterminal read. Peak
+  sampled footprint 7.625 GiB, headroom at least 22.402 GiB, zero swap growth
+  under 10% cache-aware reserve, 16 GiB cap, 64 MiB swap stop and 600 s deadline.
+  Sampling does not bound opaque MPS transients. Twenty-one CPU examples and
+  artifact validation pass; 14 damaged artifacts reject. Correlated source and
+  artifact Mini-Quad reviews are ROBUST within the successful diagnostic scope.
+- A post-timing setup/report-only fix tracks complete graph preparation rather
+  than the CLI request. Final release correctness passes separately; measured
+  binary/source archives remain intact. Evidence and both identities are in
+  `docs/hy-nomas-generation-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-scale-softmax-20261029/results/summary.json`
+  (SHA256 `b8ebc68b5c949196791a15b03d04f8f58c569b10609a817e7942fc0a2bf96bd9`).
+  Rollback disables both selectors. Refresh on scoped source/artifact, fixture,
+  geometry/precision, schedule/lifetime, backend/device/OS/toolchain or guard
+  changes; admission expires each launch. No full generation was executed.
+
+### [LM-HY-NOMAS-PIXELUMM-REWRITE-REFUTATIONS-2026-10-29] Exact local rewrites do not establish a request gain
+
+- The current MPSGraph control remains selected. Reoriented F32 FFN GEMMs and
+  output-only softmax/PV passed their saved upstream BF16 gates but failed the
+  prospective 3% whole-request screen: paired reductions -0.6382% (4/16 wins)
+  and -0.7061% (6/16). Explicit SDPA and paired query groups failed the first
+  saved BF16 gate; no timing was admitted for those variants. Tolerances stayed
+  atol=rtol=2e-5. Unchanged refuted variants should not be rerun without a new
+  mechanism addressing their recorded failure.
+- Classic F32 MPSMatrixMultiplication for gate/up/down was bitwise equal at
+  every compared slot, including final-source correctness qualification.
+  Sixteen balanced AB/BA pairs gave baseline/candidate medians
+  1.582481/1.708753 s, paired reduction -7.7081%, zero candidate wins. Encoding
+  shortened 26.99% and roots fell 125 to 97, while terminal waits and GPU root
+  intervals widened. This falsifies call-count/host-encoding proxies as a
+  sufficient reason to promote that candidate; root intervals are not exclusive
+  kernel cost. The extra shared F32 weight stage was 192 MiB.
+- Scope is four J5760 whole-block passes: two windows, each with native block0
+  output feeding block1. Earlier descriptions of independent saved block1
+  inputs were wrong; the frozen common driver and runtime bindings confirm the
+  connected scope. No complete decoder/head or generation speed is established.
+  There was one terminal wait, one 464-byte post-wait read and no tracked named
+  encode allocation/preterminal read per request. The 10% cache-aware reserve,
+  16 GiB process cap, 64 MiB swap-growth stop and 600 s deadline held. Final
+  direct-MPS run: sampled peak 7.807 GiB, minimum headroom 26.041 GiB, zero swap
+  growth. Sampling does not bound opaque MPS allocation transients.
+- Strict containment of 1,138 matrix shader intervals gives definite FFN/
+  attention unions 378.341/119.211 ms in one captured baseline request. These
+  timestamp-based subsets support targeting FFN but exclude unresolved work,
+  causal attribution, occupancy and exclusive cost. Details, exact report and
+  binary hashes, release/guard review and damaged-artifact checks are in
+  `docs/hy-nomas-generation-frontier.md`. Raw direct-MPS report SHA256:
+  `d8f497d76d65502621cce994ef2c52a023d8b5d4ae5d67660c610e6e07c3bdd7`.
+  Rollback keeps all diagnostic selectors disabled. Refresh on scoped
+  source/artifact, geometry/precision/schedule/lifetime, backend/device/OS,
+  toolchain, guard/clock changes or evidence loss; admission expires per launch.
+
+### [LM-HY-NOMAS-PIXELUMM-FUSED-KV-2026-10-29] Fused gathers give a small bounded gain below the default screen
+
+- The opt-in dual-output gather replaces 24 K/V dispatches with 12 per J5760
+  block, retaining the original head/token mapping and existing disjoint F32
+  scratch panels. It does not reduce tensor bytes or establish DRAM traffic.
+  Correctness-only and final-source 40-request runs passed: all 200 compared
+  saved-upstream stage/output slots were finite and bitwise equal at unchanged
+  atol=rtol=2e-5. There is no raw K/V panel bitwise comparator.
+- Sixteen balanced pairs gave baseline/candidate medians 1.448511/1.435620 s,
+  paired time reduction 1.2331%, 16/16 wins, positive AB/BA medians. This is
+  below the prospective 3% promotion screen; default stays off. Scope is two
+  connected blocks in each of two J5760 windows, not complete generation.
+  One terminal wait and one 464-byte post-wait read remain, with no tracked
+  encode-time named allocation or preterminal read. Guard peak was 7.618 GiB,
+  minimum cache-aware headroom 24.321 GiB and swap growth zero under the 10%
+  reserve/16 GiB/64 MiB/600 s limits. Twenty-nine CPU examples and the artifact
+  validator passed; four damaged artifacts were rejected.
+- Correlated source review found request defaults, mapping and link isolation
+  robust within the serialized lifecycle. An extra pipeline is created during
+  all plan setups; default execution preservation does not imply zero setup
+  overhead. The selector is the rollback. Evidence and measured-source archive:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-20261029/results/analysis-timing-1.json`;
+  raw report SHA256 `94cac65039df4e67cf9c033d44ed4f130e0f140fc0475a38eccade9c26e27f7c`.
+  Refresh on scoped source/artifact, shape/precision, schedule/lifetime,
+  backend/device/OS/toolchain or guard changes; admission expires per launch.
+
+### [LM-HY-NOMAS-ROOFLINE-2026-10-29] Current preview is roughly halfway to a conditional FP32 arithmetic ceiling
+
+- CPU-only integer operation counts give 734.577 TFLOP of major matrix work
+  for the fixed 120-frame 512x288/24fps first segment: eight 54-block DiT steps
+  and five 36-block PixelUMM windows, with saved Qwen state as input. Count two
+  FLOPs/MAC; elementwise operations, reductions and setup are excluded.
+  647.604 TFLOP has explicit F32 graph operands; 86.973 TFLOP is in opaque
+  BF16-fed PixelUMM Q/K/V/O projections. Do not infer their lowering from feeds.
+- Hardware was read as M2 Max, 38 GPU cores, 64 GiB. Apple advertises 400 GB/s;
+  the primary study cited in the frontier gives nominal FP32 13.6 TFLOP/s.
+  No sustained peak, physical DRAM traffic or ALU utilization was measured.
+  The fresh four-pass block control is 10.521 TFLOP / 1.448511 s = 7.264
+  TFLOP/s counted work per request wall second (53.4% FP32-equivalent peak).
+  The earlier control gives 48.9%; cross-run drift is not a candidate gain.
+- The prior preview receipt was reread, not rerun: neural wall 103.315 s,
+  application total 149.110 s. All counted work at the assumed FP32 peak gives
+  54.013 s; the explicit-F32 subset alone gives 47.618 s. These conditional
+  compute-only models are not physical floors or achievable latency promises.
+  The approximate twofold gap does not imply a 10-100x unchanged-kernel gain,
+  high-resolution/long-video throughput or quality. Reproduce with
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-roofline-20261029/calculate_roofline.py`;
+  report pins the source and measurement artifacts. Refresh on preset,
+  precision/kernel/backend/device, scoped source or measurement changes.
+
+### [LM-HY-NOMAS-PIXELUMM-SCALE-SOFTMAX-2026-10-28] F32 scale/softmax preserves parity with a small bounded paired gain
+
+- VERIFIED opt-in raw F32 QK scale inside rank-4 axis-3 softmax, keeping
+  rank-3 batch32 QK/PV, the baseline Float32 constant and BF16 handoffs.
+  Candidate-first direct checks on J2048/full J21120 avoid the baseline's
+  in-place score mutation. At full J, 2,229,534,720 probabilities and
+  86,507,520 attended F32 values match the native baseline bitwise; all saved
+  upstream block captures pass at unchanged atol=rtol=2e-5. These are distinct
+  oracles, not a fresh upstream internal-F32 capture. NaN and deliberately
+  double-scaled negative controls detect failures as intended.
+- Two serial unprofiled 40-request processes each include 16 balanced AB/BA
+  pairs. Full-request medians: baseline/candidate 1.590239/1.559931 s and
+  2.904161/2.860022 s. Paired median reductions 2.17145% and 2.00291%; combined
+  2.04714%, 28/32 wins, positive in both orders. Absolute drift remains large.
+  Scope is four J5760 whole-block passes per request (two windows, each with
+  native block0 output feeding block1), not full-J timing, a complete
+  decoder/head or generation speed. All compared captures/outputs are bitwise
+  equal. This falls below the prospective 3% promotion screen; keep default off.
+- No new GPU wait or preterminal read: one terminal wait and packed metrics
+  read/request, zero tracked encode-time named allocations. Timed metrics are
+  464 bytes; separate direct correctness uses 176 bytes. Both alternatives
+  coexist; no candidate-specific memory saving or removed DRAM sweep is
+  established. Timing sampled peak 7.625 GiB, headroom at least 26.411 GiB,
+  zero positive swap growth. Full-J correctness sampled peak 9.606 GiB.
+  Cache-aware 10% reserve, 16 GiB cap, 64 MiB swap stop and 600 s timeout hold;
+  sampling does not bound transients and admission expires at each launch.
+- Release builds, 37 focused CPU examples, format/diff checks and eight
+  damaged-artifact rejection controls pass. Correlated Mini-Quad verdict is
+  ROBUST for the narrow numerical/descriptive timing claim. A post-run change
+  fixes only the encode-timer description; raw artifacts and both source
+  identities are preserved. Evidence: `docs/hy-nomas-generation-frontier.md`
+  and `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-scale-softmax-20261028/results/summary.json`
+  SHA256 `48207f1eff554fd0f7b3daadd7da72d870f05fe8485fc487b1fefc29b5213aab`.
+  Rollback selects the unchanged separate-scale path. Next falsifier: a larger
+  exact FFN/attention change must meet the prospective request screen, then
+  pass connected decoder/head validation. Refresh on scoped source/artifact,
+  fixture/weights, geometry/precision/schedule/lifetime, backend/device/OS/
+  toolchain, guard/clock changes or evidence loss. No full generation ran.
+
+### [LM-HY-NOMAS-PIXELUMM-COGNIGRAPH-2026-10-28] Prepared native islands preserve bounded parity without a demonstrated block gain
+
+- VERIFIED bounded shared CogniGraph dependency compilation and opt-in native
+  PixelUMM recipes. Q/K preparation and independent panel gathers/previous-tile
+  scatter share concurrent encoders; SiLU/product use two waves and one GPU
+  dependency barrier. MPS calls and capture blits remain outside the islands.
+  Pipelines/buffers/parameters are retained; no root is reused across MPS calls.
+  Commands are encoded per request; this is not preencoded command replay or
+  a new LTP/WBA certificate. The historical twofold gain was Nomic MoE.
+- The J5760 two-window/two-block four-plan probe passes all 40 requests at
+  unchanged atol=rtol=2e-5. Every compared output is bitwise equal; baseline and
+  candidate correctness requests also match all six captures per plan against
+  saved authenticated upstream-source-method MPS controls. The NaN control
+  detects exactly once. Optional Q/K captures and the SiLU-capture fallback
+  retain source-review-only coverage. No full-J21,120, head, 36-block decoder,
+  fresh connected upstream or full-generation qualification is claimed.
+- Sixteen AB/BA pairs across four ABBA+BAAB cycles show full-request medians
+  1.599111/1.602950 s baseline/candidate; paired median -0.1124%, mean +0.0897%,
+  range -2.145% to +2.716%, eight candidate wins. No meaningful gain established;
+  candidate remains off by default. Calling-thread CPU raw medians 12.057/13.718
+  ms (noisy paired median +20.165%). Both arms retain 125 MPS roots/request.
+  Native encoder counts 66->29 are prepared-plan model counters, not measured
+  API calls. This does not establish a true zero effect or a causal CPU cost.
+- One terminal wait/request, zero tracked named encode allocations/preterminal
+  reads, one 464-byte metrics read afterward. Guard PID/PGID joins the report;
+  all 158 runtime samples contain one live process. Across 160 samples: peak
+  7.619 GiB, minimum file-cache-aware headroom 29.868 GiB, swap growth zero;
+  unchanged 16 GiB cap, 10% reserve, 64 MiB swap stop and 600 s deadline.
+  Sampling does not bound transients; both alternatives remain resident.
+- Release/fresh Make, 37 focused CPU examples, four analyzer tests, three
+  existing GPU ComputeGraph examples, format/diff and guarded run pass.
+  Correlated Mini-Quad verdict ROBUST within this bounded scope. Evidence:
+  `docs/hy-nomas-generation-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cognigraph-20261028/results/summary.json`
+  (SHA256 `26b34c70cb12f4cbcdb9e0e452086f62a5a4c7d37f1acae9220e53f97d830dac`).
+  Next falsifier: target dominant GPU FFN/attention phases on identical operands
+  using existing root/phase profiling. Rollback leaves the explicit candidate
+  disabled or reverts the atomic change. Refresh on scoped source/artifact/
+  backend/device/OS/toolchain, geometry/precision/scheduling/lifetime/guard/clock
+  changes or evidence loss; memory admission expires at each launch.
+
+### [LM-HY-NOMAS-PIXELUMM-F32-KERNEL-2026-10-28] Exact F32 FFN tiles preserve parity but lose to MPS
+
+- VERIFIED bounded native projection parity and rejection of two diagnostic
+  64x32/K32 F32 tiles. BF16 expands exactly inside shared memory; output rounds
+  to BF16. Explicit B-fragment reuse/unrolling preserves the original 5,090-byte
+  source prefix, per-accumulator K8 order, 128 threads and 12,288 shared bytes.
+  Production MPS selection is unchanged; no global F32 candidate staging buffer.
+- Twelve cells at true J2048/J21,120 yield 120 finite, bitwise-exact GPU output
+  comparisons against saved authenticated upstream-source-method MPS suffixes
+  and twelve detected NaN controls, at unchanged atol=rtol=2e-5. This is neither
+  independent-backend equivalence nor a fresh connected upstream run.
+- Clean full-gate AB medians: original MPS/native 181.807/861.740 ms; reuse
+  181.451/835.695 ms. Both full reverse cells fail measured MPS-root isolation
+  and are excluded from timing selection, without retry. Ten cells admit timing;
+  full up/down and connected follow-ups did not run. Cross-build movement does
+  not prove a causal B-reuse gain; both candidates are far slower than MPS.
+- One terminal wait per ten-projection cell, one 176-byte metrics read afterward,
+  zero tracked named encode allocations/preterminal activation reads; named
+  bytes/counts release to zero. Full gate/up named budget 1,311,768,752 B. Guard
+  retains cache-aware 10% floor, 6/8 GiB small/full caps and 64 MiB swap stop.
+  Across 93 samples: peak 2.735826 GiB, minimum headroom 30.203217 GiB, swap
+  growth zero. Samples do not bound transients; matched MPS ownership prevents
+  a native-only total-memory claim. Root unions include stalls, not shader time.
+- Final release/fresh Make, runtime Metal compilation, 26 focused examples,
+  one-byte-short pre-Metal rejection and format/diff pass. Offline Metal toolchain
+  is unavailable. Scalar audit rejects 19 report plus twelve argv mutations;
+  the bitwise-claim counterfactual passes. Correlated Mini-Quad: ROBUST for
+  bounded parity/rejection, VULNERABLE for independent or causal speed claims.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-28-hy-nomas-pixelumm-f32-kernel.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.json`.
+  Next falsifier: localize earlier F16 SIMDgroup reduction failures on identical
+  operands against F32 before more tile tuning. Rollback omits diagnostic
+  target/flag or reverts this atomic commit. Refresh on scoped source/artifact/
+  backend/device/OS/toolchain, geometry/precision/lifetime/guard/clock changes
+  or evidence loss; admission expires per launch. No full generation ran.
+
+### [LM-HY-NOMAS-PIXELUMM-SOFTMAX-PV-2026-10-28] Fewer Graph calls preserve precision without a material block gain
+
+- VERIFIED for seven accepted native diagnostic cells at actual J2048/J21,120.
+  One Graph retains F32 rank-4 axis-3 softmax probabilities and rank-3 batch-32 PV
+  output; this is Graph-call coalescing, not demonstrated kernel fusion.
+  BF16 boundaries, separate QK/custom scale, geometry and 2e-5 tolerances stay
+  fixed. Production selection stays separate; candidate is diagnostic opt-in.
+- All 294 saved-source-method upstream BF16 capture comparisons and both native
+  F32 panels in 12 correctness-only requests are finite and bitwise exact;
+  all 42 BF16 and 12 F32 NaN controls detect. Native alternatives are correlated,
+  not an independent backend or saved upstream F32 panels. Correctness requests
+  are excluded from speed estimates. No full decoder/head/diffusion/generation.
+- Full ABBA/BAAB medians are 1234.570/1235.283 ms separate versus
+  1233.057/1234.387 ms coalesced. Mean-of-cell-medians difference is -1.205 ms
+  (-0.09755%); wall difference -1.199 ms. Only two timed samples/arm/order;
+  no material repeatable production gain established. Graph calls 195->135,
+  command roots 128 unchanged. FFN definite-root intervals remain 547-549 ms;
+  intervals include stalls and are not exclusive shader costs.
+- One terminal wait/request, zero tracked named encode allocations/preterminal
+  reads; one 128 B normal/176 B correctness-only metrics read afterward. Full
+  named bytes: 7,375,674,980 normal/7,551,835,796 check. Both one-byte-short
+  budgets refuse before fixture/Metal. Fresh 10% cache-aware guard: 90 samples,
+  peak 9.605472 GiB, minimum headroom 24.224731 GiB, swap growth 0; sampled
+  limits do not bound transients.
+  All named buffers release to zero; opaque MPS bytes and residual ownership
+  remain unknown. Both alternatives are retained in both Plans.
+- Final release/fresh build, standalone Metal compiler check, 52 focused examples,
+  format/diff, 19 auditor mutations and 2 bitwise-claim counterfactuals pass.
+  Correlated Mini-Quad verdict ROBUST within this bounded scope. Evidence:
+  `.landmark/evidence/2026-10-28-hy-nomas-pixelumm-softmax-pv.json`,
+  `docs/hy-nomas-pixelumm-block-frontier.md`, and external namespace
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028`.
+- Next falsifier: measure actual full-J F32 FFN/GEMM cost on identical operands
+  and qualify a kernel-level change with upstream outputs and whole-block time.
+  Rollback omits opt-in flags or reverts this atomic change. Refresh on scoped
+  source/artifact/backend/device/OS/toolchain, geometry, precision, commands,
+  capture/lifetime/guard/clock changes or evidence loss; admission expires at
+  launch. Prior owner failure/full36 drift remain unexplained.
+
+### [LM-HY-NOMAS-PIXELUMM-SHARED-FFN-PROFILE-2026-10-27] Shared FFN profiling localizes broad interval drift
+
+- VERIFIED bounded native profiling for both existing graph topologies. The
+  collectors validate two shared versus three baseline FFN Graph calls per
+  block, snapshot the encoded mode, and reject missing API profiling before
+  recording a Session chain. No profiling GPU marker, buffer, command, wait or
+  arithmetic implementation is added; the chosen topology changes root counts.
+- One resident full36+head, same A42 input, T6/H44/W80/J21,120: two warmups then
+  profiled baseline/shared/shared/baseline take 43.221/71.044/58.164/49.990 s.
+  Disjoint gate/up intervals are 13.165/23.061/18.380/15.528 s and unchanged down
+  7.015/12.615/9.942/8.287 s. Preparation and attention also expand. Most host
+  waiting appears in attention continuations; this does not identify its GPU
+  kernels as the cause. Root residency is not exclusive shader service time.
+  No consistent disproportionate gate/up growth or stable causal regression is
+  established. Shared preparation stays off by default; no speedup promotion.
+- All 414 comparisons (156 small, 258 full) are finite and bitwise exact at
+  unchanged 2e-5 tolerances against reused authenticated upstream source-method
+  MPS controls, not a fresh connected upstream run or independent backend.
+  One terminal wait/request, zero named encode allocations/preterminal reads,
+  and 43 existing diagnostics after each full request. No full generation.
+- Completed guard: 1,122 samples, peak 29,480,470,456 B (27.456 GiB), minimum
+  cache-aware headroom 18,560,139,264 B, swap growth zero, exit 0. The 10% floor,
+  28.5 GiB cap, 64 MiB swap stop and 900 s deadline stay fixed. The earlier
+  eight-arm cap stop has no final JSON and is excluded, not counted as parity.
+- 86 focused CPU examples, release/fresh make-q, one-byte-short admission,
+  snapshot/preflight negatives and a source/fixture/interval audit pass; all
+  17 seeded mutations reject. Only the CLI description changes after the GPU
+  epoch; retained source/executable CAS and a byte-exact bridge qualify that
+  delta. The CLI has no --help handler; its rejection is not a help-display pass.
+  Correlated Mini-Quad verdict ROBUST for this bounded scope, not kernel causality.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-ffn-profile.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-shared-ffn-profile-20261027/results/shared-ffn-profile-audit-v3.json`.
+  Next falsifier: isolate full-J gate/up and unchanged down on identical inputs
+  with both orders before assigning temporary-resource or GEMM causes. Rollback
+  omits the profile flag and shared preparation, or reverts this atomic commit.
+  Refresh after scoped source/artifact/backend/device/OS/toolchain, geometry,
+  precision/capture/lifetime/guard/clock changes or evidence loss; admission
+  expires at launch. No diffusion, video quality or full-pipeline timing claim.
+
+### [LM-HY-NOMAS-PIXELUMM-INTEGRATED-2026-10-27] Full-J decoder and global head match composed upstream controls
+
+- VERIFIED bounded 36 blocks + global head at T6/H44/W80/J21,120 -> BF16
+  `[1,3,24,704,1280]`. All 129 comparisons (43/request, seed42 gate/repeat
+  and distinct seed43 poisoned replay) are finite and bitwise exact at
+  unchanged `atol=rtol=2e-5`. Saved upstream source-method MPS controls are
+  joined at exact authenticated block35/head-input edges; this is not a
+  fresh connected upstream run or an independent neural backend.
+- The head borrows block35's exact MetalBuffer on the same chain. Blocks
+  share one workspace and two output banks; head scratch is separate.
+  Unique named inventory 24,108,145,128 B, no duplicate head input. Every
+  request has one terminal wait, zero named encode allocations/preterminal
+  activation reads, and 43 diagnostics afterward. Attention 0-35, outputs
+  34/35 and five head stages are retained; outputs 0-33 are overwritten
+  GPU handoffs, not direct goldens. Existing F32 math is unchanged.
+- Successful v2: 682 guard samples, process-group peak 28,585,872,368 B
+  (26.623 GiB), native phase peak 28,585,724,912 B; unchanged 28.5 GiB cap,
+  10% file-cache-aware reserve, 64 MiB swap stop and serial 900 s deadline.
+  Minimum headroom 15,875,194,880 B (14.785 GiB), observed swap growth zero.
+  Sampled limits do not bound inter-poll spikes or full-pipeline fit.
+  Named bytes/count reach zero after release; Metal still reports
+  24,108,908,544 B, not proof of zero device residency/backend caching.
+  The process exits 0. Earlier v1 startup refusal is retained/excluded.
+- Repeat encode+wait 43.356 s; alternate poisoned request 69.456 s remains
+  unexplained variance. One repeat, telemetry enabled, preparation and
+  diagnostics excluded; no speedup/stable throughput/video-second claim.
+  Real DCAE/noise/static-image inputs are not DiT-denoised output.
+- Release/fresh make-q, format and 44 focused Crystal examples pass.
+  One-byte-short budget rejects before named allocation/upload; order and
+  in-flight lifecycle falsifiers pass. Seven composition and five report
+  mutations reject. Source/binary/fixture/guard/clock receipt audit passes.
+  Correlated Mini-Quad verdict ROBUST within parity/lifecycle/sampled scope.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-integrated.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/qualification-audit-full-v2.json`.
+  Rollback omits the opt-in probe or reverts its atomic commit. Refresh after
+  scoped source/artifact/backend/device/OS/Torch/toolchain, precision/layout,
+  geometry/lifetime/guard/clock changes or evidence loss; admission expires
+  at launch. Next: remaining-pipeline handoff/RGB-export budget and timing
+  variance. No diffusion, video quality or full-generation claim.
+
+### [LM-HY-NOMAS-PIXELUMM-HEAD-2026-10-27] Standalone global decoder head is exact at full J
+
+- Scope: authenticated saved block35 outputs, T6/H44/W80/J21,120 -> BF16
+  `[1,3,24,704,1280]`. All five source-method MPS head stages match bitwise
+  across three requests using two distinct inputs (seed42 gate/repeat and
+  seed43 poisoned replay): 15 comparisons, finite,
+  zero errors/differing words, unchanged `atol=rtol=2e-5`. No integrated
+  full36+head peak, diffusion, video generation or quality claim.
+- First failure was PixelHead's framework RMS, while final custom RMS and
+  THW restoration were already exact. Source-matched Torch 2.6 BF16 epsilon
+  and pre-gain rounding plus power/reduction resolve it. F32 linear remains
+  unchanged and matches both actual controls; no universal backend claim.
+- Named inventory: 1,124,851,204 B owned + 198,203,392 B borrowed =
+  1,323,054,596 B (1.232 GiB). Added head-owned/new-weight bytes above an
+  existing block35 bank would be 1,150,039,556 B. Combined named inventory
+  24,108,145,128 B does not establish integrated process fit; old full36 had
+  only 26.6 MiB of cap margin. Final standalone sampled peak
+  2,432,026,688 B (2.265 GiB), minimum cache-aware headroom
+  29,584,490,496 B, swap growth zero, 10% floor / native 4 GiB cap /
+  oracle 6 GiB cap / 300 s deadline / 64 MiB swap stop, serial GPU execution.
+- Each request: seven segments, one terminal wait, zero encode named
+  allocations/preterminal CPU activation reads, five postterminal diagnostics.
+  Reused scratch is exact after poisoning all 1,124,766,720 transient bytes.
+  Budget minus one byte rejects before allocation; alias/in-flight lifecycle
+  negatives pass. Named buffers reach zero after release; Metal counter
+  remains 1,852,211,200 B, not a zero-residency or full-cache-release proof.
+- Final timed repeat encode+wait 0.071841 s; one observed repeat,
+  excludes setup/comparisons, no controlled speedup/pipeline throughput claim.
+  Release/fresh make-q, format, 10 Crystal examples and nine Python tests pass.
+  Streamed audit verifies fresh fixture payloads/records, exact selected old
+  block35 slices, BF16 head-weight conversion and all RGB unpatchify indices.
+  Old entire full36 payloads and whole checkpoint are not freshly rehashed.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-head.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/results/qualification-audit-v3.json`.
+  Correlated Mini-Quad verdict: ROBUST within standalone scope. Rollback:
+  omit new opt-in module/probe or revert this atomic commit. Refresh after
+  scoped source/artifact/backend/device/OS/Torch/toolchain, precision, layout,
+  geometry, ownership/lifetime/guard/clock changes or evidence loss. Next:
+  integrated decoder scratch lifetime and measured peak before generation.
+
+### [LM-HY-NOMAS-PIXELUMM-THIRTY-SIX-2026-10-27] Full-J 36-block two-bank replay matches fresh MPS controls
+
+- Scope: PixelUMM blocks 0-35, T6/H44/W80/J21,120, one shared scratch and two
+  alternating BF16 output banks; existing F32 FFN graph path in every slot.
+  Both fresh connected upstream-semantics MPS controls independently check
+  all 468 loaded BF16 parameter tensors against authenticated cache words.
+  Real DCAE/noise/stem inputs use seeds 42/43 from a repeated static image,
+  not DiT-denoised output. No decoder head, diffusion or video quality claim.
+- Three native requests compare exactly 38 stable captures each: attention
+  0-35 and outputs 34/35. All 114 are finite and bitwise exact at unchanged
+  `atol=rtol=2e-5`, including alternate input after NaN poison. Outputs 0-33
+  are GPU successor handoffs, deliberately overwritten, not direct goldens.
+  Each request has one terminal wait, zero preterminal activation reads and
+  zero named encode allocations. Wrong order/stale aliases/early lifetime
+  operations are rejected; predecessor and surviving bank identities pass.
+- Exact named inventory 22,958,105,572 B; sampled process peak
+  27,084,064,600 B (25.224 GiB), only 26.6 MiB below the 25.25 GiB cap.
+  Minimum native cache-aware headroom is 15.757 GiB; no observed swap growth.
+  All three successful neural processes retain the 10% floor and serial
+  900 s guards. This pilot does not guarantee future/full-pipeline fit.
+  Timed repeat encode+wait is 43.6366 s; observer on, one repeat, no speedup
+  or seconds-per-video-second claim. Named buffers reach zero after release.
+- Release build/fresh make-q, 58 Crystal examples and 55 Python tests pass.
+  CPU audit hashes payloads/36 source subsets, checks 511 pins and guard
+  intervals; validator passes 46 negative/9 positive controls. Correlated
+  Mini-Quad verdict: ROBUST for source/artifact/comparator scope, not a
+  second neural implementation or independently retained native output.
+  Whole upstream checkpoint digest remains unverified; local subset/header
+  and loaded-word bindings are qualified. Failed startup/swap-stop/path
+  epochs remain excluded; dropping unused upstream diagnostics preserves
+  native comparison coverage and does not establish causal peak reduction.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-thirty-six-block.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-36-20261027/results/validator-audit.json`.
+  Rollback: omit the opt-in 36-block probe; older depths/defaults unchanged.
+  Refresh after scoped source/artifact/backend/device/toolchain, precision,
+  geometry, capture/lifetime/guard/clock changes or evidence loss. Next
+  frontier: separately budget the global decoder head before generation.
+
+### [LM-HY-NOMAS-CONDITIONED-EIGHT-2026-10-25] Eight BF16-cache blocks preserve exact live-conditioning replay at full J
+
+- Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight
+  full-row refiner/time embedding -> pretrained DiT blocks 0--7.
+  B1/V5280/T1280/J6560, 23 valid text rows / J5303 attention prefix,
+  zero-filled omitted query results and full-row projections/residuals.
+  Native BF16 parameters/F32 math match pinned upstream BF16-rounded F32
+  parameters through the bounded MPS adapter; CUDA/Magi and BF16 activation
+  semantics remain outside this qualification.
+- Both native requests match all 27 Qwen states, crop/mask and 18 consumer
+  captures raw exact: 110,102,528 F32 values/request, zero tolerance failures
+  or bit differences, unchanged finite `atol=rtol=2e-5`. The second request
+  remains exact after NaN poisoning 116 shared scratch/output buffers.
+  All 13 old four-block fixture spans remain byte-identical. Shared scratch
+  and one MPS workspace retain sixteen distinct final output banks and
+  direct GPU successor inputs; expected conditioning is never neural input.
+- Zero tracked encode allocations/preterminal activation reads, one terminal
+  wait and 47 postterminal reads/request. Early producer/crop/consumer release
+  is rejected. Finite wrong-block controls at positions 4 and 7 preserve all
+  predecessors and fail both target outputs; wrong padding keeps conditioning
+  exact and fails block 0. Eleven focused and fourteen four-block regression
+  Crystal examples, sixteen Python CPU tests and six live pre-Metal CLI
+  rejections pass. All 128 new BF16 tensors match fresh upstream conversion
+  during creation and reload. The independent stdlib byte/count audit covers
+  all eight cache files, F32 subsets/manifests, 12 upstream source files and
+  both requests' reported native hashes against reference spans. It is not a
+  second neural oracle or independently retained native payload. Correlated
+  MiniQuad verdict: ROBUST within this scope.
+- Named buffers: 19,099,905,356 bytes (consumer 6,361,095,684), including setup
+  F32 refiner staging; eight BF16 block payloads total 2,416,910,336 bytes.
+  Positive sampled process peak: 20,339,880,776 bytes (18.94 GiB). Minimum
+  headroom across native neural runs: 21,386,215,424 bytes. All admitted neural
+  runs preserve cache-aware 10% reserve, 22 GiB native / 9 GiB upstream caps,
+  64 MiB swap-growth stop and 600 s deadline, with zero observed swap growth
+  or abort. Samples do not bound instantaneous peaks. An undersized pre-Metal
+  256 MiB CLI attempt and two test-only failures are excluded; repaired specs
+  and 1 GiB CLI controls pass. The full checkpoint is not downloaded and its
+  declared whole-file LFS digest remains unverified.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-conditioned-eight.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-eight-20261025/logs/conditioned-eight-receipt-v1.json`.
+  Setup/terminal diagnostics use CPU; initial video input is synthetic and
+  upstream RoPE tables are uploaded. Immutable operator-pinned local files
+  and opaque companion object ancestry remain assumptions. No full generation,
+  video quality, full-stack fit or performance claim. Rollback: omit the opt-in
+  eight-block probe or revert this atomic change; retain the four-block control.
+  Next falsifier: separately budget a longer real-conditioning chain before
+  full-stack/video execution. Refresh on scoped code/source/cache/fixture,
+  precision/geometry, lifetime, toolchain/SDK/OS/device or artifact changes;
+  reread live memory before later GPU work.
+
+### [LM-HY-NOMAS-CONDITIONED-FOUR-2026-10-25] Live Qwen conditioning feeds four full-J blocks with exact MPS replay
+
+- Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight
+  full-row text refiner/time embedding -> pretrained DiT blocks 0 to 3.
+  B1/V5280/T1280/J6560, 23 valid text rows and valid joint attention prefix
+  5303; all projections/residuals retain padded rows. MPS attention explicitly
+  zeros omitted query results. Pinned upstream modules use the same MPS
+  adapter, saved authenticated Qwen state 26 and BF16-rounded F32 parameters;
+  native parameters are BF16 resident with F32 neural math. This does not
+  establish CUDA/Magi padding or BF16 activation semantics.
+- Two native positive requests match all 27 Qwen BF16 states, crop/mask,
+  projected text, scalar vec and eight DiT image/text outputs. The latter 10
+  captures contain 56,363,008 F32 values/request, raw-bit exact at unchanged
+  finite `atol=rtol=2e-5`, including a repeat after NaN poisoning 108 reusable
+  nonconstant buffers. Common scratch/workspace and distinct output banks feed
+  successors directly on GPU; expected conditioning is never inference input.
+- Zero tracked encode MetalBuffer allocations/preterminal activation reads,
+  one terminal wait and 39 postterminal diagnostic reads/request. In-flight
+  producer/crop/consumer release is rejected. Wrong-padding control preserves
+  producer/refiner but fails both block-0 outputs; wrong-block-3 control keeps
+  all predecessors exact and fails both block-3 outputs. All failures finite.
+  Thirteen Crystal examples, eight Python CPU tests, six live pre-Metal CLI
+  rejections and a separately written byte/count audit pass. The audit binds
+  all output spans, caches/subsets/manifests and 12 upstream source files; it
+  is not a second neural implementation. Correlated MiniQuad verdict: ROBUST.
+- Aggregate named buffers 17,676,492,108 bytes; consumer 4,937,682,436 bytes,
+  including retained setup F32 refiner staging. Positive native sampled peak
+  18,857,406,248 bytes; minimum cache-aware headroom 22,427,516,928 bytes.
+  Upstream sampled peak 6,165,564,440 bytes. All admitted bounded runs retain
+  10% reserve, process caps, 64 MiB swap-growth stop and 600 s deadline; no
+  observed swap growth/abort. Sampling does not bound instantaneous peaks.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-conditioned-four.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/logs/conditioned-four-receipt-v1.json`.
+  Operator-pinned immutable local files are trust assumptions; companion
+  object ancestry is opaque. Setup/terminal diagnostics use CPU; video input
+  is synthetic and native RoPE application uses uploaded upstream tables.
+  No full generation, model-wide residency/performance or quality claim.
+  Next falsifier: separately budgeted real-conditioning extension beyond four
+  blocks at full padded geometry. Rollback: omit the opt-in probe or revert
+  this atomic change; retain the synthetic four-block control. Refresh on
+  scoped code/source/cache/fixture, geometry/precision, lifetime, compiler/SDK/
+  OS/device or artifact changes; reread live memory before later GPU work.
+
+### [LM-HY-NOMAS-FOUR-BLOCK-2026-10-25] Four consecutive BF16-cache blocks match fresh upstream at J6560
+
+- Scope: actual pretrained blocks 0 to 3, B1/V5280/T1280/C2048/H16/D128/FF8192,
+  synthetic MPS hidden inputs, upstream ND RoPE theta256/axes[16,56,56]/
+  grid[6,22,40]. Physical native BF16 parameters/F32 MPS arithmetic and SDPA
+  C256/G16; upstream uses BF16-rounded F32 parameters. All eight image/text
+  outputs, 53,739,520 F32 values/request, match raw exact twice at unchanged
+  finite `atol=rtol=2e-5`, including NaN poisoning 60 reusable scratch buffers.
+- Common intermediate scratch/MPS workspace and distinct persistent output
+  banks feed each successor directly on GPU. Zero tracked encode allocations/
+  preterminal activation reads, zero snapshots/interblock waits, one terminal
+  wait and eight postterminal diagnostics per request. Named buffers total
+  3,555,779,072 bytes, including 1,208,455,168 BF16 parameter bytes. Owners are
+  rooted before allocation and retained through completion or unknown drain.
+  All-block preflight rejects a changed late view before appending work and
+  permits fresh-chain retry. Registry inspection is a detached Array, not the
+  former fixed two-item Tuple; external Tuple-specific callers must adjust.
+- Fresh block-2/3 named-range F32 subsets and native GPU BF16 cast/reload each
+  match independent fresh MPS conversion exactly. Streamed audit authenticates
+  all 128 BF16 tensors/604,227,584 words, selected fixture spans, nine upstream
+  source files and producer/input recipe. Ten common input/block-0/1 output
+  spans match the prior two-block fixture. Full checkpoint LFS SHA remains
+  declared, not verified; authenticated subset hashes/ranges are the evidence.
+- Two finite wrong-successor controls preserve all predecessors and fail both
+  outputs at the injected block. Twenty-four Crystal examples, 30 CPU Python
+  tests and eight live pre-Metal CLI rejections pass. Correlated MiniQuad
+  source/runtime review plus numerical/admission falsifiers: ROBUST in scope.
+- Positive native sampled peak 3,958,524,040 bytes, minimum cache-aware headroom
+  34,235,318,272 bytes; upstream peak 6,153,505,696 bytes. All admitted bounded
+  runs preserve 10% reserve, 64 MiB swap-growth stop and 600 s deadline; native/
+  upstream neural caps are 6/10 GiB. No observed swap growth or guard abort.
+  Named counts/sampling do not prove instantaneous peaks or performance gains.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-four-block.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-four-block-20261025/logs/four-block-receipt-v1.json`.
+  Operator-pinned immutable local fixtures remain a trust assumption; copied
+  object ancestry is opaque. Setup I/O/terminal diagnostics use CPU. No full
+  conditioning/model, CUDA/Magi/BF16 activation, generation, quality or speed
+  claim. Next falsifier: bounded actual conditioning-to-four-block replay.
+  Rollback: omit the opt-in probe or revert this atomic serial extension;
+  preserve two-block control. Refresh on scoped code/checkpoint/cache/fixture,
+  precision/geometry, lifetime, compiler/SDK/OS/device or artifact changes;
+  reread live memory before later GPU work.
+
+### [LM-HY-NOMAS-FULL-J-2026-10-25] Actual two-block RoPE and selected outputs match fresh upstream at J6560
+
+- Scope: actual pretrained blocks 0 to 1, B1/V5280/T1280/C2048/H16/D128/FF8192,
+  synthetic GPU hidden inputs, physical native BF16 parameters/F32 MPS math.
+  Fresh pinned upstream uses BF16-rounded F32 parameters and chunked F32 MPS
+  SDPA. Upstream ND RoPE has grid [6,22,40], axes [16,56,56], theta 256; native
+  application of those uploaded tables passes. All eight selected captures
+  (Q/K after RoPE and image/text outputs per block), 70,123,520 F32 values per
+  request, match upstream raw exact on two requests at unchanged finite
+  `atol=rtol=2e-5`. NaN poisoning 56 reused scratch buffers preserves repeat.
+- Direct GPU block handoff shares scratch/MPS workspace. Four Q/K snapshots
+  precede overwrite in the same chain (173,015,040 additional bytes); output
+  banks are already distinct. No all-eighty capture inventory: the fixture is
+  six inputs plus eight captures. Named buffers total 3,017,087,488 bytes.
+  Each request has zero tracked encode allocations/preterminal activation
+  reads, one terminal wait and eight postterminal reads. Owners are rooted
+  before allocation and retained until completion; incomplete drains retain
+  resources. BF16 caches have zero source F32 staging/conversion dispatches.
+- Identity RoPE and wrong-successor controls expose finite failures; the latter
+  keeps block 0 exact. Nine Crystal examples, eight Python checks, seven live
+  pre-Metal CLI rejections and a separately written streamed hash/count audit
+  pass. Initial `wx` report publication is rejected and excluded; the corrected
+  sibling-tempfile/no-replace hard-link publication is tested. Correlated
+  MiniQuad verdict: ROBUST for this scope.
+- Positive native sampled peak: 3,400,582,968 bytes; minimum cache-aware headroom
+  34,521,726,976 bytes. Fresh upstream peak: 5,158,063,152 bytes. Preserve 10%
+  reserve, 6/8 GiB native/upstream caps (3 GiB small checks), 64 MiB swap-growth
+  stop and 600 s deadline. No observed swap growth or guard abort. Sampling
+  does not bound instantaneous peaks or establish a physical memory saving.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-full-j.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-j-20261025/logs/full-j-receipt-v1.json`.
+  Operator-pinned fixture/local immutable files remain trust assumptions;
+  companion object ancestry is opaque. Setup I/O and postterminal diagnostics
+  use CPU. No full conditioning/model, CUDA/Magi/BF16 activation, performance,
+  generation or quality claim. Next falsifier: authenticated BF16 cache
+  coverage beyond two blocks and bounded N-block execution. Rollback: omit
+  the opt-in full-J probe. Refresh on scoped source/cache/fixture, precision/
+  geometry, loader/lifetime, toolchain/OS/device or artifact changes; reread
+  live memory before any later GPU run.
+
+### [LM-HY-NOMAS-BF16-SERIAL-2026-10-25] Two actual blocks consume BF16 caches with exact shared-workspace replay
+
+- Scope: saved B1/V6/T23/C2048/H16/D128/FF8192 inputs, actual blocks 0 to 1,
+  physical BF16 parameters and F32 MPS math/attention. All 64 tensors and
+  302,113,792 BF16 words match independent MPS conversions. Control, shared
+  replay and repeat each match all 80 authenticated saved upstream captures
+  (3,186,688 F32 values) raw exact at unchanged finite `atol=rtol=2e-5`.
+  Block 1 has a fresh GPU conversion oracle; block 0 retains its authenticated
+  prior conversion. No neural upstream block was freshly rerun.
+- The optional BF16-source path removes 1,208,455,168 bytes of cold F32 staging
+  and 64 source conversion dispatches. Control named bytes are 824,303,872
+  versus 2,032,759,040 for original F32 sources; shared named bytes remain
+  727,380,096 including snapshots. No speed or physical-peak reduction claim.
+- GPU outputs feed the successor directly; scratch/workspace is reused, with
+  GPU snapshots before overwrite and NaN poisoning before each shared request.
+  Zero tracked encode allocations/preterminal activation reads, one wait and
+  80 postterminal diagnostic reads per request. Rooted owners retain plans and
+  resources through completion; all weight bytes are compared before release.
+- Eighteen Crystal examples and eleven Python checks pass. Six CLI controls
+  reject bad identity/digest, self-oracle, insufficient budget or clobber before
+  Metal. Wrong-successor control keeps block 0 exact and fails both block-1
+  outputs. Original F32-source replay passes. Independent streamed-byte audit
+  binds cache/oracle tensors and producer/source/manifest/reference versions.
+  Correlated MiniQuad verdict: ROBUST within this scope.
+- Native sampled peak 931,726,704 bytes; minimum cache-aware headroom
+  37,414,289,408 bytes; observed swap growth zero. Preserve 10% reserve,
+  4 GiB probe/oracle caps, 3 GiB small-check cap, 64 MiB swap-growth stop and
+  600 s deadline. Samples do not bound instantaneous peaks. Oracle pins are
+  caller-trusted; receipt provenance assumes immutable local files. Companion
+  object bytes are pinned with opaque source ancestry; build is not hermetic.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-bf16-serial.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-serial-20261025/logs/serial-receipt-v1.json`.
+  Its selected-capture full-J extension is qualified above. Next falsifier:
+  cache coverage beyond two blocks. Full-stack fit/generation remain open.
+  Rollback: omit BF16 sources and retain the original F32 loader. Refresh on
+  scoped source/checkpoint/fixture, precision/geometry, loader/lifetime,
+  toolchain/OS/device or artifact changes; reread memory before later probes.
+
+### [LM-HY-NOMAS-BF16-CACHE-2026-10-25] One GPU-produced block cache removes F32 staging with exact bounded replay
+
+- Scope: actual pretrained block 0, B1/V6/T23/C2048/H16/D128/FF8192, native
+  BF16 parameter storage and F32 MPS math/attention. Fresh independent upstream
+  MPS conversion agrees on all 32 original names/shapes and 151,056,896 BF16
+  words. Source, BF16 reload and repeat each match all 40 saved upstream
+  intermediates (1,593,344 F32 values) raw exact; zero tolerance/control
+  differences at unchanged finite `atol=rtol=2e-5`. Intermediates are retained
+  authenticated upstream captures, not a fresh upstream block invocation.
+- Native derivative payload: 302,113,792 bytes; file: 302,117,424 bytes. Direct
+  BF16 reload removes 604,227,584 bytes (576.236 MiB) of F32 raw staging and 32
+  conversion dispatches. Named bytes decrease from 1,016,509,568 to 412,281,984.
+  No whole-pipeline fit, physical-peak reduction or speedup is measured.
+- Each request has zero tracked encode-time allocations/preterminal activation
+  reads, one terminal wait and 40 postterminal activation diagnostics. Raw
+  weight-byte comparison/serialization is setup work after completion. A rooted
+  owner retains resources through drain. A private same-parent directory holds
+  the cache until source/reload/repeat gates and owner cleanup pass; final
+  publication uses a no-clobber hard link. Failed qualification removes staging.
+- Guarded final native sampled peak: 1,110,476,384 bytes; minimum cache-aware
+  headroom: 38,003,752,960 bytes; zero observed swap growth. Oracle sampled
+  peak: 2,589,197,920 bytes. Preserve 4 GiB probe/oracle caps, 3 GiB small-check
+  cap, 10% reserve, 64 MiB swap-growth stop and 600 s deadline. Sampling cannot
+  prove instantaneous peaks. Thirteen Crystal and seven Python checks pass;
+  CLI one-byte-short budget/wrong digest reject before Metal initialization,
+  and an existing cache is preserved. Correlated MiniQuad: ROBUST for this
+  saved-input scope. Companion object bytes are pinned, source ancestry opaque.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json`.
+  Its two-block and selected-capture full-J successors are qualified above.
+  Keep immutable authenticated
+  local files and opt-in loading; no full checkpoint or generation is admitted.
+  Rollback: omit this diagnostic and retain the F32-source loader. Refresh on
+  scoped source, checkpoint/fixture, geometry/precision, toolchain/device,
+  loader/lifetime or artifact changes; reread live memory before later probes.
+
+### [LM-HY-NOMAS-RESIDENCY-2026-10-25] Full DiT parameter accounting exposes cold conversion staging
+
+- Authenticated pinned header: 2,268 F32 tensors, 54 blocks and nine categories,
+  including camera/action. Payload is 34,213,738,368 bytes; projected BF16
+  parameters occupy 17,106,869,184 bytes (15.932 GiB). All native block bindings
+  match. Whole-checkpoint payload/LFS verification remains open.
+- At B1/V5280/T1280/C2048/H16/D128/FF8192, compact C256/G16 attention,
+  the modeled N=54 distinct-output extension uses 4,975,137,280 scratch/workspace
+  bytes. All-parameter cold/warm named totals are 56,354,907,456/22,141,169,088
+  bytes. The separate MPS heuristic adds 590,872,576 bytes; it bounds no opaque
+  allocation. N-block execution and two-bank outputs remain unimplemented.
+- Current F32-to-BF16 loading retains both source and destination until the
+  terminal. Removing its modeled 31.864 GiB source staging requires a qualified
+  model-wide cache/loading path. Two-bank outputs could save a further
+  2,794,455,040 bytes, but need a binding/alias/lifetime proof.
+- Diagnostic snapshots are excluded: 54 full-J sets of the actual 40 captures
+  would add 80,127,000,576 bytes. Camera execution/history/KV, refiner/input/final
+  workspaces, scheduler, Qwen and PixelUMM execution remain outside accounting.
+  No pipeline fit, physical peak, speedup or numerical/default claim follows.
+- Verification: eight native CPU metadata specs, native report with zero
+  tracked GPU allocations, separately constructed closed-form/header audit,
+  short receipt reconciliation, one-byte budget rejection and same-length
+  header-tamper rejection. Correlated MiniQuad verdict: ROBUST within this
+  scope. No model, GPU work or full generation was run; existing finite
+  tolerance and cache-aware 10%/64 MiB swap/600 s guards remain unchanged.
+- Local qualified subsets cover 106 tensors, 1,791,766,528 F32 payload bytes;
+  paths/sizes are refreshed, payload hashes retain the previous scope. Another
+  32,421,971,840 payload bytes remain; nothing was downloaded in this slice.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-residency.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-receipt-v1.json`.
+  The one-block BF16 cache is now qualified by the landmark above. Next
+  falsifier: BF16 sources in the actual two-block replay before wider use.
+  Refresh on source/header, geometry/capture, loader lifetime/accounting
+  changes; live telemetry must be reread before later probes. Rollback: omit
+  the diagnostic. Full generation is outside admission; Wan return pointer
+  remains `docs/wan-performance-frontier.md`.
+
+### [LM-HY-NOMAS-PRETRAINED-SERIAL-2026-10-25] Actual DiT blocks 0 to 1 reuse scratch/workspace with exact bounded replay
+
+- Distinct pretrained block-0/block-1 subsets, resident in BF16 with F32 MPS
+  math/attention, pass all 80 upstream intermediate comparisons at unchanged
+  finite `atol=rtol=2e-5`. All 3,186,688 F32 values are also raw-bit exact for
+  independent plans and two shared-workspace requests. Inputs are authenticated
+  saved refiner output (23 text tokens), six seeded hidden video tokens, one
+  timestep vector and saved RoPE. Qwen/refiner are not rerun in this slice.
+- Each shared request poisons all 56 unique nonconstant scratch buffers with
+  NaNs before encoding and preserves 80 GPU snapshots before reuse. Shared,
+  independent and repeated outputs remain raw-F32 exact. One terminal wait per
+  request, zero tracked encode allocations/pre-terminal activation reads and
+  80 post-terminal diagnostic reads are observed. Rooted leases retain weight
+  staging/plans/resources through terminal completion or an incomplete drain.
+- Scratch plus workspace decreases from 219,816,192 to 110,145,664 named bytes:
+  109,670,528 bytes (104.59 MiB, 49.9%) saved for this geometry. Both phases are
+  admitted before GPU allocation. The independent peak estimate includes raw
+  conversion staging; opaque MPS/runtime allocations remain outside named
+  counters. This correctness probe does not establish a throughput speedup.
+- Substituting block 0 for successor block 1 preserves the first block and
+  rejects 38 successor checkpoints, including both final outputs. A cached
+  Linear/RMS binding guard rejects equal-shape/equal-dtype Arena rebinding before
+  allocation/dispatch; disabling that guard makes its rejection test fail.
+  One-byte aggregate admission rejects without tracked GPU allocations/reads.
+- Verification: 14 CPU tests pass; native suite has 60 examples, 56 passed,
+  zero failures/errors, four pre-existing external-oracle pending cases.
+  Fresh bridge build, upstream capture, positive/negative probes, byte audit
+  and formatting pass. Correlated MiniQuad verdict: ROBUST for this bounded
+  serial scope. Oracle/native probes retain a 4 GiB sampled process cap,
+  cache-aware 10% host reserve, 64 MiB swap-growth stop and 600 s deadline;
+  builds/small tests use 3 GiB. Highest sampled oracle/probe footprint is
+  2,454,849,288 bytes, minimum headroom 34,913,026,048 bytes, swap growth zero.
+  Sampling cannot exclude short spikes or guarantee cache reclaimability.
+- Local subsets now cover 64 DiT plus 42 refiner/time tensors. The complete
+  checkpoint remains absent; its declared LFS digest is unverified. Evidence
+  is pinned source/header and observed byte-range/subset hashes with immutable
+  local files. No CUDA/Magi, full-stack/full-J, quality, default or RTF claim.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-pretrained-serial.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-receipt-v1.json`.
+  Refresh on scoped source/weights/input/precision, compiler/SDK/OS/device,
+  ownership/scheduling changes or artifact loss/hash mismatch. The metadata
+  landmark above now accounts for DiT parameters and block workspaces; complete
+  pipeline residency and full-geometry positional/output gates remain open
+  before additional downloads or pipeline qualification. No full generation
+  is admitted; Wan return pointer is `docs/wan-performance-frontier.md`.
+
+### [LM-HY-NOMAS-CONNECTED-TEXT-2026-10-25] One native prompt reaches an actual-weight short DiT block on one GPU chain
+
+- Native prompt preparation, all 26 selected Qwen2.5 blocks, the BF16 GPU
+  conditioning crop, actual single_refiner/time embedding and a six-video-token
+  DiT block execute on the same command chain. All 27 Qwen boundaries and the
+  crop are raw-BF16 exact: 134,313,984 plus 4,587,520 words, and 1280 mask entries.
+  All 53 refiner and 40 DiT intermediate comparisons pass the unchanged finite
+  `2e-5 + 2e-5*abs(reference)` gate. Refiner/DiT are not bit-exact claims.
+- Full masked 1280-row and compact 23-row upstream refiner controls pass all
+  45 valid-row comparisons. Downloaded distilled weights cover 42 refiner/time
+  tensors plus 32 block-0 tensors; the complete checkpoint remains absent.
+  BF16 weight residency with F32 math/attention does not qualify CUDA/Magi or
+  full BF16 activation execution. Admission rejects unsupported masks/modes.
+- Exact-input discriminators found ordinary Metal sin/cos errors despite safe
+  math, and contracted gated residual arithmetic. A fixed upstream F32 basis,
+  precise GPU trigonometry and a refiner-local uncontracted residual repair
+  these differences without extra dispatches, buffers or waits. Eight tested
+  timestep embeddings and isolated text FC2 replay are bit-exact. Generic
+  arithmetic/default paths remain unchanged.
+- Connected admission is 14,707,308,492 named bytes. The guarded run samples
+  15,748,213,632 process bytes (14.667 GiB), minimum cache-aware headroom
+  27,880,472,576 bytes, zero swap growth, one terminal wait, zero tracked encode
+  allocations/readbacks and 122 post-terminal diagnostic reads. The 3.834 s
+  GPU interval is a correctness observation, not video throughput. Guards keep
+  the authorized 10% reserve, 15 GiB process cap and 64 MiB swap-growth stop.
+- Session and isolated replay owners root raw conversion staging before first
+  dispatch; early release rejects and incomplete drains retain resources.
+  Same-chain serial ordering and immutable borrowed/checkpoint bytes remain
+  caller preconditions. Named counters exclude opaque MPS resources and
+  sampled limits cannot exclude between-poll spikes.
+- Verification: 57 native examples (53 passed), zero failures/errors, four pre-existing
+  optional external-fixture cases pending; 12 CPU admission/oracle tests pass.
+  Final saved-conditioning, connected and isolated-projection gates all pass.
+  Correlated MiniQuad verdict: ROBUST for the declared one-prompt serial scope.
+  No full generation, all-input parity, default promotion or speedup follows.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/logs/conditioning-receipt-v1.json`.
+  Refresh on scoped source/input/mask/timestep/checkpoint, precision, toolchain,
+  SDK/OS/device, scheduling/lifetime changes or artifact loss/hash mismatch.
+  The pretrained-serial landmark above discharges the subsequent saved-input
+  block-0-to-block-1 comparison. Full-stack memory/composition remains open.
+  Wan return pointer remains `docs/wan-performance-frontier.md`; no full
+  generation is admitted by this continuation.
+
+### [LM-HY-NOMAS-QWEN25-NATURAL-PROMPT-2026-10-25] One native natural prompt and GPU conditioning crop match a fresh 26-block oracle
+
+- Native pinned Qwen2.5 byte-BPE/template preparation matches the original
+  Hy-Nomas prompt methods for the tram prompt. Constructor crop discovery is
+  108; raw input is 1388 tokens, with 131 visible tokens. The selected suffix
+  is 1280 positions, with 23 visible tokens. Forward preserves all raw context
+  and positions; only the final selected hidden state and mask are cropped.
+- Fresh official Transformers 4.57.3 MPS BF16 capture and native fed-RMS run
+  match all 27 boundaries: 134,313,984 exact BF16 words at unchanged
+  `atol=rtol=2e-5`. The GPU suffix adds 4,587,520 exact words and 1280 exact
+  Int32 mask entries. This extends, rather than replaces, the earlier repeated
+  S1280 qualification of 123,863,040 words below.
+- The actual native-prepared IDs/mask/positions feed the GPU. Preallocated
+  suffix copies follow the prefix on the same chain. One terminal wait, zero
+  pre-terminal reads through instrumented MetalBuffer APIs, zero tracked
+  encode allocations and 29 post-terminal reads are observed. In-flight plan
+  release is rejected. Source/destination immutability and same-chain producer
+  ordering remain explicit caller preconditions, not general handle leases.
+- Named admission is 12,738,809,672 bytes; crop allocations add 9,185,712 bytes.
+  Native GPU elapsed is 2.796 s and guarded whole-command time is 25.907 s.
+  This correctness run establishes neither a speedup nor video throughput.
+  Both sequential runs preserve a file-cache-aware 10% floor, 15 GiB sampled
+  process cap, 64 MiB swap-growth stop and 600 s deadline. Oracle/native peaks
+  are 14,714,783,832/13,744,023,416 bytes, observed swap growth zero.
+- Correlated MiniQuad verdict: ROBUST for the one-prompt serial scope.
+  Defaults stay unchanged and the path stays opt-in. No multimodal/batched or
+  all-input parity, integrated DiT conditioning, full generation, exact CUDA
+  reduction or hermetic companion-object rebuild claim follows.
+- Evidence: `docs/qwen25-hy-nomas-frontier.md`,
+  `.landmark/evidence/2026-10-25-qwen25-natural-prompt.json` and
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/natural-prompt-receipt-v1.json`.
+  Refresh on scoped source, prompt/tokenizer/template, checkpoint, precision,
+  geometry, toolchain/SDK/OS/device or execution/lifetime changes, or artifact
+  loss/hash mismatch. The connected landmark above now discharges the next
+  actual-weight text-refiner/short-DiT handoff for this prompt. Return pointer:
+  `docs/hy-nomas-native-frontier.md`; no full generation is admitted.
+
+### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] The selected pretrained 26-block text prefix matches bounded official MPS captures
+
+- The opt-in Qwen2.5-VL adapter reuses CogniQwen Metal buffers and the serial
+  MPS command chain. It implements biased Q/K/V, split-half RoPE, GQA causal
+  attention, RMSNorm and SwiGLU. Qwen3.5 hybrid/GDN weights are not compatible.
+- Four official Transformers/MPS BF16 fixtures pass 102 stage comparisons
+  with zero absolute error: one tiny block, two distinct tiny blocks with unit and nonunit
+  RMS gains, and one 3584/18944/28Q/4KV/HD128 block. All have four tokens,
+  right padding `[1,1,1,0]`, offset seven and synthetic constructor weights.
+  The unchanged finite gate is `2e-5 + 2e-5*abs(reference)`.
+- Fresh pretrained S4/S32 runs compare embedding plus all 26 selected hidden
+  outputs against authenticated official captures. All 54 state comparisons
+  have zero differing BF16 words. The raw-word diagnostic is separate from
+  the unchanged finite gate and is challenged by a signed-zero control.
+- The S1280 check compares all 27 states but fails the unchanged gate, first
+  at block 0's post-attention RMSNorm. Its preceding stages are raw-BF16 exact;
+  28 norm words differ, producing 596 differing hidden words. This leaves
+  S4/S32 qualification intact and explicitly rejects S1280 qualification.
+- Same-graph casts failed as precision fences. The later pretrained layer-24
+  RMS failure is repaired by safe-math Metal sqrt/reciprocal, F32 scaling and
+  explicit BF16 rounding. Nineteen prepared graph/Metal steps per block use
+  seven BF16 scratch bindings and one F32 scalar per token. Ordered prefix
+  execution shares intermediates and retains separate hidden checkpoints.
+  One terminal wait, zero tracked encode allocations and no pre-terminal
+  activation reads are observed. Serial overlap/budget/lifetime falsifiers pass.
+- Correlated MiniQuad verdict: ROBUST for bounded serial S4/S32 numerical and
+  lifecycle evidence. Fully masked rows, concurrent callers, the 1280-token
+  prompt, tokenizer/cropping, full-model APIs and DiT integration remain
+  unqualified. No generation or speedup is claimed. Default memory floor is
+  15%; explicitly authorized runs select 10%, with process/swap/deadline guards.
+- Evidence, source/runtime pins, trusted fixture hashes, commands, memory and
+  residuals: `docs/qwen25-hy-nomas-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-continuation-receipt-v3.json`.
+  The prior constructor-weight receipt remains historical evidence.
+  The S1280 failure and two refuted SSD-only controls are indexed by
+  `logs/prefix-s1280-receipt-v1.json` under the same evidence root.
+  Refresh after scoped source, precision, fixture/weights/geometry, compiler,
+  SDK/OS/device or lifecycle changes, or artifact loss. The isolated RMS
+  continuation below localizes the statistics delta to square-versus-power
+  values: native mean/+epsilon is raw-bit exact on upstream squares. Its
+  receipt is `logs/rms-reduction-receipt-v1.json` under the same evidence root.
+  Next: GPU-fed exponent power control before a bounded repair and block-0
+  regression; DiT return pointer is
+  `docs/hy-nomas-native-frontier.md`.
+
+### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
+
+- One owning scratch Arena, two distinct final image/text output banks, one
+  prepared MPS workspace. Fixed graph intermediates are shared; projection
+  and RMS weights select registered per-block bindings. In-flight chain and
+  early-release guards reject unsafe reuse. No arithmetic, inference default,
+  forced submission boundary or internal wait changes.
+- Only the 32 actual distilled block-0 tensors are downloaded (604,231,456-byte
+  F32 source); the pinned actual-weight oracle applies that same block twice.
+  A separate small control uses different synthetic successor/RMS weights and
+  poisons nonconstant scratch with NaNs before both repeated requests. Its
+  40 second-block checkpoints are raw-F32 exact against separate workspaces.
+  This is not a real pretrained block-0-to-block-1 qualification.
+- Eight isolated short-input fixture gates (F32/BF16-boundary math,
+  broadcast/per-token modulation, BF16/F32 weight residency) pass nine examples
+  and 216 finite comparisons each. All 640 serial intermediate arrays are
+  raw-F32 exact; 120 designated BF16 arrays, including 48 serial arrays, are
+  exact. Tolerance stays `2e-5 + 2e-5*abs(reference)`. The full Makefile suite
+  passes 43 examples, zero failures/errors, four external-oracle pending cases;
+  the eight isolated runs separately discharge its block-fixture pending case.
+- J1024 ABBA uses four fresh processes / eight measured samples per mode.
+  Separate/shared medians: wall 34.288/34.920 ms, GPU chain elapsed
+  33.066/33.149 ms, CPU encode 1.459/2.037 ms. All cross-mode output hashes
+  match. Named resident bytes fall from 1,150,658,564 to 739,370,500; there is
+  no measured speedup. Automatic root counts are 5x8 separate and 5x7/6x1
+  shared. Their variability is recorded, not forced away by extra commits.
+- J6560 shared two-block median is 275.237 ms including one terminal wait,
+  with zero tracked encode MetalBuffer allocations and stable output hashes.
+  Named scratch + workspace uses 2,180,682,240 bytes (2.031 GiB), versus
+  calculated 4,253,885,440 bytes (3.962 GiB) for two independent sets. The large
+  separate arm was not run. Benchmarks use synthetic inputs/theta-10000 RoPE;
+  no full-J upstream, full stack or video-throughput claim follows.
+- Admitted fixture gates peak at 2,424,391,648 sampled process-group bytes,
+  J6560 at 3,419,833,856; minimum cache-aware headroom across these is 30.359%,
+  swap growth zero. External 4 GiB cap, 15% floor, 64 MiB swap-growth stop and
+  600 s deadline remain. The combined four-variant fixture exceeded the cap;
+  its failed receipt is retained, replaced by the complete isolated matrix.
+- Correlated MiniQuad verdict: ROBUST for this fixed-input serial ownership
+  contract and measured matrix. Next: actual pretrained block 0 to block 1,
+  pinned upstream chain and bounded full-stack residency. Evidence, exact
+  commands, pins, source/binary/object hashes and retained failures:
+  `docs/hy-nomas-native-frontier.md`, serial section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-workspace-20261024/logs/final-receipt-v1.json`.
+  Refresh after scoped source, fixture/operands/geometry, precision, compiler/
+  bridge/SDK/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-BLOCK-PROFILE-2026-10-24] J6560 block profile passes; serial scratch is the next residency boundary
+
+- Fresh release benchmark at parent `45cfa8f5`, Apple M2 Max: one actual block-0
+  weight set, GPU F32-to-BF16 conversion, B1/image5280/text1280/C2048/H16/D128/
+  FF8192, explicit compact C256/G16 and BF16-boundary control. Deterministic
+  GPU-generated inputs and synthetic theta-10000 RoPE qualify performance and
+  repeatability only, not upstream ND RoPE, full-J output or generated quality.
+- One warmup and two on/off/off/on groups give four paired comparisons. Warm
+  observer-off medians: block encode + terminal wait 137.626 ms, CPU encoding
+  1.853 ms, GPU root union 136.704 ms. All eight outputs match the warmup at
+  raw F32 bits across 13,434,880 values each. Each block has 28 roots, one
+  terminal wait and zero tracked encode MetalBuffer allocations. Per-arm GPU
+  diagnostics have separate waits outside block timers; chain setup is separate.
+- The median per-sample sum over 25 attention-only interior roots is 57.623 ms
+  (about 42% of the off-arm GPU union). Boundary roots are shared by QKV,
+  packing, attention, residual and FFN phases; their intervals can include
+  stalls. No exact per-phase kernel costs follow. Four paired observer wall
+  deltas span -56..+349 microseconds, insufficient for a general overhead claim.
+- Three CPU profile and three command-chain lifecycle examples pass. Fresh
+  block specs link the benchmark's exact seven bridge objects: both real F32
+  and BF16 fixtures pass eight examples / 536 finite comparisons each, with
+  all 480 canonical checkpoint arrays raw-F32 exact and 72 BF16 fixture
+  boundary arrays exact. Short fixtures have six image / three text rows;
+  alternative native controls have small within-gate drift. Tolerances remain
+  `2e-5 + 2e-5*abs(reference)`; no inference default or scheduling changes.
+- Benchmark sampled footprint peaks at 3,408,070,024 bytes (3.174 GiB), minimum
+  cache-aware headroom 41.718%, swap growth zero. The two fresh fixture gates
+  peak at 3,576,301,992 bytes with minimum headroom 23.295%. External sampled
+  4 GiB cap, 15% floor, 64 MiB swap-growth stop and 600 s deadline stay intact.
+  Initial swap-guard/build/harness failures are retained, not counted as passes.
+- Scratch remains 55 non-aliased buffers / 1.682 GiB per block; all 14
+  projections already share one 96 MiB expansion stage. Next: explicit shared
+  serial scratch/workspace lifetime with distinct input/output banks and
+  unchanged two-block parity plus overlap/early-release falsifiers. Blind
+  aliasing violates retained checkpoints/fixed graph bindings. No full model
+  or generation was run. `432 * 137.626 ms = 59.4545 s` is conditional arithmetic
+  for block-0-equivalent calls, not measured DiT or video throughput.
+- Correlated MiniQuad verdict: ROBUST for the guarded one-block scope;
+  full-pipeline, quality and exact phase-cost claims remain unqualified.
+  Evidence/pins/commands/hashes/decay: `docs/hy-nomas-native-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-block-profile-20261024/logs/final-receipt-v1.json`.
+  Refresh on scoped source, operands/fixture/geometry, precision, compiler/
+  bridge/SDK/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-COMPACT-ATTENTION-2026-10-24] Bounded attention is opt-in; C256 is the tested long-input candidate
+
+- Prepared Metal/MPS attention packs K/V once per encode, reuses fixed smaller
+  Q/output stages and overlaps the final query window to preserve its graph
+  shape. No internal wait or tracked encode MetalBuffer allocation is added.
+  The canonical dense default is unchanged; omit the two workspace keywords
+  to roll back. Named stages at B1/J6560/H16/D128/C256 are 106.5 MiB versus
+  205 MiB dense; largest logical score is 102.5 MiB versus 2626.5625 MiB.
+  These are geometry bounds, not an opaque peak-memory bound.
+- Workspace admission rejects grouped heads, B>1 partial chunks and C<32
+  partial chunks before allocation. Their low-level diagnostics remain
+  available and failed receipts are retained: B2/T65/H16/D128/C32 has only
+  5.9604645e-8 max error but 17 BF16-bin mismatches. Guards reject known
+  counterexamples; they do not qualify every remaining shape/input.
+- F32 and BF16-rounded standalone controls each pass 19 examples/48 dense
+  comparisons under the unchanged finite and exact BF16-bin gates. Each has
+  45/48 raw-F32 exact comparisons; T65/C32 drift reaches 5.2154064e-8 without
+  a finite or BF16-bin violation. The pinned PyTorch 2.8 MPS oracle matches
+  C128/G16 over full T257 outputs and
+  three selected 128-row outputs at T6560 with full K/V. This is not a full
+  T6560 upstream output or CUDA/Magi parity claim. Four compact block fixture
+  runs (actual/tiny, F32/BF16 boundary controls) pass 8 examples/536 finite
+  comparisons/480 raw-exact checkpoint arrays each; BF16 fixtures also match
+  72 boundary arrays. C=T=9 integration establishes bindings/lifetime only.
+  Dense tiny-F32 regression and direct constructor rejection checks pass.
+- Guarded paired native timings at J6560: C128 -> C256 median wall
+  66.784 -> 61.589 ms initially, 68.467 -> 62.277 ms from a fresh Makefile
+  build. The gain has the same sign in all eight pairs. C512 is slower on
+  GPU despite cheaper encoding. A/A GPU ratios stay within 0.9955..1.0055
+  in the Makefile run, while wall ratios 0.8273..1.0445 expose outside-span
+  latency. Do not promote a universal speedup or infer video throughput.
+- Five final block runs: max sampled group footprint 3412.112 MiB, min
+  cache-aware headroom 19.379%, zero swap growth. Every reported run uses an
+  external guard; the benchmark itself only estimates geometry. The 4 GiB
+  sampled cap, 15% floor, 64 MiB swap-growth stop and 600 s deadline remain.
+  Correlated MiniQuad verdict: ROBUST within the exercised numerical,
+  constructor and ownership contracts; general admission and wall-speed
+  claims remain limited. No full model/generation was run.
+- Evidence/pins/commands/source and binary hashes:
+  `docs/hy-nomas-native-frontier.md`, compact attention section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-attention-20261024/logs/final-receipt-v1.json`.
+  The J6560 whole-block follow-up is recorded in the profile landmark above;
+  shared serial stages/liveness scratch precede full-model residency. Refresh after
+  scoped source, fixture/operands/geometry, precision, compiler/bridge,
+  PyTorch/MPS/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-MPS-BLOCK-2026-10-24] Opt-in MPS closes the declared BF16 boundary gate
+
+- `HyNomasDualStreamBlock#encode_mps` uses prepared resident MPS projections and
+  canonical attention, matching LayerNorm/SiLU/GELU/RMS and uncontracted
+  modulation/residual/RoPE arithmetic. Same-input actual-weight projection,
+  QK, softmax and PV raw/rounded controls are bitwise equal. Projection/QK
+  replacement alone was insufficient; tiny pre-boundary drift propagated
+  through chained BF16 bins. Frozen controls isolated each subsequent change.
+- Final guarded `hy_nomas_block_spec-v11` runs pass the actual C2048/H16/D128/
+  FF8192 block and tiny configuration under both F32 and BF16-boundary policies,
+  four modulation/residency cases per fixture, eight examples and 536 finite
+  comparisons per run. All 480 saved checkpoint arrays per fixture are raw-F32
+  bitwise equal, including the second block consuming resident first outputs.
+  Both BF16 fixtures have zero mismatches over 72 selected boundary arrays.
+  The native-default actual F32 regression passes eight examples/488 comparisons.
+- Supported encode asserts zero tracked MetalBuffer allocations and one terminal
+  wait per case; all reads follow it. Strong workspace retention and bound-chain
+  projection hooks prevent premature scratch release; negative preflight,
+  early-release and post-release RoPE checks pass. The preceding chain fix
+  `345378c0` distinguishes rejected pre-wait calls from a drained GPU chain.
+  No zero-opaque-allocation or no-driver-stall claim is made.
+- Final five block runs: maximum sampled group footprint 3541.144 MiB, minimum
+  cache-aware headroom 24.532%, zero swap growth. The 4 GiB sampled cap, 15%
+  floor, 64 MiB swap stop and 600 s deadline remain. Correlated MiniQuad verdict:
+  ROBUST for this supported fixture/binding/lifetime contract. The original
+  failing native/alternative diagnostic remains retained; no tolerance or
+  native default changed. CUDA/Magi/all-BF16 parity is not established.
+- No full generation or representative throughput measured. One 24-frame prefix
+  needs J=6560 and 432 DiT calls at default 8 steps; the two-minute ceiling leaves
+  less than 277.8 ms per block before other work. Current named scratch is
+  1.682 GiB/block; MPS stages add 404.3 MiB/block and a dense score is 2.565 GiB.
+  Next: compact grouped/chunked attention with unchanged chained parity, shared
+  liveness scratch/stages, then representative phase/whole-block timing. Full
+  pipeline, camera/history and PixelUMM remain open; no speed promise follows
+  from nine-token correctness timings.
+- Evidence/pins/reproduction/decay:
+  `docs/hy-nomas-native-frontier.md`, prepared MPS block section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-mps-reductions-20261024/`.
+  Refresh on scoped source, checkpoint/fixture/operands, graph rank/layout,
+  precision, bridge/compiler/PyTorch/MPS/OS/device/schedule changes or artifact
+  loss. Wan return pointer: `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-BF16-LOCAL-2026-10-24] Same-input probes separate projection and attention drift
+
+- Test-only probes at parent `bd0bf23a` freeze trusted upstream block0 operands.
+  Actual C2048/H16/D128/F8192 weights, 6 video/3 text tokens, four modulation
+  and weight-residency variants: all 188 raw F32 records pass the unchanged
+  finite gate, max absolute error `2.861023e-6`. All 68 reference-reproduction
+  and four factored-native/production attention controls are bitwise equal.
+  Five unit controls pass. No production kernel/default/tolerance is changed.
+- The BF16 gate remains failed: 101/188 rounded diagnostic records differ
+  bitwise, including 83 finite-gate failures. Alternative paths and
+  counterfactual roundings overlap; this is not a count of unique live model
+  errors. Normal V projection has 28 actual-boundary bin differences, 14 finite
+  failures. Same-input final Q/K normalization/RoPE has none; inherited input
+  drift remains outside that isolated conclusion. Upstream bias placement is
+  bitwise equivalent here; native unbiased projection drift persists.
+- Canonical attention has two BF16 bin differences. Broadcast/F32 index 10120
+  is an exact native midpoint: frozen explicit-MPS QK restores the canonical
+  bin in the unchanged online reducer. Broadcast/BF16-weight index 9949 is a
+  counterexample to a QK-only fix: frozen QK does not restore it, while native
+  PV on actual MPS probabilities does. The probability control merges internal
+  QK and softmax; it does not isolate softmax alone. RNE is not changed.
+- Every variant uses one terminal wait, post-completion readbacks and zero
+  tracked encode MetalBuffer allocations. Serial guard receipts retain the
+  sampled 4 GiB cap, cache-aware 15% floor, 64 MiB swap-growth stop and 600 s
+  deadline. Final actual oracle/native sampled peaks are 1752.237/2738.659 MiB,
+  minimum headroom 30.992%/27.507%, zero swap growth. No full generation runs.
+- Correlated MiniQuad verdict: ROBUST for the bounded diagnostic with trusted
+  producer/digests and immutable weights; VULNERABLE as a general BF16 fix.
+- Evidence, trusted digests, reproduction and interpretation limits:
+  `docs/hy-nomas-native-frontier.md`, same-input diagnostics section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-attention-20261024/`. Next: compare native
+  projection/QK reductions with MPS and isolate normalization/PV with frozen
+  actual MPS probabilities. CUDA/Magi runtime parity, video quality and speed
+  remain open. Refresh on scoped source/fixture/checkpoint, geometry/dtype,
+  compiler/bridge/runtime/device, scheduling changes or artifact loss.
+  Wan return pointer remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-ACTUAL-BLOCK-2026-10-24] Actual weights pass F32 control; BF16 boundaries fail
+
+- Extract only 32 `double_blocks.0.` tensors from the official distilled
+  checkpoint at HF revision `bac719a80c8d02f91c485fca804bb8221e149b70`.
+  The local F32 subset SHA-256 is
+  `6810bf7cd7f9a8ac4d66240eee514637a7ccaa47dc9de02e8bc26ae4543530d1`.
+  HTTPS range provenance is retained; the complete 34.2 GB source file was
+  not downloaded or independently hashed. The extractor rejects unfamiliar
+  layouts and has 11 passing offline tests.
+- Native C2048/H16/D128/F8192 F32-math controls pass 8 examples and all 488
+  comparison records with actual weights, both F32/BF16 residency and both
+  modulation modes. A trusted fixture digest plus explicit expected source
+  digest binds actual-weight admission. GPU F32-to-BF16 setup conversion is
+  opt-in and fully budgeted; 20 checkpoint examples pass. Encode allocates
+  zero tracked MetalBuffers and adds no completion wait/activation readback.
+- BF16 attention-boundary control remains experimental and default-off:
+  289/488 actual-weight records fail the unchanged `2e-5 + 2e-5*abs(ref)` gate.
+  Pre-boundary F32 differences cross BF16 midpoints. Same-input raw F32
+  attention replays pass all four variants; one rounded replay element fails.
+  This is an open numerical gate, not established video quality degradation.
+- Final bounded runs retain the sampled 4 GiB cap, cache-aware 15% floor,
+  64 MiB swap-growth stop and 600 s deadline. Maximum final oracle/native
+  sampled peaks across the separate precision modes are 3508.597/2789.034 MiB
+  with zero swap growth; two earlier oracle cap stops
+  remain excluded failures. No model/video generation or speedup is claimed.
+  Correlated MiniQuad verdict is ROBUST only for actual-weight F32 control
+  under trusted producer/digest and immutable-file assumptions.
+- The following same-input investigation is retained in
+  LM-HY-NOMAS-BF16-LOCAL-2026-10-24 above. Representative-token benchmarks
+  remain pending. Commands,
+  receipts, pins and refresh triggers: `docs/hy-nomas-native-frontier.md`.
+  Wan return pointer remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
+### [LM-HY-NOMAS-F32-CORE-2026-10-24] Native block control; runtime precision remains open
+
+- User temporarily switched from Wan to Hy-Nomas. The opt-in dual-stream block
+  at pinned upstream `911cea6458a89c2663513ff7099561ec190dd491` has strict
+  safetensors F32/BF16 admission and reusable GPU scratch. Two-block output
+  chaining stays resident; encode allocates zero tracked MetalBuffers and adds
+  no completion wait/readback. Unsupported camera/history/masks reject early.
+- Tiny and C2048/H16/D128/F8192 synthetic probes each pass 6 examples and 444
+  intermediate comparisons at the unchanged finite `2e-5 + 2e-5*abs(ref)` gate;
+  maximum absolute error is 5.9604645e-6. These are F32-math controls with an
+  explicit MPS SDPA adapter, not Magi CUDA BF16 runtime or real-weight parity.
+- Final oracle/native sampled footprints stay below 4 GiB, cache-aware
+  headroom stays above 25%, swap growth is zero and no full model/video runs.
+  Correlated MiniQuad review is ROBUST only under the documented trusted
+  fixture-digest and immutable-checkpoint preconditions. There is no video
+  quality/speedup claim. Source, commands, receipts and decay triggers:
+  `docs/hy-nomas-native-frontier.md`.
+- Historical next gate was BF16 attention boundaries and actual weights;
+  see LM-HY-NOMAS-ACTUAL-BLOCK-2026-10-24 for that result. Wan return pointer:
+  `docs/wan-performance-frontier.md`, parent `e22fc2ba`; defaults are unchanged.
+
+### [LM-DRAMA3-GDN-SCAN-2026-10-18] Dense scan rejected; exact serial control retained
+
+- Standalone GPU diagnostic at `e4131aaa`, production dimensions K=V=128,
+  layers 0/38, actual varying q/k/v/gates and zero/nonzero incoming states.
+  Summary, prefix, transport, every replay output and final state are charged.
+  Production sources and routes are unchanged; no new MLX or WAV run.
+- Six release Metal examples and ten offline examples pass. At graph depths
+  0/2, sequential replay reproduces capture bits. Serial tile is bit-exact for
+  all 24 validation groups and all 80 timed pairs including warmups. Its local
+  paired GPU medians are 1.0581x/1.0548x; full-request benefit is unmeasured.
+- Dense affine scan fails native bit identity in 6/12 groups per depth and is
+  slower in every timing cohort; useful size-8 scans lose by 1.66–2.70x.
+  Maximum absolute error is 3.8146973e-5, all finite and within the unchanged
+  tolerance metric. Real-arithmetic affine algebra does not preserve F32 bits.
+- Combined JSON/timeline-log analysis, live selected-source/executable hashes,
+  16 damaged-receipt rejections and scoped source review are ROBUST for these
+  bounded claims. Review is correlated; local receipts are not attestation.
+  Source pins, artifact hashes, limits and refresh: `docs/drama3-gdn-scan.md`
+  and `.landmark/evidence/drama3-gdn-scan.json`.
+- Next falsifier: integrate the exact serial tile into known-input prefill,
+  preserving convolution history and output/state bits; charge preparation,
+  normalization, projection and commit before upstream/full-WAV pairs. Compact
+  scans and surrogate stochastic verification remain separate research paths.
+  Refresh after source/compiler/driver/device/checkpoint/input/graph/control
+  changes or artifact loss. Listening found no quality defect in the user's
+  examples; the old layer-39 MLX mismatch remains an open numerical issue.
+
+### [LM-DRAMA3-GDN-POST-2026-10-18] Exact local fusion, default off
+
+- `DRAMA3_GDN_POST_FUSION=0|1` freezes at Context construction. The candidate
+  combines per-head RMS, SiLU(z) and multiply, preserving the ascending F32 fold
+  and products. No production read, submit or completion wait is added; existing
+  per-frame CPU EOS reads remain. Rollback/default is 0 and a new Context.
+- 25 release Metal examples, 36 offline driver checks, 90 varying-input captures
+  and 243 native boundary pairs pass. Saved MLX metrics are unchanged, including
+  row 1/layer 39 strict failure. All 24 full requests preserve code/tape/EOS/WAV
+  and ordinary read/wait ledgers. Warm allocations fall by 5,340.
+- Local paired GPU command intervals favor fusion at 2.5806x across eight pairs.
+  Full-request medians improve in both timing blocks, but two of four mirrored
+  worker contrasts regress and unchanged DAC timings drift. Causal full-WAV gain
+  is unestablished; keep default 0. Intervals may overlap and are not additive.
+- Final source review and 29 damaged-receipt attacks are ROBUST for these bounded
+  claims. Candidate model files are hashed; control payload is unauthenticated.
+  This is correlated review, not independent runtime replication. Qualification,
+  commands, source/artifact hashes and refresh: `docs/drama3-gdn-post.md` and
+  `.landmark/evidence/drama3-gdn-post.json`.
+- Follow-up known-input prefill GDN summary/prefix/replay is qualified above;
+  dense scan is rejected on the tested short blocks. Refresh after source/toolchain/device/checkpoint,
+  sampler/text/reference/queue-depth or flag-stack changes and artifact loss.
+
+### [LM-DRAMA3-OPTIMIZATION-CONTINUATION-2026-10-18] Exact fusion first
+
+- User requested durable continuation and authorized implementation after the
+  source/evidence audit at `a8156b8c`. Roadmap and limitations:
+  `docs/drama3-optimization-roadmap.md`; active slice:
+  `docs/drama3-native-frontier.md`.
+- Start exact routed/shared gate/up/SwiGLU, default-off; preserve F32 reductions,
+  old upstream tolerances and GPU residency. First signal: fail-first API spec,
+  then GPU bit receipts, captured operands and profiler-off full WAV pairs.
+- First slice implemented: 19 release Metal examples and eight offline checks;
+  240 actual-input captures and 243 native boundary pairs are bit-exact. Existing
+  strict row 1/layer 39 MLX failure is unchanged. All 24 complete WAV requests
+  preserve codes, sampler tape and read/wait ledgers. Warm allocations decrease
+  21,360. Local GPU ratios 1.2165x/1.6828x do not establish request speedup:
+  forward generation is unchanged, reverse improves, one mirrored pair regresses
+  and the unchanged DAC phase moves. Keep `DRAMA3_EXPERT_SWIGLU_FUSION=0` by
+  default. Evidence/limits: `docs/drama3-expert-swiglu.md` and
+  `.landmark/evidence/drama3-expert-swiglu.json`.
+- The next exact per-head RMS/SiLU/multiply slice is qualified above, default-off.
+  Correction: the user's intended historical Qwen reference was projected-K and
+  block-residual surrogates plus temporal affine GDN scan, not the separate
+  rank-one update/output fusion. Their source-backed limits are in the roadmap.
+  Known-input prefill scan is qualified above. The historical greedy
+  verifier does not certify stochastic DRAMA sampling or fixed-tape identity.
+- q1 overlap, GPU EOS blocks, calibrated BF16-to-Q8, line protocol and streaming
+  remain hypotheses/future slices. Existing late MLX failures remain open.
+- Recheck source/model/device/compiler/sampler pins before reusing evidence;
+  local command gains and ASR/RMS alone do not establish user-visible success.
+
+### [LM-QWENIMAGE21-CONTINUATION-4-7-INPUTS-2026-09-30] CPU prerequisites checked; no later-block execution
+
+- After qualified 0..3 replay, root authenticated each arm's own block-3 full
+  input: native/A F32LE, C raw BF16LE, [1,1164,4096], parent3 -> proposed4..7.
+  Complete frozen capture/report/manifest/worker/parent links and payload
+  hashes remain bound to their original producer/consumer, not this docs commit.
+- Scratch `/private/tmp/qwen21-continuation4-7-IF7SAQfL`; real handoff-r2 SHA
+  `89894fcf58723ef8c4fafa990113a0a124725d290159e3fef7d80e215b9a55aa`.
+  Source `361bec08...97ef25` checks C initial/modulation RNE and all raw/F32
+  output widenings. Root separately reconstructed captured modulation bytes
+  into exact A/C target-prefix rows; the general handoff tool only authenticates
+  the frozen mapping. Per-arm config hashes are not interchangeable contexts.
+- Root selected block-4..7 donor audit reads 36 BF16 tensors, 1,744,832,512
+  raw bytes, finite/exact widening, unchanged pinned shard fingerprints;
+  receipt SHA `2d25face3d5515c3257c0ec500edc7e69f96be20fc1ca5e0f7f5722a4e2ee7a1`.
+  No whole-shard/Hub authenticity claim; old 0..3 receipt is not reused for 4..7.
+- Final 29 stdlib tests and actual CPU tools exit0 under unchanged 60s/1024-MiB/
+  50%-free guards. Seeded bad pin exits2 without output; hash-coherent wrong
+  rounding/widening reject. Root exhaustive finite-word and boundary oracles
+  caught an unaligned finite scanner; test macOS aliases were canonicalized
+  without weakening output guards. Scoped bytes/lineage adversary ROBUST,
+  not independent model replication. No model/build/GPU/dependency mutation.
+- Next frontier supersedes older next-action order: fresh range-specific
+  runtime consumers, fresh input/donor/source pins, exact raw C CPU-to-MPS
+  restoration, bounded unchanged runtime guards. Current measured model
+  composition remains 4/32; no 4..7, full-stack, quality/capacity/speed seal.
+  Full goal stays active IN_PROGRESS. Paths/pins/DoD/decay limits:
+  docs/qwen-image21-gguf-frontier.md, current CPU-prerequisite section.
+  Revalidate before consumption; temporary artifact loss invalidates reuse.
+
+### [LM-QWENIMAGE21-COMPOSED-FOUR-BLOCKS-2026-09-30] Matched replay qualified; full stack remains open
+
+- One frozen native eval-0 frame, [1,1164,4096], 140 text plus 1024 image
+  rows: composed blocks 0..3 compare native all-weight F32 against official
+  A F32 and C BF16. Each arm carries its own output forward; C carries live
+  GPU BF16 state, native uses exact process-isolated F32LE handoffs.
+- Capture producer `0a3d7be5`; native consumer `71e5f9dc`, not this docs
+  commit. Six guarded model runs exit0 and each primary/repeat whole tree is
+  byte-identical. Root refreshed all 36 selected donor payload/widening hashes.
+- Root v4 qualified report SHA
+  `261d7423adf4b8191d47558d0bd3454aefc1c4d6a6a0ebae30669ae8262fa9ae`:
+  18 comparator tests plus actual 192 independent metric-field checks pass.
+  Relative tolerance remains 1e-12, max independent gap 3.1397107136399427e-13;
+  exact max/p99/count checks, no tolerance/model-value changes. v4's global
+  elementwise F64-square `math.fsum` resolves a measured reduction-roundoff
+  disagreement; v2/v3 failures and resident guard-stop artifacts are preserved.
+- Image-row relative L2 native/A: 2.54655e-6 -> 1.20220e-6; C/A:
+  0.00320366 -> 0.00468896. Native p99 rises despite falling relative L2.
+  Width-4096 internal states are not 64-channel VAE latents; official F32
+  is not perceptual ground truth. No full32, quantized-photo, Qwen3-VL,
+  VAE-manifold, face-quality, bitwise cross-backend or performance seal.
+- ROBUST for scoped local bytes/provenance/composition/arithmetic only;
+  root fallback arithmetic is independent of comparator implementation,
+  not independent model replication. Full app goal observed active, still
+  IN_PROGRESS, superseding historical blocked status without discarding history.
+- Next: scratch resident cleanup-order falsifier under unchanged guards and
+  exact isolated hashes; cause of earlier RSS stop remains unknown. Then
+  bounded later-block continuation, projections/trajectory/shared-VAE fixed
+  ROIs. No production code/weights/images changed; no push authorization.
+- Complete paths, pins, executed DoD and limitations:
+  docs/qwen-image21-gguf-frontier.md, current four-block section. Refresh after
+  source/build/runtime/device/donor/frame/layout/schedule drift or temporary
+  artifact loss. Documentation commits never rebind the frozen artifacts.
+
 ### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
 
 - Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus
@@ -28598,6 +31929,8032 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
   device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
   prompt, kernel/compiler, device/OS, Python component, or harness changes.
+
+### Continuation 2026-09-25 — Qwen-Image 2.1 opt-in tiled attention
+
+- `QWEN_IMAGE21_ATTENTION_TILE=1` selects a four-query/eight-key K/V-sharing
+  Metal attention kernel only for head dimension 128 and the admitted shape;
+  default and `=0` preserve legacy. The one-SIMDgroup replacement rejected
+  earlier is not reused. At this first stage, the tile retained two barriers
+  per key; the later SIMD-local recurrence below removes them. Neither stage
+  is an LTP/WBA claim.
+- A direct mixed-mask/offset/tail Metal test gave exact legacy parity for
+  one and three heads, including large dot products; the
+  candidate-enabled model-backed suite passed 46 examples with zero failures,
+  errors, or pending cases. At real seed-7 768px conditioning, one warmup and
+  six alternating AB/BA pairs gave exact full and target transformer outputs
+  for build, hit, and uncached routes (`max_abs=0`, RMS=0, cosine=1). Every
+  route used one command buffer, zero intermediate and one final readback.
+- All 6/6 measured pairs favored the tile on every route. Median tiled/legacy
+  wall ratios on M2 Max were 0.804 build, 0.789 hit, 0.778 uncached; GPU-command
+  ratios were 0.803, 0.788, 0.778. The host was noisy (`noise_observed=true`),
+  so this is a bounded opt-in speed observation, not a device-wide default or
+  40-step decoded-image quality/latency certificate. No foreign processes
+  were stopped. Next: quiet-host replication and later-step/multi-seed image
+  parity before considering default selection. See
+  `docs/qwen-image21-gguf-frontier.md` and `scripts/qwen_image21_attention_ab.cr`.
+  Refresh after model, conditioning, compiler, kernel, device/OS, or runner
+  changes; rollback immediately with `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — Qwen-Image 2.1 SIMD-local tile recurrence
+
+- The opt-in four-query attention tile now broadcasts the lane-zero online
+  softmax probability, correction, and inverse sum within each query SIMDgroup.
+  This removes two threadgroup barriers per key while retaining unconditional
+  K/V staging and end-of-tile barriers. Legacy remains default; this is not
+  an LTP/WBA certificate or a device-wide speed claim.
+- Direct mixed-mask/tail/multi-head Metal parity stayed exact (`max_abs=0`).
+  The combined model-backed Qwen-Image 2.1 suite passed 62/62. A pinned
+  real 768px 32-layer build/hit/uncached warmup and one pair had exact full
+  and target outputs; a paired 256px seed-7 40-step run matched all 40
+  post-Euler hashes, final latent bytes, and decoded PNG pixels exactly.
+- Single-pair 256px denoising was 83.10 s legacy / 77.77 s tile; one-pair
+  768px forward tile/legacy ratios were 0.706 build, 0.838 hit, 0.823
+  uncached. Host-load noise was observed, so speed remains inconclusive.
+  Next: quiet-host alternating 768px AB/BA and full 40-step prompt-to-PNG
+  parity across prompts/seeds before considering promotion. See
+  `docs/qwen-image21-gguf-frontier.md`. Refresh on kernel/compiler, model,
+  conditioning, device/OS, or runner drift; rollback with
+  `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — 768px full denoise/PNG tile parity
+
+- At source `05430b52`, guarded sequential legacy (`=0`) and SIMD-local tile
+  (`=1`) runs used the same pinned 768px portrait conditioning, seed 7, GGUF,
+  and 40-step schedule. Both completed 40/40 steps, one prefix build and 39
+  hits, one command buffer and 198 projections per step, with no intermediate
+  readback. All 40 post-Euler hashes and final F32 latent bytes were exact;
+  latent SHA-256 `37bc64dc8933dc97c07fdb4c8dd7de3aece7be16fbcd9ee830bc3abe1a523a84`.
+  The operator reported the `=0`/`=1` launch settings, but the generator does
+  not log the selected attention pipeline; route attribution uses source policy.
+- The same CPU/FP32 VAE decoded both bundles to byte- and pixel-identical
+  768x768 RGBA PNGs, SHA-256
+  `c5682ea31fb5e544ff585d780d25a03cd2afa7cf9306e86cea2c7c49ffbd6a5a`.
+  Generator DiT times were 1,294.247 s legacy / 997.297 s tile, but this
+  single sequential pair ran under variable host load; the post-run quiet
+  gate was false. Correctness on this trajectory is ROBUST; a speedup or
+  broader image-quality/default claim remains VULNERABLE. No foreign process
+  was stopped. Scratch evidence: `/private/tmp/qwen21-simd-full768.CvZJti`;
+  detailed scope in `docs/qwen-image21-gguf-frontier.md`.
+- Next: quiet-host alternating AB/BA for latency and other prompt/seed
+  40-step PNG pairs for generalization. Refresh on kernel/compiler, GGUF,
+  conditioning/schedule, VAE, device/OS, or runner drift; scratch artifacts
+  are ephemeral. Roll back with `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — Actual attention-route trace
+
+- An opt-in `QWEN_IMAGE21_ATTENTION_ROUTE_TRACE=1` diagnostic now aggregates
+  the kernel name and shape after the actual Metal attention dispatch site;
+  default execution only takes a disabled branch. It changes no shader,
+  attention arithmetic, or GPU command boundary.
+- On the same pinned 768px conditioning, guarded two-step legacy and tiled
+  runs exited successfully. The trace counted 32 legacy dispatches on the
+  2409-query prefix build and 32 on the 2304-query hit with `ATTENTION_TILE=0`;
+  with `=1`, both counts were 32 tiled dispatches. Both post-Euler hashes and
+  final latent bytes matched, SHA-256
+  `d1384af943ceb45547cdd8a5a76e9c347d2ca6e3df3b5b79bedd19a880901988`.
+  Focused CPU-only spec: 11 examples, zero failures/errors, eight expected
+  Metal-dependent pending cases. See `docs/qwen-image21-gguf-frontier.md` and
+  `/private/tmp/qwen21-route-trace.72JwfT` for the ephemeral logs.
+- This trace is not retroactive evidence of the selected pipeline in the
+  earlier 40-step pair. Trace-on adds host-side locking/hash updates per
+  attention dispatch: bracket future quiet-host, trace-off AB/BA timing with
+  trace-on route controls. Speed/default promotion and multi-prompt/seed
+  quality remain open. Refresh on source, compiler, GGUF, conditioning,
+  device/OS, or runner changes.
+
+### Continuation 2026-09-27 — Russian Qwen3VL and image-latent drift
+
+- On the pinned 244-token Russian sign fixture, native Accelerate and official
+  CPU/BF16 Qwen3VL have identical block-0 input. The first divergent boundary
+  is `layers.0.input_layernorm` (321/999,424 BF16 values on 12 retained rows).
+  Equal-input replay reproduces both sides exactly; substituting PyTorch's
+  mean-square reduction removes all 321 differences. Native serial-F32
+  variance was emulated from source, not captured in the process.
+- This is not the only difference. On 232 rows with exact normalized input,
+  native Q/K/V projections still differ from the official BF16 outputs by
+  284/85/73 values; exact-weight PyTorch replays reproduce the official side.
+  Do not promote an isolated RMSNorm fix: on the prior red-cube fixture, two
+  locally better norm reductions worsened the final 36-layer embedding.
+- On each saved 244-row layer-0 gate/up BF16 input separately, the actual
+  Crystal `silu_bf16`/`bf16` methods and PyTorch 2.6.0 CPU
+  `F.silu(gate) * up` produced identical 2,998,272-element BF16 outputs,
+  including dropped and retained rows. This falsifies a standalone
+  same-input BF16 SwiGLU activation-staging mismatch on this fixture, not
+  the upstream projection difference, `down_proj`, or full Qwen3VL/image
+  parity. Native/official input-route output SHAs were respectively
+  `5e6383217c334b6a25e53f511901dfed9093357e927a17878fcfc7e755c0318e`/
+  `11e7644cafa39b7711db42b1c51c96b048dbc27ace4d5a791149b1969dd33b9c`.
+  Harness/source pins and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- Under the matched 40-step native DiT, differing Qwen3VL conditioning moves
+  the image latent from 0.0207% relative L2 at step 0 to 11.1655% at step 39.
+  The endpoint difference is not scalar amplification of the first difference
+  (cosine 0.0169); saved post-Euler states cannot divide recurrent conditioning
+  forcing from state propagation. Next causal probe: crossed single-step DiT
+  evaluations on both saved latent states and both conditioning payloads.
+  This does not establish a native DiT bug, VAE-manifold departure, or an
+  image-quality gain from changing text arithmetic. Evidence and refresh
+  conditions: `docs/qwen-image21-gguf-frontier.md`; scratch traces may expire.
+
+### Continuation 2026-09-27 — Crossed DiT state/conditioning probes
+
+- On the same pinned 40-step Russian-sign trajectory, four-corner native
+  GGUF/Metal DiT probes at steps 10, 20, and 39 crossed both saved latent
+  states with both Qwen3VL conditioning payloads. Both diagonal Euler
+  reconstructions were bit-exact at each step; paired-update errors were
+  at most `2.38e-7`. At those transitions, symmetric state effects had
+  `27.75x`, `58.62x`, and `235.22x` the L2 of contemporaneous symmetric
+  conditioning effects. The latter's signed projection changed sign.
+  These are local state-feedback contrasts, not a global cause or visual
+  quality score; the initial state divergence came from conditioning.
+- A spatial audit of all 80 snapshots found that the top 10% of tokens
+  carried 70.74% of final squared cross-arm error, but the strongest
+  final `4x4`-token region was not a stable hotspot from step 0. The
+  approximate face ROI carried 2.55% of final squared error, so global
+  latent error concentration is not a face-quality metric or pixel map.
+- Independently, the pinned official BF16 pipeline casts raw scheduler
+  timestep to BF16 before dividing by 1000, whereas native DiT uses
+  Float32 division. Raw timestep, sigma, and Euler `dt` agree at all 40
+  steps, but the DiT-time input differs at 39/40. It was not the differing
+  input between the matched native-DiT conditioning arms, because both
+  used the same native time path; it may still affect propagation. A
+  fixed-state/conditioning native j20 intervention
+  changed only DiT time from `0.62301314` to official-effective `0.625`;
+  Euler-scaled output L2 changed by `0.02615`/`0.03846` on the two saved
+  arms, exceeding the same-step symmetric conditioning contrast `0.01585`.
+  This is local sensitivity, not a demonstrated 40-step quality gain.
+- A same-value index-20 BF16/MPS official DiT versus mixed-GGUF/Metal
+  single-forward check used one BF16-rounded saved state, BF16-exact
+  official conditioning, matching masks/shapes and `t=0.625`. Corrected
+  velocity agreement was relative L2 `0.014126` and cosine `0.999902`;
+  the Euler-scaled difference was L2 `0.121686`. This combines model
+  implementation, quantization, precision, and GGUF provenance, so it
+  does not identify which produces the remaining gap or predict final
+  face quality. The first apparent large gap was *invalid*: direct MPS
+  BF16 sliced-view to CPU Float32 transfer mishandled the 230-row offset,
+  shifting by 115 Float32 rows. Full-BF16 transfer/CPU widening and an
+  independent zero-offset BF16 clone agreed exactly; never use the
+  invalid first metric.
+- Evidence, scope, and refresh triggers: `docs/qwen-image21-gguf-frontier.md`;
+  scratch harnesses/logs under `/private/tmp/qwen21-crossed-dit-20260927/`
+  `/private/tmp/qwen21-timestep-counterfactual-20260927/`, and
+  `/private/tmp/qwen21-matched-oracle-20260927/`, plus
+  `/private/tmp/qwen21_spatial_drift_audit.md`, may expire. Recheck on
+  source, GGUF, Qwen3VL payload, scheduler, precision path, Metal route,
+  saved-state, or official Diffusers revision changes.
+
+### Continuation 2026-09-27 — Selectable BF16-effective DiT time
+
+- `QWEN_IMAGE21_TIMESTEP_PRECISION=bfloat16` now reproduces the pinned BF16
+  pipeline's scalar time cast/divide order, while Float32 remains the default
+  for native Float32 latents. Focused spec: 20/20; all 40 official BF16 time
+  words at 1024 target tokens matched. A fresh no-flag two-step Metal control
+  reproduced the prior Float32 final SHA-256 `807537b77bb073...` exactly.
+- Matched seed-7, 512x512, Euler-40 native GGUF/Metal runs with official and
+  native Qwen3VL text conditioning each produced 40 finite post-Euler
+  snapshots, with final snapshot/bundle byte equality. BF16-vs-Float32 time
+  first diverged at step 1; final latent relative L2 was 6.077% (official
+  text) and 3.094% (native text). The cross-text final gap decreased from
+  11.165% to 9.329%; the preselected face-pixel ROI cross-text MAE decreased
+  from 12.36 to 3.64/255. These are parity/sensitivity observations, **not**
+  evidence of improved eye, glyph, or overall image quality. VAE decoded
+  both outputs; no VAE cliff or off-manifold claim is established.
+- The planned full official BF16 DiT trajectory has now been captured and
+  compared below. Native Float32 latent storage, Float64 intermediate
+  timestep trig, quantization/provenance, and text-projection differences
+  remain. Detailed BF16-time evidence and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`; ephemeral A/B artifacts live under
+  `/private/tmp/qwen21-bf16-time-russian-20260927.nKrSo3/`.
+
+### Continuation 2026-09-27 — Matched official DiT latent drift
+
+- The pinned full HF BF16/MPS DiT used the same official-Qwen3VL conditioning
+  payload and BF16-exact x0 as the native official-text runs (x0 SHA-256
+  `d0315806...8358932c`). A first-step native same-input velocity plus
+  Float32 Euler update reproduced the saved native step-0 state bit-for-bit.
+  An apparent x0 mismatch was withdrawn: a final latent bundle had been
+  mistaken for the initial state. Official BF16 Euler replay also reproduced
+  official step 0 bit-for-bit.
+- Native BF16-time post-state distance from the official BF16 trajectory
+  grew from 0.1805% at step 1 to 2.3936% at 10, 9.5513% at 20, and
+  22.7345% at 40 (official-state relative L2). The old matched F32-time
+  trace ended at 23.6411%. This is a numerical proxy, not face/text quality.
+- Teacher-forced equal-input native-vs-official DiT velocity relative L2 was
+  2.7252% at index 0, 1.3638% at 20, and 4.6690% at 39. At index 20,
+  switching only the native DiT input from official state to its own native
+  state moved native velocity by 20.5430% relative L2; feedback dominates
+  the realized local vector difference, but its earlier causes include the
+  DiT/weight/precision and solver paths. No isolated quantization or VAE
+  manifold claim follows. Next intervention: opt-in BF16 latent-state
+  arithmetic, paired against the same official reference and decoded image.
+- Evidence and decay: `docs/qwen-image21-gguf-frontier.md` and ephemeral
+  `/private/tmp/qwen21-official-trajectory-20260927/`,
+  `/private/tmp/qwen21-native-matched-forward-20260927/`. Refresh after
+  model/GGUF, conditioning, schedule, cache, Torch/MPS, Metal, or VAE changes.
+
+### Continuation 2026-09-27 — BF16 state A/B narrows latent drift
+
+- An opt-in `QWEN_IMAGE21_LATENT_STATE_PRECISION=bfloat16` Euler route keeps
+  the former Float32 route as default. The BF16 route matches the observed
+  official MPS post-state formula (Float32 `dt`, BF16 velocity/product/state)
+  rather than Torch CPU scalar promotion. BF16 state plus AB2 is rejected.
+  Focused spec: 29/29; two-step Metal smoke and full 40-step run completed.
+- On identical official text, x0, schedule, GGUF, and BF16-effective time,
+  BF16 state was closer to official latent state at all 40 steps. Relative
+  L2 at steps 1/10/20/40 changed from 0.1805/2.3936/9.5513/22.7345% to
+  0.1569/2.3570/9.1774/21.2774%. At index 20, native velocity evaluated
+  at its new state was 19.0101% from the official teacher velocity versus
+  20.5982% at its old state; identical-input native-vs-official velocity
+  differed by 1.3638%. This implicates state-feedback amplification, not
+  a single established root cause.
+- The fixed VAE decoded both. Full-frame RGB RMSE against official fell
+  21.63 to 20.57/255; a fixed face rectangle slightly worsened 26.65 to
+  26.79/255. No eye/face-quality fix is claimed. Next falsifier: compare
+  official versus native tensors before DiT block 0 and after block 0 on
+  identical x0/text/time, then split projection versus block internals.
+  Evidence and decay details are in `docs/qwen-image21-gguf-frontier.md`;
+  ephemeral artifacts are under `/private/tmp/qwen21-bf16-state-20260927.b6UNJF/`.
+
+### Continuation 2026-09-27 — Equal-input DiT internal drift
+
+- On pinned official Qwen3VL conditioning, x0, and model time 1.0, the
+  official BF16/MPS and native GGUF/Metal first-step velocities reproduced
+  their prior SHA-256 values. Native pre-block-0 image tokens nearly matched
+  official after BF16 rounding (4,194,139/4,194,304 exact; 0.000788%
+  relative L2), while text tokens remained 0.1208% apart after rounding.
+  Block-0 target output differed by 0.4398%. These scoped captures locate
+  drift before VAE; they do not prove latent manifold departure.
+- Text normalization matched all 942,080 official BF16 values after native
+  rounding. The first text linear output did not (0.159681% relative L2);
+  rounding only its input reduced this to 0.004931% but changed full DiT
+  velocity distance only 2.725202% to 2.702657%. Rounding all text-stage
+  boundaries improved final text projection agreement, yet full velocity
+  slightly worsened to 2.725973%. GELU is a separate arithmetic boundary:
+  the captured BF16 input reproduced official GELU exactly on Torch/MPS,
+  while Torch/CPU BF16 matched 678,640/942,080 values.
+- Selected text/image input and time/modulation GGUF weight payloads match
+  the pinned official checkpoint values. Block-0 Q/K/V are mixed Q8_0/Q8_0/
+  Q6_K; dequantized weight relative L2 to official BF16 is 0.57575%/
+  0.57448%/1.83678%. These static errors cannot explain pre-QKV drift.
+  Official Torch/MPS Fourier features matched CPU BF16 in all 512 values;
+  replacing only native time features in one guarded 32-block forward moved
+  target-velocity distance 2.725202% to 2.720172%, while block-0 gate
+  stayed at 0.2561% and modulated attention input slightly worsened. The
+  time-feature mismatch is minor, not the main cause. A paired timechain
+  replay using the exact official BF16 features made the first native time
+  linear BF16-identical (8,192/8,192). Native SiLU on its unrounded Float32
+  output matched only 6,124/8,192 official BF16 values; feeding the BF16-
+  rounded linear output to the same Metal SiLU matched all 8,192. The next
+  linear then matched 8,183/8,192. After rounding all remaining timechain
+  boundaries, modulation differed in 6/32,768 values and the selected gate
+  in 1,254/5,136,384 (two repeated coefficients). This isolates a missing
+  BF16 boundary before the first time SiLU, not its final-image impact.
+  A guarded full-DiT A/B of that single boundary preserved
+  x0/model/conditioning/time-feature hashes and
+  byte-identical image/text projections, but worsened first-step target
+  velocity relative L2 2.720172% to 2.736765%, post-tanh gate 0.256120%
+  to 0.256490%, and modulated attention input 0.377958% to 0.378126%.
+  All-six-boundaries BF16 rounding improved the gate to 0.169585% and
+  attention input to 0.348730%, but worsened final target velocity to
+  2.868087%; native treatment versus baseline velocity was 0.886629%.
+  A separate root repeat reproduced the all-six-boundaries target-velocity
+  SHA-256 exactly. Local BF16 parity is not a full-DiT quality fix.
+  Details, artifact paths, source identities, and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A matched, SHA-gated index-0 capture of every post-block state, using
+  official MPS BF16 Fourier features in the native route, reproduced all
+  six earlier checkpoint hashes on both routes. Image-token hidden-state
+  error grows from 0.4403% relative L2 after block 0 to 5.1100% after
+  block 14 and 13.1201% after block 30. The largest adjacent error-vector
+  change is block 29 to 30 (RMSE 0.52692). Block 31's relative error drops
+  to 3.7403% only while the official state norm jumps 11,615 to 46,293;
+  absolute error RMSE still rises 0.74408 to 0.84547. These are cumulative
+  differences, not isolated block causes. The raw all-32 artifacts are ephemeral under
+  `/private/tmp/qwen21-block-drift-all32-20260927/`.
+- A scratch-only fixed-input Metal replay passed a byte-exact resident
+  block-30 canary before comparing official BF16 hidden/modulation inputs.
+  On official inputs, native block-13 target output differed 0.8695% rel-L2
+  (0.04725 RMSE), block 30 2.0084% (0.11390). At block 30, holding native
+  modulation fixed gives an exact error-vector decomposition: observed
+  13.1201% / 0.74408 RMSE = same-input block term 2.0145% / 0.11425 plus
+  transported input-drift term 12.9649% / 0.73528; these are vector terms,
+  **not** additive scalar shares. Native block 30 maps the pre-block-30
+  target discrepancy of 0.52874 RMSE to 0.73528 (1.39x) on this input.
+  Thus it amplifies a pre-existing difference, rather than originating the
+  entire observed 13.12% gap. A local ~2% gap remains, not yet attributed
+  to quantization versus kernel arithmetic; earlier growth also remains to
+  isolate. The first sandboxed attempt lacked a Metal device, but one
+  authorized GPU-access retry completed and its raw result was independently
+  recomputed. Guarded scratch artifacts are under
+  `/private/tmp/qwen21-block-fixedinput-20260927/`; detail and decay
+  conditions are in `docs/qwen-image21-gguf-frontier.md`.
+- In matched 40-step official-versus-native BF16-state final latents,
+  the documented approximate face ROI (20/1,024 spatial tokens) had
+  16.7089% relative L2 and 0.17639 absolute RMSE versus 21.3535% and
+  0.23283 outside it; it held 1.1304% of squared error despite covering
+  1.9531% of tokens. This one-seed comparison does not support a
+  face-localized *excess* latent discrepancy. It cannot decide perceptual
+  face quality or VAE off-manifold behavior; see the spatial-check section
+  and ephemeral trajectory artifacts in the frontier document.
+- An independently recomputed, SHA-gated all-40-step BF16-state trajectory
+  showed native-to-official post-Euler latent relative L2 and absolute RMSE
+  rising at every step: 0.1569% after step 1 to 21.2774% after step 40.
+  There is no isolated failed step in this one run; the matched scheduler
+  update was already validated, but a full per-step causal DiT split is not
+  available. Final 64-channel spatial scale ratios span 0.9523–1.0741
+  (median 1.0045), so gross channel-scale escape is not observed; this is
+  not a VAE-manifold or facial-quality test.
+- A guarded, equal-input DiT block replay separated mixed-GGUF projection
+  dispatch (A), the same dequantized GGUF weights through Float32 Metal GEMV
+  (B), and official BF16 projection weights widened to Float32 through that
+  same GEMV route (C). Target hidden-state error to the official output at
+  block 13 was 0.8695%, 0.8693%, 0.4154% relative L2; at block 30 it was
+  2.0084%, 2.0089%, 0.5785%. A's hashes matched the prior fixed-input
+  canaries; a second run saved six raw outputs and root independently
+  recomputed every target metric from their matching hashes. The local
+  GGUF-weight payload effect dominates the quantized-versus-F32 dispatch
+  contrast in these two blocks, but all six projections changed together,
+  C retains native F32/MPS arithmetic differences, and no 40-step visual
+  benefit is established. Reports and raw replay are ephemeral under
+  `/private/tmp/qwen21-quant-vs-metal-20260927/`; exact methods, source
+  identities, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-input block-30 family-swap probe replayed the prior all-GGUF-F32
+  and all-official-F32 controls byte-for-byte, then substituted one official
+  BF16-widened projection family at a time through the same Metal route.
+  Target error to the official output was 2.008916% relative L2 for all-GGUF,
+  1.209111% with only fused gate/up replaced, 1.818562% with only MLP output,
+  1.917261% with only V, 1.992175% with Q/K/attention output, and 0.578489%
+  for all-official. Root independently SHA-checked all six raw Float32
+  outputs and recomputed every target metric. Thus the Q5_K gate/up payload
+  is the largest tested local family in this one block; its substitution
+  closes 55.9% of the B-to-C relative-L2 metric gap, not an additive causal
+  share or a proved image-quality gain. The scratch report lost C/swap weight
+  metadata through mutable-hash clearing, while output hashes and metrics
+  remained intact; strict donor tensor checks are required before repacking.
+  Report SHA-256 `757d2a8ea37d179add54a01ff7e423ea2b091418fd5f533cd8195c2ccaf550cf`
+  and raw outputs are ephemeral under
+  `/private/tmp/qwen21-quant-vs-metal-20260927/`. Refresh after model,
+  checkpoint, input/modulation, Metal route, compiler, or hardware changes;
+  the next discriminator is higher-precision gate/up at earlier blocks and
+  through the full denoising trajectory.
+- A selective-Q8 gate/up GGUF probe completed the next discriminator for one
+  512x512 Russian-sign/portrait prompt, seed 7. Root verified that exactly
+  32 image-MLP gate/up payloads came from the Q8 donor, all 233 other tensor
+  payloads matched the Q4 base byte-for-byte. A later pinned-file re-read
+  corrected the metadata attribution: Q4 and hybrid metadata are byte-identical
+  (`general.file_type=15`); type 7 was the Q8 donor's allowed compatibility
+  exception, not a hybrid output change. Independently recomputed post-Euler
+  latent error versus official BF16/MPS was lower for the hybrid on all 40/40 steps;
+  final relative L2 fell from 21.277440% (Q4) to 11.341314% (hybrid), with
+  both curves increasing at every step. Same-official-state DiT forwards at
+  calls 0/20/39 reduced official-velocity error from 2.7252/1.3638/4.6690%
+  to 1.7606/0.9823/2.2661%, respectively. Thus a direct GGUF-variant
+  difference exists inside DiT before trajectory feedback and VAE; a
+  VAE-only explanation is rejected, but a VAE off-manifold failure and pure
+  quantization causality are not proven. With the same CPU/FP32 VAE, the
+  hybrid image was closer to the official image on global RGB MAE (9.7850
+  to 5.6838) and a fixed face crop (15.9852 to 8.8770), one seed only.
+  The 7.167 GB hybrid also logged about 1,235 s denoising versus 647 s for
+  the 5.959 GB Q4 in single, uncontrolled runs, so it is not promoted as
+  default. Full hashes, controls, evidence paths, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next discriminator: Q4-base target
+  provenance plus multi-prompt/seed precision and latency sweep; keep
+  eye/text quality separate from whole-latent distance.
+- Follow-up full streaming provenance matched all 64 targeted official BF16
+  `gate_layer`/`proj` tensors after local Q8_0 encoding to the Q8 donor's
+  fused gate/up payloads byte-for-byte: 3,422,552,064 compared bytes, zero
+  mismatches. The two source shard SHA256 values matched their cached ETags
+  for revision `790c92633540aa0cb11d9abf19eb46d861714758`; the donor
+  full-file SHA matched its pin. This closes the donor's *target-payload*
+  source identity, not the donor's other tensors or the Q4 base's origin.
+  A bounded Q5_K sample of the Q4 base differed by 400/5,767,168 bytes
+  from the installed no-imatrix reference quantizer (26/64 slices exact),
+  rejecting that exact conversion recipe but not establishing a different
+  source checkpoint.
+  A crossed-state probe then separated Q8 same-official-state local velocity
+  error from the same-Q8-model input-state transport at exact official calls
+  0/20/39. L2 norms (local / transport / total) were 7.334/0/7.334,
+  3.494/38.585/38.755, and 6.482/51.479/51.729, respectively. The late
+  gap is primarily associated with the already-shifted state at these two
+  calls, not a newly huge same-state local DiT error; vector norms are not
+  additive causal shares and do not identify the originating early call.
+  The two new Q8 forwards used only its own saved BF16 prestates; all six
+  official/Q8 Euler poststate canaries were byte-exact, with zero vector
+  decomposition residual. VAE out-of-support and eye/text quality remain
+  unproven. Complete pins, report SHA, scratch paths, and decay conditions
+  are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded call-0 all-32 DiT capture compared the selective-Q8 gate/up
+  hybrid with the prior Q4 and official BF16/MPS states at identical official
+  conditioning, x0, and injected official time features. Q8 and Q4 native
+  pre-block-0 hidden states were byte-identical; that shared input already
+  differed from official text/image projections by 0.183084%/0.165677%
+  relative L2. Q8 reduced official-relative image hidden-state error at
+  every post-block checkpoint (block 0: 0.440317% -> 0.424135%; block 13:
+  4.589565% -> 3.868095%; block 30: 13.120123% -> 9.838294%), and call-0
+  velocity error from 2.720172% to 1.764384% on this injected-time route.
+  The residual is distributed and cumulative, not a unique bad block; the
+  final relative-L2 drop at block 31 is a norm-denominator effect. Root
+  independently recalculated all 32 raw-state distances and key hashes.
+  The scratch report has stale inherited build/launch command strings, so
+  use the separately pinned runner source/binary and raw output hashes in
+  `docs/qwen-image21-gguf-frontier.md`; do not use those strings as a Q8
+  reproduction recipe. The capture is an ephemeral call-0 diagnostic, not
+  the default-time trajectory or a warmed-cache call-1 test. Next: a
+  shared-x0 conditioner-by-DiT first-call contrast, then fixed-input Q8
+  block or warmed-cache trace to separate residual local error from transport.
+- The matched call-0 conditioner x DiT-precision contrast used identical
+  BF16-exact x0 and injected official MPS time features. Velocity error to
+  official BF16/MPS was 2.720172%/2.624811% for Q4 with official/native
+  embeddings, and 1.764384%/1.727515% for selective-Q8 with those same
+  embeddings. Native embeddings slightly reduced local teacher distance,
+  plausibly by error cancellation; this is not a semantic or visual-quality
+  win. First BF16 Euler replay matched the teacher at all 65,536 elements.
+  An exact official pre-block-0 hidden-state injection into Q8 moved its
+  output but reduced teacher-relative call-0 velocity error only from
+  1.764384% to 1.739396%; most discrepancy survives downstream of that
+  boundary with native modulation and kernels retained. The Q4/native
+  output was salvaged after a post-forward report failure, so its source
+  provenance is weaker than a clean run. This locates an early DiT residual,
+  not a proven VAE out-of-support cause or a unique defective block. Full
+  hashes, limitations, ephemeral scratch evidence, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next: fixed-input Q8 block-0
+  attention/MLP/modulation boundary replay, then multi-seed eye/text checks.
+- A same-binary selective-Q8 call-0 no-op reproduced the earlier native
+  velocity byte-for-byte. Injecting official pre-block-0 state plus official
+  block-0 post-modulation attention input and gate lowered post-block-0
+  teacher-relative error from 0.395586% to 0.331287%, but raised final
+  velocity error from 1.764384% to 1.793929%. The earlier pre-block-only
+  result (0.364727% block-0, 1.739396% velocity) is cross-scratch, not a
+  same-binary isolated modulation contrast. Independently recomputed raw
+  tensors and an 18-hash gate support these scoped measurements; they do
+  not identify a unique kernel or justify a local correction. The official
+  internal attention/MLP/head capture and VAE interpolation were pending at
+  that checkpoint; both have since been performed as recorded below. See
+  `docs/qwen-image21-gguf-frontier.md` for source/artifact pins and decay
+  triggers.
+- The exact pinned Diffusers source was recovered into a scratch checkout,
+  without altering repository dependencies or downloading weights. A
+  CPU/FP32 VAE probe reproduced the official, Q4, and Q8 endpoint PNGs
+  byte-for-byte before decoding nine points on each actual final-latent
+  interpolation path. Fixed face-ROI adjacent-step RGB RMSE stayed within
+  3.15-3.52 (official-to-Q4) and 1.92-2.07 (official-to-Q8), without a broad
+  abrupt collapse on the sampled paths. This weakens a sharp decoder-cliff
+  hypothesis for this scene; it does not prove latent training-support
+  membership or rule out narrower/other-scene failures. The hash-gated
+  report is `/private/tmp/qwen21-vae-interpolation-20260928/report.json`.
+- A hooked official BF16/MPS call-0 forward preserved the canonical final
+  velocity SHA and prior block-0 boundary hashes. Equal-input native Metal
+  control/taps also produced byte-identical final velocity outputs. With
+  official pre-block hidden state, modulated attention input, and tanh(gate1)
+  injected, native-vs-official relative L2 is 0.280020% at attention `to_out`,
+  0.225712% after the attention residual, and 0.331287% after block 0.
+  Additional raw projected Q/K/V taps show 0.243992%/0.237986%/0.985289%
+  discrepancy before RMSNorm/RoPE (native types Q8_0/Q8_0/Q6_K), so a
+  measurable difference starts within DiT projection, upstream of VAE.
+  The larger V difference is a precision lead, not causal proof of eye/glyph
+  defects; BF16-vs-F32 arithmetic and Q4-base provenance remain confounded.
+  CPU-derived official post-RoPE Q/K is not exact MPS post-RoPE evidence.
+  Full source/report pins, buffer accounting, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- The block-0 Q8_0 donor V payload was reconstructed byte-for-byte from the
+  pinned official BF16 source via the pinned `gguf` quantizer. In a scratch
+  same-binary OFF/ON call-0 test changing only that loaded V weight, raw V
+  teacher error fell 0.985289% to 0.337856% and `to_out` fell 0.280020% to
+  0.234882%, yet the full block-0 target-row error rose 0.351888% to
+  0.373995%. Final target-velocity error fell only 1.793929% to 1.759205%;
+  source-exact first BF16 Euler latent error fell 0.128879% to 0.128073%.
+  Q8_0 versus Q6_K also changes Metal dispatch and the base Q6_K source
+  recipe remains unproven. This is a V contribution, not a precision-only
+  attribution or an eye/glyph quality result. The downstream norm2/MLP
+  discriminator follows; full-trajectory multi-seed decoded comparisons
+  remain necessary before promoting a weight or kernel policy.
+- A same-binary scratch 2x2 clamped the official BF16-widened block-0
+  modulated MLP input and/or tanh(gate2), with Q6_K V and identical native
+  post-attention residual across all arms. OFF reproduced the prior output
+  byte-for-byte. Post-block-0 all-row error was 0.331287% (OFF), 0.284376%
+  (input only), 0.346051% (gate2 only), and 0.280046% (both); final velocity
+  error was 1.793929%, 1.790202%, 1.780770%, and 1.788628%, respectively.
+  Source-exact first BF16 Euler latent error was 0.128879%, 0.128611%,
+  0.128305%, and 0.128699%. Local block accuracy and final velocity rank
+  differently, so the visible defects cannot be assigned to one MLP buffer
+  or fixed by promoting this intervention. The official MLP clamp leaves
+  native post-attention state and quantized MLP weights in place; this is a
+  one-call boundary experiment, not full official parity or image quality.
+  Full controls and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  Next: matched full-trajectory and multi-seed decoded eye/glyph tests before
+  any production precision/kernel decision.
+- A SHA-gated spatial audit of all 40 matched official-versus-selective-Q8
+  BF16-state latent snapshots found distributed, growing error rather than a
+  face-localized excess. The whole latent reaches 11.341% relative L2 after
+  step 40; the documented 20-token face region has 7.696% locally normalized
+  error and 0.654x the rest-of-image RMSE. An approximate two-token eye-line
+  has 4.787% locally normalized error and 0.470x the rest RMSE; its tiny
+  step-2 excess is gone by step 4. This is one prompt/seed and an approximate
+  eye ROI, not perceptual-quality or VAE-manifold evidence. Root independently
+  reproduced the final whole/face/eye metrics. Report SHA-256
+  `57d3f29dc4bff22edeeb71711696a2a879accd3c41ccb8f9636c6217f56df2d9`;
+  complete paths, ROI and decay conditions are in the frontier document.
+- Eight matched call-0/block-0 Q/K/V rows split the earliest observed raw
+  projection difference into a GGUF-payload-versus-official-BF16-weight term,
+  output-rounding term, and native-versus-CPU-GGUF term. Sampled native versus
+  official relative L2 was 0.236714% Q, 0.234419% K, 0.997847% V;
+  corresponding same-CPU-F32 GGUF-versus-official-weight gaps were
+  0.171539%, 0.168556%, 0.984928%. CPU official-weight F32 matmul with BF16
+  output rounding matched all 32,768 selected official MPS values per head.
+  CPU Q6_K V with F16-rounded input/weights, F32 accumulation, and F16 output
+  rounding matched all 32,768 native V values sampled; the full captured V
+  output was F16-exact. The Q/K native-versus-CPU-GGUF residuals were only
+  about 0.0001% relative L2. Root reran the hash-gated comparator, which
+  includes a known-positive corruption check. This locates early numerical
+  difference in weight representation/source and precision boundaries, not
+  a demonstrated defective Metal kernel or eye-specific latent cliff. Q6_K
+  base provenance, effective V dispatch env, all-row/full-trajectory impact,
+  and multi-seed decoded quality remain open. Comparator/result SHA-256s are
+  `ef20fafa05a2b2eaf49b10c818be58d5a064470dd483eefe6b3ff08e0f5323a4` /
+  `15079bcb137ca14de91ee5ee499e35a9835fab0b0c3131169cf1b691e7d7ed69`;
+  full provenance and decay conditions are in the frontier document.
+- A fixed-input block-0/call-0 gate/up probe on four text and four image rows
+  (all 24,576 output channels) found 2.229709% relative L2 error for the base
+  Q5_K projection against official BF16/MPS, versus 0.371032% for Q8_0.
+  Official-weight CPU BF16-rounded output was within 0.007648% of the official
+  capture. Separately, the native hybrid baseline MLP input was 3.255375%
+  from the official input, and holding Q8 weights fixed shifted its projection by
+  1.593681%. These are non-additive local vector comparisons, not full DiT
+  causal shares or eye/glyph quality. Native packed Q8 Metal on the clamped
+  official input matched CPU Q8 to 0.0000232% and rejected a `+0.01`
+  corruption; no arithmetic defect is shown at that boundary. The pinned
+  official V weight re-quantized to Q6_K did not byte-match base V (4,920 of
+  13,762,560 bytes differ), but their dequantized relative L2 gap was only
+  0.065186%, versus ~1.8368% from official BF16 for either Q6 version. The
+  same official source re-quantized to Q8_0 matched donor V byte-for-byte.
+  This is consistent with a quantizer/recipe difference but does not prove
+  base source identity. Report hashes, scope and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; next discriminator is matched late
+  block inputs/full trajectories and multi-seed decoded quality.
+- A separate same-official-state native forward finally tested the **full**
+  Q8 donor, not the earlier selective gate/up hybrid. On official call-0
+  BF16 state/time/conditioning, DiT velocity relative L2 versus official
+  BF16/MPS was 2.725202% for Q4, 1.760615% for the hybrid, and 1.350547%
+  for full Q8. At calls 20/39 it was 1.363841/0.982294/0.830599% and
+  4.669017/2.266090/1.974060%, respectively, but official uses warm cache
+  there while each native one-forward builds a fresh prefix. Full Q8 and the
+  hybrid share all 201 same-qtype payloads byte-for-byte; only 32 V and 32
+  MLP-output qtypes/payloads differ, plus forward-unused `general.file_type`.
+  This is a combined artifact/dispatch contrast, not isolated quantization
+  causality. Call-0 max absolute error increases slightly from hybrid
+  0.266531 to full Q8 0.276533 despite lower global L2. The residual
+  appears before Euler/VAE but is not yet assigned to a DiT operation or a
+  visible eye/glyph defect. Native cache-route parity is recorded next;
+  the full-Q8 trajectory and equal-input block replay are recorded below.
+  Full pins and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A full-Q8 native cache-route probe at the exact official incoming states and
+  BF16-effective times for calls 20 and 39 found byte-identical DiT outputs
+  among historical call-0-seeded prefix hit, fresh target prefix build, and
+  forced uncached resident-input routes. Cache counters/active-token counts
+  confirmed that distinct routes ran; each target suffix also matched the
+  earlier standalone full-Q8 one-forward output SHA. Thus the **native**
+  cache-route choice does not explain the residual at these two inputs. The
+  probe does not compare upstream Hugging Face/MPS cached-prefix tensors, so
+  cross-runtime cache equivalence remains open. One seed counter is printed
+  after the target hit and is mislabeled as after the seed, while the immediate
+  seed assertion and per-route snapshots are correct. Exact artifacts, hashes,
+  scope, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded full-Q8 donor run completed all 40 matched BF16-effective Euler
+  steps with the pinned official Qwen3-VL conditioning, seed, and schedule.
+  Root independently recomputed all four 40-step latent series: final global
+  relative L2 to official is 21.277440% Q4, 11.341314% selective gate/up Q8,
+  and 9.881818% full Q8. Every series increases at each step; full Q8 beats
+  the selective hybrid at all 40. Approximate final face-token relative L2 is
+  16.708862%/7.695944%/3.810557% respectively, not an eye-quality score.
+  The same pinned CPU/FP32 VAE re-decode passed exact RGBA baseline canaries;
+  official-versus-Q4/hybrid/full-Q8 RGB MAE is
+  9.784980/5.683842/4.073781 full-frame and
+  15.985185/8.876973/4.409179 in a fixed face crop. This one-prompt/seed
+  result is closer to the official image but still differs in face detail;
+  it rejects a VAE-only origin, not local decoder sensitivity or off-manifold
+  hypotheses. The residual begins in same-state DiT and accumulates through
+  Euler; the equal-input full-Q8 block replay below narrows the local
+  discrepancy but not its operator-level or visual cause. Full artifact
+  pins, caveats, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded full-Q8 Metal replay independently evaluated each of 32 DiT
+  blocks against the official call-0 BF16 output on that block's exact
+  official BF16 input widened to F32, with official modulation; no native
+  state was fed into the next block. All 33 teacher state hashes/widenings and
+  model/conditioning pins passed, six projection families per block were
+  Q8_0, and block-0 exact repetition was bit-identical. Every block had a
+  nonzero local discrepancy. Image relative L2 ranged 0.225779–0.740903%,
+  highest at block 30; block 31 had the highest image absolute RMSE 0.120285,
+  but its official image-output norm was ~4x block 30's. Text relative L2
+  peaked at block 5 (0.358750%). Rounding native outputs only at the final
+  block boundary to BF16 increased image RMSE on all 32 blocks, rejecting a
+  final-format-only explanation. This isolates local block mismatch from
+  cumulative state transport, but not Q8 weight error versus internal
+  Metal/MPS arithmetic or a block's causal share in face/glyph defects; the
+  final head remains untested. Guarded wrapper exit 0, 32/32 report status
+  complete, report SHA-256
+  `f0550ba5fb25a14063118eeb65e361cbb061b5fdf985a06193ea8a45cfc5267e`.
+  Next: operator-level matched-input split at strongest image-error blocks
+  and final head, using matched BF16 weights if available. Full pins, scope,
+  and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A SHA-gated 40-step spatial audit of the pinned official-versus-full-Q8
+  trajectory found a post-hoc non-face 20-token hotspot whose share of
+  squared latent error jumps from 4.594% after step 10 to 10.520% after
+  step 11 and 21.706% after step 12, while global latent relative L2 rises
+  0.476661% to 0.549960% to 0.702207%. Same-binary native full-Q8 forwards
+  on both official and native incoming BF16 states at calls 10/11 reproduced
+  saved native Euler next states exactly (65,536/65,536 each). The call-11
+  one-step gap splits algebraically into 0.107540% direct same-input and
+  0.699382% state-transport terms relative to official next-state norm;
+  transport amplifies the already-different hotspot 1.806x. Separate call-20
+  and call-39 *velocity* decompositions also find state transport larger than
+  direct same-input DiT error (9.568% vs 0.831%; 16.237% vs 1.974%). This
+  supports denoising feedback, not a VAE-only origin, but does not identify
+  the initial Q8/arithmetic/cache discrepancy, VAE support membership, or
+  an eye/glyph-specific cause. Both arms used saved official Qwen3-VL
+  conditioning; native encoder quality is outside this test. The hotspot was
+  selected after seeing the trajectory. Guarded onset report SHA-256 is
+  `6b2309f524155de5599f1a69142ec384a5c988487bdd4b99683062ea8211fe44`;
+  full artifact pins, other report hashes, caveats, and decay triggers are
+  in `docs/qwen-image21-gguf-frontier.md`. Next: observational block-0
+  operator split and paired native-versus-official conditioning trajectories.
+- A guarded full-Q8 call-0 operator split used exact official pre-block-0,
+  modulated attention, and `tanh(gate1)` inputs. Native no-taps and 18-tap
+  forwards produced identical final velocity SHA-256
+  `f5fa49331995205540a67caa718a97d14c7399df82a33deaeeb2f726863ce2fe`.
+  The first directly matched nonzero block-0 outputs are parallel raw Q/K/V
+  projections (all-row relative L2 0.243992% / 0.237986% / 0.337856%).
+  The native norm1/gate1 captures differ too, but were pre-override shadows
+  and did not feed the Q/K/V or attention residual measurements. Subsequent
+  attention `to_out` and block-0 output gaps are 0.234882% and 0.331731%; a
+  2.710809% norm2-modulated MLP-input gap inherits an already-different
+  residual. A gate/up comparator slice error initially manufactured a 129.8%
+  gate gap; corrected gate/up gaps are 1.387420% / 1.496385%, and packed
+  gate-first/up-second data reproduce captured SwiGLU at 5.81e-8 relative
+  L2. Thus the operator frontier is before Q/K RMSNorm/RoPE, but Q8 weights,
+  BF16/F32 arithmetic, and backend behavior remain confounded; call-0 block-0
+  error is not yet tied to the call-10-to-12 hotspot or face defects. The
+  SHA-gated comparator and report are under
+  `/private/tmp/qwen21-block30-split-20260928/full-q8-block0/`; report SHA-256
+  `2aa42c861628e70dd8dfb1b207e19c976e19489f7562618ff99337370eaaa7f7`.
+  Refresh after model/conditioning, official/native capture, Metal/runtime,
+  or scratch-artifact changes. The next bullet closes the scheduler ambiguity
+  at calls 10/11; matched-weight projection comparison remains open.
+- Official BF16/MPS raw DiT velocities were captured at zero-based calls
+  10/11 on the exact saved incoming states, after a call-0 cached-prefix
+  prefill whose velocity SHA matched the original. Both official MPS Euler
+  replays reproduce saved next latents 65,536/65,536 BF16 values. An
+  independent hash-gated comparison finds same-input native full-Q8 versus
+  official raw-velocity relative L2 1.255609% / 0.951932%; applying the
+  native BF16 Euler formula to each official velocity gives the official
+  next state bit-for-bit, so scheduler-only gaps are zero **at these two
+  calls**. Swapping to the native F32 velocity, rounded to BF16 at the
+  scheduler boundary as in the saved native path, yields exactly the
+  previously measured 0.116878% / 0.107540% direct one-step gaps. The
+  post-hoc non-face hotspot holds 13.076% / 1.494% of raw velocity squared
+  error at the two calls. The dominant call-11 state-transport term holds
+  21.874% of its squared energy there. Therefore these direct gaps are
+  emitted-DiT differences, while the steep trajectory drift is mainly
+  feedback from an already-shifted state. This does not identify Q8 weights
+  versus execution
+  arithmetic, connect block-0 Q/K/V to the hotspot, or prove a face/VAE
+  mechanism. Capture and independent comparison report SHA-256 values are
+  `a7c5620622babb1fcf5c543d4800fe1134c258c26857dd29cbfe6f23034d4027`
+  and `e39d06f234b48e7d3ac0c51dcd67e05881faab4d01adcd340cde7db87b5ffb43`.
+  Full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  Next: matched-weight projection test before precision changes.
+- A guarded CPU-only, same-input block-0 Q/K/V probe now separates the
+  first direct projection discrepancy on seven fixed joint-token rows
+  (three text, four image; image rows start after 230 text rows). The official
+  BF16-weight CPU F32 matmul, rounded to BF16 at output, exactly reproduces
+  all sampled official MPS raw projections. CPU dequantized-Q8 F32 matmul
+  differs from native full-Q8 Metal taps by only ~0.0001% relative L2 on
+  these rows; wrong matrix orientations differ by >100%. Against the
+  official-tap norm, the Q8-weight substitution delta is 0.175611% /
+  0.176577% / 0.309233% for Q/K/V, versus the official output-rounding
+  delta 0.159989% / 0.163396% / 0.165307%. Their vector sum with the tiny
+  CPU-to-Metal residual exactly reconstructs the observed 0.239672% /
+  0.241529% / 0.350058% native-versus-official gaps; these norms are not
+  additive causal shares. Full Q8 GGUF and official shard hashes, saved
+  modulated-input consumption, taps, layout, and negative controls passed;
+  report SHA-256 is
+  `b066ef7328589812e54b8ef55267205d847cfcc0761c10310e11e5b98e937f78`.
+  This narrows the sampled call-0 projection gap to Q8-weight substitution
+  plus official BF16 output rounding, with little Q8 Metal execution
+  residual on sampled rows; it does not prove Q/K/V donor conversion
+  provenance, full-tensor or later-step attribution, or eye/VAE causality.
+  Next: matched-weight intervention near calls 10/11, then trajectory and
+  decoded-image A/B if velocity changes. Full pins, caveats, and decay
+  triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- At zero-based call 10, an equal-input full-joint block-0 operator split
+  locates the first matched native Q8/Metal versus official BF16/MPS
+  discrepancy at the LayerNorm-1 plus modulation output, before Q/K/V:
+  target-image relative L2 0.307104%. The output of that native fused
+  operation agrees with independent CPU F32 LayerNorm plus scale to
+  0.00000664% relative L2. The official output reconstructs byte-exactly
+  from observed BF16 LayerNorm output with BF16 rounding after `1 + scale`
+  and multiplication. Raw Q/K/V target gaps are 0.245395% / 0.257086% /
+  0.377128%; the block output gap is 0.343305%. Passive official taps
+  retained the saved block and terminal bytes, while native no-tap/tapped
+  and repeated outputs were bit-exact. This is evidence for a precision/
+  backend staging difference, not a wrong Metal formula or an established
+  causal explanation of eyes, VAE support, or final-image quality. The
+  official/native report SHA-256 values are `cb2dce2d30fc140bdc66da036435d1e385e643c3d2768fea552ddea0274b883f`
+  and `4c2bc63ed8b73c9be08fc7faa1b08366d7077d79494becf0e0e161d2ebba4989`.
+  Parent independently checked all 15 official exact BF16 widenings, all
+  14 native tap hashes/finite values, and all nine text/image comparison
+  rows. The next bullet tests the official modulated attention input with a
+  no-op-controlled native block replay; terminal velocity remains open.
+  Details and artifact paths are in `docs/qwen-image21-gguf-frontier.md`.
+  Refresh after weights, conditioning, source, BF16/Metal runtime, or saved
+  tap changes.
+- A no-op-controlled, same-input full-Q8 Metal block-0 replay at call 10
+  injected the exact official BF16-widened modulated attention input after
+  native LayerNorm-1/modulation. Baseline and native-own-value no-op outputs
+  were bit-exact; the injected tap matched the official tensor SHA-256 and
+  the injected output repeated bit-for-bit. Target-image block-output
+  relative L2 fell from 0.343305% to 0.312606% (17.085% less squared
+  error); raw pre-RoPE Q/K/V gaps improved, while the MLP-output gap barely
+  moved. Root independently recomputed the results from SHA-checked arrays.
+  This proves a local causal contribution, not a dominant cause of terminal
+  velocity, latent drift, eyes, or VAE behavior. Native gate-1 and Q8 weights
+  remained in place. The retry report SHA-256 is
+  `3c435b7fe71b39dc9ac133f100312bfa111632fdb8debfd6393f6916c258f7e0`;
+  full pins and refresh conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  The next bullet records the no-op-controlled full-DiT call-10 response;
+  production precision remains gated on trajectory and image evidence.
+- The call-10 full-Q8 suffix A/B continued those two saved block-0 states
+  through the same 31 later blocks and final head. The repo-only suffix
+  source and embedded Metal kernels were hash-pinned; the block-0 seeds retain
+  their earlier instrumentation-overlay lineage. Baseline A/A full and target
+  outputs were bit-exact. Against official BF16 velocity, target relative L2
+  fell only 1.004713% to 1.001539% (0.630735% less squared error), far less
+  than the local block-0 improvement. An independently reconstructed official
+  BF16 Euler step matched all 65,536 saved next-latent values; applying it to
+  A/B gave 0.108470% versus 0.108480% next-state relative L2, a tiny
+  0.018343% *increase* in squared error for B. Independent raw-array recount
+  agreed. The report's inherited `scope` string is stale, but complete raw
+  outputs and A/A hashes anchor the result. One injected run, reconstructed
+  shared final scales, and one fixed call10 fixture do not establish an eye,
+  full-trajectory, or VAE claim. Reject promotion of this isolated precision
+  intervention; test larger downstream projection-family errors with an
+  equal-input/next-latent falsifier. Run report SHA-256:
+  `dc61f028c69720b11ba6472deda8f4dfa2e02d907946d67932e202156225b39e`;
+  full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+- A SHA-gated, same-input call-10 Metal rescue now uses the captured *exact*
+  official MPS BF16 final scales for all arms. Baseline official-preblock-0
+  -> native Q8 blocks 0–31 is A/A byte-repeatable. Substituting only the
+  official post-block-30 state before native block 31 cuts terminal velocity
+  relative L2 from 1.004713% to 0.308901%, and next BF16 latent relative
+  L2 from 0.108470% to 0.056747%; respective squared-error reductions are
+  90.547% and 72.630% on this fixed call. A separate exact-official-prehead
+  native BF16 `proj_out` probe matches 65,513/65,536 official BF16 velocity
+  values, with 0.006001% relative L2. This strongly suggests substantial
+  call-10 error is already in the DiT hidden state before the final block,
+  while the output projection alone is small under exact official input. This
+  does not assign
+  error to individual earlier blocks, prove VAE support/eye quality, or
+  validate a 40-step rescue. The native-state split/no-op in the next bullet
+  closes this topology confound on the pinned call, but not earlier-block
+  attribution. An
+  independent spatial audit found the approximate face boxes contain 4.554%
+  of baseline next-latent squared error on 4.395% of tokens, with rescue
+  benefit at only the 61st percentile among same-shape non-face control
+  boxes; eye-specific
+  causality is not established. Rescue report SHA-256:
+  `c486b913d53239fc374873b8cfcd92c0ba12453416e0c978562ed8ba0cab3d50`;
+  head-probe manifest SHA-256:
+  `47a89ae2ce3811515f8ce46c2db41bc8065d3f04b218ba9a5cd59ef789748e92`.
+  CPU-derived final-norm candidates projected through the same native BF16
+  head twice each are A/A bit-exact: F32-unfused versus BF16-staged yields
+  0.223499% versus 0.191439% velocity relative L2 and 0.038683% versus
+  0.035144% next-latent relative L2. The official MPS final-norm formula
+  replays its pre-head capture byte-exactly, but CPU LayerNorm reduction is
+  not the native Metal kernel, so these candidate results do not justify a
+  production precision change. Candidate-probe manifest SHA-256:
+  `20f5a6c2bce117daf35f532ab7c11179b8adc6458d9978c0c7a6f3d05bb9cece`.
+  A subsequent exact-input run of the production Metal final-norm kernel on
+  official post-block-31 BF16 state/scale is A/A byte-repeatable and closely
+  matches the CPU F32-fused candidate. With the same native BF16 projection,
+  its terminal BF16 velocity gap is 0.223499% and next-latent gap 0.038683%,
+  versus 0.006001% and 0.003659% when the projection consumes the exact
+  official pre-head BF16 tensor. This locates a same-state head-parity gap at
+  final norm arithmetic/staging, but does not prove a decoded-quality gain
+  from changing precision. Scratch manifest SHA-256:
+  `e973085a2879c8407a7c929804c3a04b863c85c1a5d98f7ba220c0b331811677`.
+  Full pins, caveats, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A follow-up full-Q8 call-10 Metal control reproduced the unsplit A/A and
+  the split-after-block-30 native-state replay byte-for-byte, including an
+  exact Float32 host checkpoint round trip; all three velocity SHA-256 values
+  are `0344ba596ca42d40c22183e2ac8d7ed645ba5ab05c56e2bcb8ee11843b68a51e`.
+  The official-post-30 rescue also reproduced its prior raw velocity hash.
+  In a same-suffix 2-by-2 row-source intervention, replacing only the 1,024
+  target-image rows reduced teacher-relative velocity L2 from 1.004713% to
+  0.310462% and next-BF16-latent L2 from 0.108470% to 0.056765%; replacing
+  only the 230 text rows gave 1.002718% and 0.108322%. Both row groups
+  replaced gave 0.308901% and 0.056747%. Root independently rehashed and
+  recalculated all raw arms. At this post-30 boundary, the measured terminal
+  error is therefore transported predominantly through image hidden state,
+  not a split-call artifact or dominant text-row error. This conditional
+  intervention does not identify an earlier responsible block or prove
+  40-step/eye/VAE quality. Report SHA-256:
+  `63b87ad72ae0257cf27d5fc3d8e95f03672f4d413da6f75c166756a6b37be4de`;
+  runner SHA-256:
+  `c67d75a32d0bf908e198adf24be33718d7f4ed84ca74b14f8efb4978b7178d82`.
+  Scratch may expire; full pins, caveats, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A 2026-09-28 CPU-only SDPA MATH replay of the pinned 244-token Russian
+  Qwen3-VL layer-0 trace reproduced the official attended BF16 output
+  exactly from official saved Q/K/V (0/999,424 mismatches). On the *same*
+  native saved Q/K/V, official SDPA differed from native attended in only
+  727 values (0.004291% relative RMS), whereas replayed native inputs versus
+  official attended differed in 57,683 values (0.061854%), close to the
+  captured native-versus-official 57,848 (0.061796%). Causal/GQA negative
+  controls failed strongly. This identifies a small local native attention
+  arithmetic gap, while the larger composed layer output gap is already
+  present when official attention consumes native Q/K/V. It does not assign
+  the upstream error among norm/projections/RoPE or establish 36-layer or
+  image-quality effects. Current full-Q8 DiT parity runs use official
+  Qwen3-VL conditioning, so this native-encoder difference is not their
+  same-input DiT latent-drift cause. Root independently re-executed the
+  replay after a docs-only commit with only the HEAD guard updated in memory;
+  all comparisons and output hashes matched. Scratch report SHA-256:
+  `f0f86a827adb03675ab04e49dc0a312348a7d213579d713dae8a39afd36bbf6b`;
+  script SHA-256:
+  `3d4a01d81be3fc0577d2d574e3f3267da8752efa1cb36cd0babc902c58e7b453`.
+  Refresh conditions and full scope are in `docs/qwen-image21-gguf-frontier.md`.
+- A bounded call-10 full-Q8 Metal image-row intervention sampled post-block
+  boundaries 0, 12, and 29 on the same official full-joint input. Unsplit A/A
+  and all three native-prefix/checkpoint/native-suffix no-ops were byte-exact
+  to the prior baseline. With native text rows retained and the native suffix
+  fixed, substituting official image rows lowered teacher-relative velocity
+  L2 from 1.004713% to 0.942125%, 0.666389%, and 0.324285%; corresponding
+  next-BF16-latent L2 was 0.104182%, 0.084176%, and 0.058132% (baseline
+  0.108470%). At those boundaries the image-state gap itself was 0.343305%,
+  2.227963%, and 5.325171%. Root independently checked raw hashes, all
+  velocity/next-state L2 values, three checkpoints, and text/image gaps.
+  The increasingly effective late intervention localizes accumulated
+  terminal-relevant drift to the image hidden-state route, but does not
+  separate error newly created in blocks 1–29 from amplification of an
+  earlier difference or identify an intrinsic culprit. No full-trajectory
+  or decoded-eye benefit follows. Report SHA-256:
+  `e444672b16962f9088786fc9d10d335eaf1a8669737105a73a310e9dced7f886`;
+  runner SHA-256:
+  `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only Qwen3-VL Russian layer-0 cut reconstructed each route's
+  post-attention residual from the same BF16 block input and its own
+  `o_proj` capture, then replayed each route's RMSNorm. Both official and
+  native norm captures were reproduced bitwise (0/999,424 mismatches),
+  including BF16-add staging controls. On the same official residual,
+  native versus official norm arithmetic differed at only 53 values
+  (squared error 0.000013663), versus 85,872 observed norm-output
+  mismatches (squared error 0.011901554). Applying official norm to the
+  native residual retained 85,945 mismatches. The dominant bounded source
+  of this norm-output gap is upstream residual-input drift, not norm
+  arithmetic. Root reran the scratch runner to the same report SHA and
+  independently checked raw BF16 observed error. This does not identify
+  the attention-branch operator, a full-encoder or image gain, or VAE
+  behavior. Next: matched-input attention-branch cut, then full-encoder
+  and same-seed image A/B before production changes. Final report SHA-256:
+  `b1b759d45f7cd15a1cf11c300320da084754ec3e647e92bc1bc8508f0b4ea6dc`;
+  runner SHA-256:
+  `c1b1dbea798d15df9f1f096f2c00b3797998b12b73814600e28649eeb0a622a8`.
+  Scratch may expire; pins, controls, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, hash-gated 2x2 Qwen3-VL Russian layer-0 `o_proj` cut replayed
+  official PyTorch BF16 and native Accelerate CBLAS F32-to-BF16 routes on
+  both captured `attended` inputs. Both own-route outputs were bit-exact
+  (0/999,424 mismatches); root reran the final runner to the same report
+  SHA. The observed outputs differ at 161,871 values (squared error
+  0.002361587), while native projection on the official `attended` input
+  leaves only 480 mismatches (squared error 0.000021552), removing
+  99.087413% of this *operator-output squared error*. The official
+  projection on native context leaves squared error 0.002220906. The
+  context inputs differ at 57,848 values. Negative, zero/no-bias, and
+  repeat controls pass; the exact vector decompositions have negative
+  cross-terms, so no additive causal shares follow. The dominant local
+  output gap is inherited from attention context, not `o_proj` arithmetic;
+  Q/K/V, norm, and RoPE origin, full encoder, image, eyes, and VAE effects
+  remain open. Next: fixed-input Q/K/V normalization/RoPE cut, then full
+  encoder and same-seed image A/B before production changes. Report SHA-256:
+  `4d75f4634b99b40418086f4f3367b21701cfa54a000f759ea5b897524693b74d`;
+  runner SHA-256:
+  `5f03c3e9b3e8011122ff07e0c0c99a416ae8c51f52801bb732267fffef41ef33`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, hash-gated Qwen3-VL Russian layer-0 Q/K RMSNorm 2x2 cut
+  replayed official and native formulas on both saved BF16 projection
+  inputs. All four own-route Q/K replays were byte-exact across 244 rows
+  and retained rows 14–243; root independently repeated the frozen runner
+  to the same report SHA and recomputed observed raw-sidecar errors. The
+  observed native-versus-official norm outputs differed at 7,324 Q and
+  1,741 K values (squared errors 0.267914916 and 3.069707751). Applying
+  native norm to the official Q/K inputs left only 16 Q and 3 K mismatches
+  (squared errors 0.000530243 and 0.000068665), while official norm on
+  native inputs retained 7,308 Q and 1,738 K mismatches. Thus most of
+  this fixed-fixture norm-output gap arrives in the projection inputs;
+  the same-input formula remainder is nonzero, and no additive error
+  share or full-encoder/image effect follows. Actual RoPE position/cos/sin
+  inputs are absent from both traces, so its arithmetic remains unresolved.
+  Next: capture those inputs and route-exactly replay RoPE before a
+  full-encoder and same-seed image A/B. Report SHA-256:
+  `128173c5d307441e1ec637dec0be7870f8071c2fcb384963d87cf6d4655cb0d2`;
+  runner SHA-256:
+  `0a3ebbaa8865902e41bd58a370135ed5d2e21b9ce025f52494b967ceaa2930cb`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A full-matrix, CPU-only Qwen3-VL layer-0 Q/K/V projection replay separated
+  same-BF16-input projection arithmetic from norm, checkpoint-weight, and
+  channel-layout confounders. PyTorch `F.linear` reproduced all three
+  official 244-row captures byte-for-byte; source-matched Accelerate SGEMM
+  reproduced all three native captures byte-for-byte. On the 232 exactly
+  equal norm-output rows, native/official Q/K/V still differ by 284/85/73
+  BF16 values (relative RMS 0.010825%/0.002591%/0.004931%). Root
+  independently checked replay hashes and raw row/mismatch counts. This
+  localizes the small difference to the CPU projection paths on this
+  fixture, not the exact FMA/reduction mechanism or final image impact.
+  Full-Q8 DiT parity used official conditioning, so this text-route gap
+  cannot explain its latent drift. Report SHA-256:
+  `6eeda4b1107ca1bbcf7a832a44a927170b99b1de91fe09805c40acd960b30bbc`;
+  runner SHA-256:
+  `4195148c674e002feb2f3e13f7a4d2f5d7ee4ef12b6fa232dadc270423255407`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU/Float32 fixed-VAE masked-final-latent counterfactual used the same
+  official/full-Q8 40-step endpoints and exact decoder-oracle controls. The
+  20-token face core carried only 0.272560% of global squared latent
+  residual, yet transplanting it alone produced face-ROI RGB RMSE 6.262167
+  against official, versus 6.391382 for all full-Q8 tokens and 1.837282 for
+  the complementary outside-core arm. A 42-token halo yielded 6.349274
+  versus 0.624513 outside halo. Root independently recomputed PNG metrics,
+  token masks, and residual-energy fractions. Thus the local final-latent
+  error suffices for most of this fixture's face-ROI pixel difference under
+  a fixed VAE; neither off-manifold behavior, eye-specific cause, nor the
+  DiT operator origin is established. Report SHA-256:
+  `8ae6fe2f355b658618f1ca3290c6502c4cefb624576bb999c97f5851b514d5af`;
+  runner SHA-256:
+  `96d29321fc76bfa8c6fb93d531f69f48d10c7c6ef84b35aba0e7c9da1b66b48c`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only saved-artifact call-10 face-token replay used the exact same
+  official BF16 input on the official and native full-Q8 routes. Before
+  Euler, the native-versus-official DiT velocity differed by 1.447204%
+  relative L2 in the 20-token face core (1.004713% globally); the next
+  BF16 latent differed by 0.111110% there (0.108470% globally). Root
+  independently reproduced these metrics and both official/native next
+  BF16 latents byte-for-byte from the saved velocities under pinned
+  Euler/BF16 staging. A/A and split/no-op controls were exact. This
+  locates the same-input face-core drift upstream of the scheduler on this
+  call, not its DiT operator or decoded-eye effect; the actual full-Q8
+  trajectory enters call 10 with prior drift. Report SHA-256:
+  `4cc9137d1be3a91ed16dae03e47c46d0f36d1ece44d620ab80623151c0c7640c`;
+  runner SHA-256:
+  `b9bee62a2e146e0540b6e3b7a157adf7b1ff2a51d230312ad18d90c51a3632a6`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-input full-Q8 call-10 block-29 gate/up replay held the 1,254-row
+  native MLP input constant after seeding the block with the exact official
+  post-block-28 state. The official BF16 gate/up payload exactly re-encodes
+  to the donor Q8_0 bytes. Against an original-BF16-weight F32 GEMM, the
+  Q8-dequant F32 gate/up output differed by 0.337199% relative L2 in the
+  20-token face core; production Metal Q8 versus the same Q8-dequant F32
+  route differed by only 0.000024900%. Root independently recomputed both
+  face comparisons from raw taps and weights; no-tap/tap block outputs were
+  byte-exact. A subsequent no-op-guarded splice of the original-BF16-weight
+  F32 output at the same tap removed 6.931958% of squared face-core
+  block-output error versus official MPS (6.700072% image-wide, 3.119477%
+  joint); root recomputed those fractions and exact no-op from saved states.
+  This identifies a bounded gate/up weight/precision contribution, not the
+  whole block, final velocity, 40-step trajectory, or eye defect. The
+  original-weight F32 arm is not an official MPS BF16 operator output.
+  Fixed-input report SHA-256:
+  `e17521e5c51ddab47f2a533339453d0c60759ac331a9c4af937904c3d82f8e19`;
+  splice report SHA-256:
+  `d68fc63eaba7df8cf54b424b85c64e3eecd6bf69787ded058d8e1fff92019ab2`;
+  current analysis/emitter script SHA-256:
+  `ab0956a4bb0346a3f2ff141a8e7f9d5b4e50979922b4192808e39c9b2123378a`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- An isolated official MPS/BF16 call-10 block-29 replay loaded only its nine
+  weights and exact saved post-block-28 state. Both no-hook and 23-passive-tap
+  runs matched the saved official `[1,1254,4096]` post-block-29 output
+  byte-for-byte (SHA-256 `7df76603d10ecab8cc1b5ef99ab8bf945d40c62056365c0dd1a5be2306109582`);
+  root independently compared raw outputs. The native resident Metal
+  `norm2_buf` and official modulated norm-2 output are the same pre-gate/up
+  boundary on the same block input. Native F32 versus official BF16-widened
+  relative L2 is 0.841881% joint, 0.914917% image, and 0.810215% in the
+  face-20 rows; BF16-rounding native first leaves 0.858045%, 0.929769%,
+  and 0.826535%. Root and a separate CPU comparator checked raw face values.
+  Thus a discrepancy exists before gate/up and survives the boundary BF16
+  cast. The operator within that prefix and its causal share of final
+  block/velocity/image error are not established. The no-op-guarded official
+  MLP-input splice into the native block suffix is reported below; the
+  existing gate/up-only splice could not perform it. No-hook/passive report
+  SHA-256: `d4c7384b40f9e5aa0385e64205758feda03ed1c99833cccea07cc05570073212`/
+  `8187b131543bd80d111153d92e9774e3609e2d6c825e4370e904145db0414ce1`.
+  The original no-hook runner hash is recorded but its exact source version
+  was not retained after adding passive mode; raw output parity remains
+  checkable. Scratch may expire; pinning, tap hashes, and refresh triggers
+  are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch-only, no-op-guarded native Metal block-29 splice installed the
+  official BF16-widened modulated MLP input after the native prefix and before
+  Q8 gate/up on the same exact official call-10 block input. It preserved
+  native `state_buf` and `gate2_buf`. Baseline and native no-op outputs were
+  byte-identical to the prior pinned replay (SHA-256
+  `82ff90f724520104cde4c970c1abbd97421f6399042643557679b4dc768bd6cf`).
+  Root independently recomputed from raw F32 outputs that the official-input
+  arm removed 5.039407% of squared full-joint block-output error versus
+  official MPS, 11.613085% image-wide, and 11.089104% in the predeclared
+  face-20 rows. A native-input BF16-rounding control slightly worsened all
+  three errors. This is a causal effect at the block-29 hidden-state output,
+  not an intrinsic attribution of the whole upstream prefix, a final
+  velocity/trajectory/image benefit, or an eye-specific result. The prior
+  gate/up-weight result may overlap and must not be added to these fractions.
+  Report SHA-256:
+  `1eaa54c8ace6f08fd1c84c059e6702bd746e2d32d2c66197fd74768a4b13ddfd`;
+  runner SHA-256:
+  `104474ac9ee0ee456952a1f42bd9c3c8c58c96fbbeceb8d4bf0fb5ddd8da343c`.
+  Next: split the attention/first-residual prefix from norm-2/modulation with
+  another no-op-guarded same-input probe. Scratch and refresh conditions are
+  in `docs/qwen-image21-gguf-frontier.md`.
+- A pinned, CPU-only Qwen3-VL layer-0 down-projection replay on the 244-row
+  Russian fixture reproduced the official PyTorch and native Accelerate
+  captured outputs byte-for-byte from their respective BF16 SwiGLU inputs.
+  Supplying the official activation to the unchanged native Accelerate
+  `down_proj` reduced its error against the official output from 393,091 to
+  732 BF16 mismatches and removed 99.898609% of squared operator-output
+  error (99.898660% on the retained 230 rows). Root re-ran the scratch
+  replay with the same report SHA-256. Same-input SwiGLU was already
+  bit-exact, while gate/up sidecars differ; this localizes the large
+  `down_proj` discrepancy to its upstream activation, but does not separate
+  gate/up input drift from projection arithmetic or establish an image
+  improvement. Next: fixed-input gate/up projection/backend cut, then
+  full-encoder and same-seed image A/B before promotion. Report SHA-256:
+  `7ae74a775f7671196886a2b4dd8fd9c191d437622206c390eaa4d17488238380`;
+  runner SHA-256:
+  `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, pinned Qwen3-VL layer-0 equal-input cut reproduced both
+  official PyTorch BF16 and native Accelerate F32-to-BF16 `gate_proj` and
+  `up_proj` route captures byte-for-byte from their respective saved
+  `post_attention_layernorm` outputs. Substituting only the official norm
+  output into the unchanged native backend reduced gate output error from
+  781,510 to 874 BF16 mismatches (99.931712% of squared output error
+  removed) and up output error from 806,323 to 946 mismatches (99.899044%
+  removed) across all 244 rows. Retained-230 removal was 99.935253% and
+  99.906664%, respectively. Root reran the scratch replay to the same report
+  SHA and independently recomputed observed raw-BF16 errors. Exact route
+  replay, 16 sidecars per route, weight/model/payload/source pins, zero/no-bias,
+  and reversed-channel negative controls passed. The large projection drift
+  is inherited from different norm-output inputs on this fixed fixture; this
+  does not locate the cause of that input drift or prove a full-encoder/image
+  gain. Next: matched-input cut across the post-attention residual and norm,
+  then full-encoder and same-seed image A/B before any promotion. Report SHA:
+  `3912f19dbe6af5f6073a8ebd8a93d45430c938ff15085c4ed5500527f7d79a4f`;
+  runner SHA:
+  `3636b22aa3acd1ef72adb3afcbb1e2fb589539b8f1f71dc12c9ab3975305bbfd`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the exact official call-10
+  full-joint block-29 input replaced only the native first-residual
+  `state_buf` with the official BF16-widened donor before the fused
+  LayerNorm/modulation helper. Native QKV/attention/to-out and `gate2`
+  stayed byte-identical; the donor state was installed bitwise, and the
+  native no-op matched all taps and output bitwise. Root independently
+  recomputed squared block-output errors from raw arm files: the donor
+  removed 56.363756% joint, 66.483710% image-wide, and 62.506589% in
+  the predeclared face-20 rows. Native BF16 rounding alone worsened the
+  image and face-20 errors, though it improved the joint aggregate.
+  This locates a consequential pre-MLP residual-state discrepancy at one
+  fixed block/input, not its upstream operator, full trajectory, decoded
+  image, or VAE behavior. The donor also changes both direct residual and
+  downstream norm/MLP paths, so it cannot be subtracted from the earlier
+  MLP-input splice. Next: split attention projection from gate-1/residual
+  formation with a no-op-guarded same-input probe. Report SHA-256:
+  `6d003b50ca5a182583d9ed6af0d65e60fba23e56583bdb2fcdf5fdaf019e27dc`;
+  runner SHA-256:
+  `91a8e3330b884e3e61666a3f99cd68d7f63de253e19ad613a76ba1416ee47ce8`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the same exact official call-10
+  full-joint block-29 input replaced only the fused residual/helper's
+  post-attention projected-buffer argument, after native QKV, attention,
+  and Q8_0 `to_out` had run. Baseline/no-op outputs and taps matched
+  bitwise; donor buffer installation was bitwise, while native projection,
+  gate-1, gate-2, and hidden input stayed unchanged. Root independently
+  recomputed raw-output squared errors: the official BF16-widened
+  projection donor removed 19.417857% joint, 51.137684% image-wide,
+  and 44.114833% in the predeclared face-20 rows. Merely BF16-rounding
+  the native projection worsened all three. This supports a material
+  discrepancy at or before post-attention/`to_out` on this one block and
+  input; it does not isolate attention-context versus projection arithmetic,
+  nor prove full-trajectory, image, eye, or VAE benefit. Earlier
+  first-residual and MLP-input splice effects overlap and are not additive.
+  Next: matched-input pre-`to_out` attention-context split with official
+  passive tap and no-op guards. Report SHA-256:
+  `4a438e49dbc1878f3d8c0ba8e594911895e551b8925fc13f0d43284d1610b226`;
+  runner SHA-256:
+  `fc04b0ccd17e90f8820aead6b057816b9f52d31dd5d3bcad3869fc32d93744b3`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the same exact official call-10
+  full-joint block-29 input supplied the official BF16-widened pre-`to_out`
+  attention context to the unchanged native Q8_0 `to_out` path. Native
+  QKV/attention, hidden input, and gate-1 stayed fixed; the donor was
+  installed bitwise at the actual projection input. Baseline/no-op outputs
+  and taps matched bitwise. Root independently recomputed raw-output squared
+  errors: the official-context donor removed 17.765906% joint, 46.863547%
+  image-wide, and 40.126492% in the predeclared face-20 rows. BF16-rounding
+  native context worsened all three. Native-versus-official context relative
+  L2 was 1.424002% joint; same official input to native Q8_0 versus
+  official MPS `to_out` still differed by 0.457004% joint. The latter is a
+  combined quantization/kernel/precision-route gap, not an isolated cause.
+  These are overlapping one-block interventions, not additive shares or
+  proof of a full-trajectory, decoded-face, eye, or VAE gain. Next: split
+  QKV, Q/K norm/RoPE, and attention application within the context
+  boundary, then run same-seed end-to-end A/B for any promoted fix. Report
+  SHA-256:
+  `3eba0be3a7287cc00588a5dd0a71fbfdaea9fbfb8b198ae99227cc74332c29b9`;
+  runner SHA-256:
+  `177fde6aa1132fbc427d6ea73ac4b7b81e09bf02a6fafe732d61a04481977e1a`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A guarded Q8_0 lineage probe widened the pinned official block-29 BF16
+  Q/K/V weights to F32 and quantized each with the pinned `llama-quantize`
+  recipe. Each generated 17,825,792-byte Q8_0 payload matched the donor
+  exactly. Block-0 positive, one-byte mutation, and Q/K-swap controls
+  discriminated. This establishes reproducibility for three tensor payloads,
+  not historical conversion provenance or image quality. Report SHA-256:
+  `f5c5f8f680612848efd63c8a77c8b7c6e58b9375aa19de47e85f68f8e4588633`;
+  harness SHA-256:
+  `07bcc4bbb11ddfcb1264f8760ccf22efd28b9e4d5c173ad9e61f0b1fd7af3dbf`.
+  The resident Metal Q/K/V route now accepts a mixed BF16/Q8 triplet on
+  synthetic inputs; the full resident spec passed 25 examples with eight
+  model-backed examples still pending. Next: fixed-input block-29 BF16-Q/K/V
+  weight A/B with no-op/route/tap controls, then same-seed full-trajectory
+  and decoded-image A/B before a quality claim. Scope, source pins, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded same-input call-10 block-29 native Metal A/B changed only the
+  resident Q/K/V weights from donor Q8_0 to exact-hash official BF16. The
+  official BF16-widened and native F32 block inputs were byte-identical;
+  BF16 Q/K/V dispatch was observed, and a distinct-Q8 no-op matched all taps
+  and output bitwise. Image-row relative L2 versus official fell from
+  0.014374 to 0.012283 at attention context and from 0.004911 to 0.004656
+  at block output (10.104347% less squared block-output error). Thus Q8
+  Q/K/V contributes to this local drift, but residual error remains; block
+  output maximum absolute error worsened, and there is no full-trajectory,
+  decoded-face, eye, or glyph benefit yet. BF16 weights used the native
+  F32-accumulating Metal route, not official MPS arithmetic. Report SHA-256:
+  `b55af9885bea460781cff10ad001703d3991fec31674feabfe7e7bda5c518c59`;
+  runner SHA-256:
+  `900de862b1c96f94605a77fb61331454a71823f20792c9127bd80c68f9f485da`.
+  Next: isolate the post-RoPE Q/K/V-to-context boundary, then require a
+  same-seed full-trajectory and decoded-image A/B before promoting quality.
+  Scratch evidence may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- The same official final latent decoded pixel-identically through the
+  packaged CPU/F32 renderer and pinned Diffusers pipeline-style VAE path;
+  both official and full-Q8 endpoints reproduced their saved RGBA PNG
+  oracles exactly. An equal-per-token-norm, same-support signed-channel
+  residual control had face-crop RMSE 6.762500 versus official, while the
+  actual full-Q8 residual had 6.391382; full-image RMSE ordering reversed
+  (6.785575 control versus 8.576012 actual). This does not support a
+  face-specific VAE decoder cliff under this one control, nor prove or
+  disprove VAE manifold membership or eye-specific causality. The official
+  endpoint has no packaged-renderer versus pinned-pipeline CPU/F32 mismatch;
+  the full-Q8 pipeline decode separately matches its saved oracle. Continue
+  upstream Qwen3-VL/DiT isolation. Report SHA-256:
+  `b6274bf87f49959ffd281d75bc50ee31c5b9e69a`; runner SHA-256:
+  `acea75ebf6fb70d7f06fe94ce1e2dc0db1ad19a6b4bce098629cd9147889718e`.
+  Scratch may expire; source pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fresh CPU-only call to current production Qwen3-VL layer-0
+  `rms_norm_rows` on the same pinned `[244,4096]` BF16 input, checkpoint
+  gamma, and F32 `eps=1e-6` matched the saved official norm output exactly:
+  0/999,424 BF16 mismatches. It differed from the older native trace in
+  the historical 321 values across 12 rows. No-op and wrong-epsilon,
+  reversed-gamma, row-roll, and shape controls discriminated. Thus the
+  older norm divergence is not reproduced by the current direct production
+  function; the old trace's executable/config provenance and fresh full-block
+  parity remain unknown. Next: same-input current Q/K/V projection replay,
+  then fresh full encoder and same-seed image A/B. Manifest SHA-256:
+  `30769269df00a310825c7c52ffb5dd8368ed30fb622c559c6e79345f6b964ce1`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal call-10 block-29 cut inserted all three
+  exact official BF16-widened post-RoPE Q/K/V operands immediately before
+  native attention, holding the same official input, modulation, Q8 weights,
+  and joint layout. Distinct-Q8 no-op matched all taps and output bitwise;
+  each donor tap matched the official operand exactly. On image rows,
+  attention-context relative L2 fell from 0.014374 to 0.010331 and
+  block-output relative L2 from 0.004911 to 0.004330 (22.271% less squared
+  block-output error). Context maximum absolute error worsened and a
+  1.033085% relative L2 context residual remains, so Q/K/V discrepancy
+  contributes locally but no unique attention/backend cause or full-image
+  quality benefit is established. Next: same-operand attention-backend
+  discriminator, then full same-seed trajectory and decoded-image A/B.
+  Report SHA-256:
+  `6040a54ecd666c4f4827044522ff82d8d0354130d368203b5a7cee2b518132ef`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A clean-state CPU-only direct call to current Qwen3-VL layer-0
+  `Qwen3VLTextBlock.linear` (Accelerate) used the exact saved official
+  `input_layernorm` BF16 output and selected hash-matched local Q/K/V
+  weights. Compared with the saved official projections, Q/K/V differed in
+  301/87/76 of 999,424/249,856/249,856 BF16 values, with 278/85/73
+  mismatches on the 230 retained image-conditioning rows. No-op output
+  clones matched exactly, while row-roll negatives discriminated. Root
+  recomputed counts from raw sidecars. Thus a small current same-input
+  projection residual remains; its exact arithmetic cause, fresh full-block
+  effect, and final-image impact are not established. Next: fresh current
+  block-0 per-operation trace, then full encoder and same-seed image A/B.
+  Manifest SHA-256:
+  `0d683449ae1e2493d1c5b9930072c6a430a6e5d5c6d2ccab3f94d86d7dc44dbf`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, exact-post-RoPE-Q/K/V block-29 attention replay using
+  PyTorch 2.6 MATH F32 matched the native Metal F32 image-row context to
+  relative L2 `0.0000014623`, while each F32 route differed from official
+  BF16/MPS by about `0.010329`; a deliberately wrong causal image mask
+  differed by `0.573335`. Merely BF16-rounding the native F32 output
+  worsened its official-relative L2; CPU and native BF16-rounded outputs
+  still agree to relative L2 `0.0000749`. This supports a backend/dtype
+  arithmetic gap over a gross native mask/layout error for this fixed
+  attention boundary, not a unique rounding-stage explanation or a
+  decoded-image quality claim. Next: same-seed full trajectory and image
+  A/B before considering any official-parity correction. Report SHA-256:
+  `f29356199650192b8695b47f70a11e873c51e63ac54b214fa2b53faaadd35ab8`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fresh, clean-state current-production Qwen3-VL block-0 forward on the
+  pinned 244-token Russian fixture matched official BF16 input and
+  `input_layernorm` exactly (0/999,424 mismatches each). Its first observed
+  mismatch was `self_attn.q_proj` (301/999,424); K/V differed in 87/76
+  values, and the block output differed in 242,284/999,424 (relative RMS
+  `0.0016507`). Root independently counted raw sidecars; all-stage no-op
+  equality and a one-row-roll negative control passed. This supersedes the
+  historical current-norm suspicion, not the full-encoder or image-quality
+  question. Next isolate projection arithmetic, then full encoder and
+  same-seed decoded-image A/B. Manifest SHA-256:
+  `f26acd7d355af6bf57665d08b71c51827a5aa7ed0fe4239d36ba545a40d26eea`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- On the exact call-10 block-29 official post-RoPE Q/K/V, four sampled
+  query/head FP64 attention references put native Metal F32 at relative L2
+  `0.000000411`–`0.00000262` and official MPS BF16 at `0.006773`–`0.03609`.
+  The largest official error came from a preselected worst-absolute-residual
+  row and is not representative; a median image, seeded image, and causal
+  prefix control showed official errors near `0.007`. Root independently
+  recomputed two image-row controls. This supports a bounded numerical-path
+  distinction, not whole-layer or decoded-image quality superiority; FP64
+  closeness is diagnostic rather than the optimization target. Next require
+  a same-seed full trajectory and face/text image A/B before changing
+  production attention semantics. Reports SHA-256:
+  `3de565c1c7d4948b8783ebf3ccb951b4950f5d43724c88e05b49f9da90f207b2`,
+  `9f2eb1a7c9d78bf5a9dba659c5ee31b74a0dd3fe48102f8dc1067d16d2dd9164`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A same-input CPU replay of current Qwen3-VL block-0 Q/K/V with selected
+  hash-matched BF16 weights found that Torch BF16 `F.linear` reproduced all
+  official BF16 projection sidecars bitwise; Torch F32 plus one BF16 cast
+  reproduced the native Accelerate sidecars bitwise. The latter differs from
+  official in 301/87/76 Q/K/V elements. A changed-input row-roll and exact
+  no-op control discriminated. This localizes the first observed current
+  divergence to projection arithmetic/rounding, not the matched norm; it
+  does not prove a decoded-image gain or independently attest the official
+  raw weight revision. A guarded 36-layer current-source sweep found final
+  retained relative L2 0.020084 with composed inputs versus 0.001701 for
+  isolated layer 35 on official input: prior-state propagation matters, but
+  no individual later operator is thereby assigned the final error. Next
+  test a Q/K/V-only native arithmetic intervention, full encoder, then a
+  matched DiT trajectory and decoded image A/B. Projection report SHA-256:
+  `6ec010274043e767e3ae673e7bcd1c24a5092d303654d1bbc3c683eba0671395`;
+  layer report SHA-256:
+  `809088cff39ab881f39426a2486f0fbff5b3fac9a8e7feb33184cc239b6378e9`.
+  Scratch may expire; source pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- An opt-in, Q/K/V-only Qwen3-VL text projection selector now emulates the
+  pinned PyTorch 2.6 arm64 CPU BF16 reduction without changing the default
+  route or O/MLP projections. On the saved official block-0 normalized input
+  and local hash-pinned weights, the previously red 301/87/76 Q/K/V BF16
+  mismatches became 0/0/0 across the full outputs; root reran the real-sidecar
+  spec (1/1) and default block spec (8/8). This is arithmetic parity for one
+  source/fixture, not full-encoder or image-quality parity. The scalar Crystal
+  path is diagnostic, not a throughput promotion. Next compare Q/K/V-only
+  isolated and composed block/layer outputs, then a matched DiT/image A/B.
+  Exact inputs, scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A same-input CPU-only Qwen3-VL block-0 A/B on the pinned 244-token Russian
+  official input held the binary, weights, mask, and non-QKV backend fixed.
+  The opt-in QKV selector reduced Q/K/V mismatches from 301/87/76 to 0/0/0;
+  block-output BF16 mismatches fell from 242,284 to 192,841 of 999,424 and
+  relative RMS from 0.00165071 to 0.00141599. A default repeat was exact at
+  all 16 stages; a one-bit comparator control was detected. The selector's
+  one-block CPU time was 13.34 s versus 2.10 s default, so this is an accuracy
+  diagnostic, not a performance promotion. Next compare composed 36-layer
+  retained conditioning, then matched DiT/images. Report SHA-256:
+  `7aa373a47b55d8de8594c9a5a1ea821c1d9bd588ad8ea65a9754589f9307ebb0`.
+  Scope, source pins, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
+- A same-binary, same-fixture CPU-only 36-layer Qwen3-VL A/B on the 244-token
+  Russian prompt refuted promotion of the exact-QKV selector from its local
+  block-0 gain alone. Final retained 230x4096 BF16 mismatch counts decreased
+  836,322 to 835,202, but relative RMS versus official increased 0.02008401
+  to 0.02171580 (+8.13%) and maximum absolute error increased 68 to 112.
+  Selector error was slightly lower through layer 33, then sharply higher at
+  layer 34. Both guarded arms exited zero; no DiT/image A/B was run. A separate
+  saved-sidecar replay found five Q-norm and independent RoPE arithmetic
+  mismatches after exact Q/K projections; its FP32 reciprocal-power candidate
+  is not production-verified. Next isolate layer-34 local versus incoming
+  drift, test the RoPE candidate in runtime, then compare same-seed images.
+  Full-sweep report SHA-256:
+  `2eefdabd664abdbf20720d395ee18bd80b7813fef8bfe84c732c35c0da68c88e`;
+  RoPE replay report SHA-256:
+  `9e0caba1306cde82c862bdd971ddfae68d5203374249dc9b0fc7d4952200c79c`.
+  Source/fixture/weight/runtime/scratch changes invalidate the scoped
+  evidence; full pins are in `docs/qwen-image21-gguf-frontier.md`.
+- A fixed call-10/block-29 CPU PyTorch MATH/F32 attention replay of **native**
+  post-RoPE Q/K/V matched saved native Metal F32 context to relative L2
+  0.000001476 on image rows. On the same CPU route, official Q/K/V versus
+  official MPS BF16 context differed by 0.010329, while native Q/K/V versus
+  official differed by 0.014373; a wrong image-causal mask changed context by
+  0.573541. The original Q8 GGUF pin was reverified after a scratch path
+  selection error stopped preflight; one guarded CPU replay then exited zero.
+  This supports matched native attention semantics for that context, not
+  full-block, trajectory, image, or VAE parity. Report SHA-256:
+  `4ed70ddc5f0a4a6b867c694dd247fd086e27577f3ebbbd7b7dda4a732fa1f982`.
+  Source, fixture, backend, and scratch changes invalidate the evidence;
+  detail is in `docs/qwen-image21-gguf-frontier.md`.
+- Post-RoPE-fix Qwen3-VL parity remains a scoped diagnostic, not a native
+  conditioning or image-quality promotion. A pinned Torch 2.6 CPU replay
+  reproduced official block-0 Q/K norm sidecars exactly; all five saved
+  pre-fix native Q-norm mismatches share a one-ULP FP32 variance change at a
+  BF16 midpoint. The opt-in `Torch26Arm64Bf16` production Q/K norm now uses
+  the pinned 128-wide ARM64 reduction; a hash-gated direct operation test
+  matched the full official Q/K norm sidecars at 0/999,424 and 0/249,856
+  BF16 mismatches in both ordinary and release builds. The generic profile
+  retained exactly five Q mismatches and no K mismatch; 35 relevant specs
+  passed. An independently repeated guarded block-0 replay, feeding exact
+  official Q/K/V projection donors into production operations, kept Q/K norm
+  and post-RoPE Q/K at zero mismatches; the first observed divergence was
+  attention output (741 BF16 mismatches), followed by 117,358 block-output
+  mismatches. The pinned official trace was Torch 2.6 CPU SDPA. This bypasses
+  native Q/K/V GEMMs and does not establish full-encoder or image parity. Two
+  guarded 36-layer sweeps and
+  six fixed-input L34 crossover arms showed the selector's retained relative
+  RMS is lower at `h034` (0.009004 versus 0.011929) but higher at `h035`
+  (0.017800 versus 0.013000). Changing L34 QKV backend on a fixed native
+  input changed the output error only around 0.000001-0.000003; incoming
+  residual direction is the stronger discriminator. This does not assign a
+  specific L34 operator or prove decoded-image quality. The next cut is a
+  same-input attention-arithmetic discriminator at block 0 and an L34
+  matched-input sensitivity probe, then same-seed image A/B. Hashes, controls, and refresh
+  triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
+- On exact official Q/K/V at DiT call 10/block 29, a guarded scratch M2 Max
+  full-grid 1,254-query/32-head crossover reduced attention-context relative
+  L2 to saved official MPS BF16 from 0.0101423 (legacy F32 online softmax)
+  to 0.000312717 (BF16 staged); 5,130,976/5,136,384 staged values matched
+  BF16 exactly. One un-warmed GPU dispatch took 127.969 versus 91.7269 ms,
+  so this is a fixed-context accuracy gain with a latency warning, not a
+  speedup. All outputs were finite; mask negative controls and hash gates
+  passed. A mistyped expected V hash was caught before dispatch and corrected
+  against the official capture report. The production exact-shape opt-in
+  compiled and passed a bounded one-query Metal dispatch, including NaN and
+  empty-mask sentinels; the unset default remains legacy. That smoke does not
+  establish production full-grid parity. Keep the candidate guard-only until
+  full DiT block output, matched trajectory, and decoded-image face/text A/B
+  are measured. The scratch BF16 helper mishandles some NaNs; the production
+  helper preserves non-finite values, but the numerical parity claim covers
+  only finite captured Q/K/V. The serial softmax also needs a latency check
+  before promotion. Sources, scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- The matched call-10/block-29 production-path crossover **refuted BF16
+  staging as a standalone native-QKV quality improvement on this fixture**:
+  official-MPS block-output relative L2 rose from 0.491089% to 0.520984%
+  on image rows and 0.467986% to 0.493035% in the predeclared face-20
+  region. Attention-context error also rose. Default and invalid-`true`
+  controls were bitwise identical, and the default reproduced the prior
+  block-output/context hashes. Keep legacy as default and the staged route
+  guard-only; next cross exact official versus native post-RoPE Q/K/V with
+  legacy versus staged attention. This single-block result neither measures
+  decoded image quality nor refutes the exact-official-QKV context gain.
+  Report, hashes, assumptions, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- On the pinned 244-token Qwen3-VL block-0 official post-RoPE Q/K and V,
+  production-equivalent causal attention reproduces 741/999,424 BF16
+  `attended` mismatches. Forced PyTorch 2.6 CPU MATH SDPA and explicit
+  full-shape batched F32 attention each reproduce the official sidecar
+  exactly; unforced CPU SDPA differs in 657,017 values. A scratch-only
+  split-Q/K-pre-scale scalar candidate reduces 741 mismatches to 262 but
+  fixes 600 while introducing 121 new ones, so it is not an exact repair.
+  Twenty selected query/head controls first diverge at the QK score, which
+  does not assign every full-output mismatch. No production route changed;
+  next test a production-compatible MATH arithmetic path, composed encoder,
+  then same-seed decoded images. Pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fresh guarded attention-only 2x2 Metal factorial at DiT call 10/block 29
+  crossed native/official post-RoPE Q/K/V with legacy/BF16-staged attention.
+  Against official MPS BF16 context, all-row relative L2 was 1.424002%
+  native-legacy, 1.597752% native-staged, 1.014233% donor-legacy, and
+  0.031269% donor-staged; image and predeclared face-20 rows gave the same
+  direction. Existing native/donor hashes, a Q/K/V shadow no-op, invalid
+  setting fallback, route counts, and resource guards passed. This verifies
+  a QKV-source-by-attention-policy interaction in this fixed context, not a
+  general BF16 gain or decoded-face fix. The default stays legacy and the
+  staged route guard-only. Next diagnose upstream Q/K/V together with
+  attention arithmetic before full trajectory and image A/B. The earlier
+  interrupted scratch run had no final report; the clean report, pins,
+  assumptions, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A guarded, twice-repeated 244-token Qwen3-VL block-0 donor crossover held
+  official BF16 Q/K/V projection inputs and all native downstream operators
+  fixed, substituting only the official `attended` tensor for production
+  attention output. The intervention reduced block-output mismatches from
+  117,358 to 32,960/999,424 and relative RMS from 0.108526% to 0.053889%;
+  32,960 residual mismatches refute attention-only full-block parity. This is
+  a fixed-input intervention, not native-QKV, 36-layer, image, face, or VAE
+  parity. No production attention route changed. Runner hashes, guards, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch-only CBLAS + arm64 NEON softmax replay using standalone SLEEF
+  3.9.0 (not a Torch-linked symbol) matched all valid PyTorch 2.6 CPU MATH
+  probability F32 words and all 999,424 official Qwen3-VL block-0 attended
+  BF16 values on the pinned 244-token Russian fixture. Root independently
+  reran it; 65/65 adversarial rows matched, while scalar softmax differed
+  in 24 attended BF16 values. This is an arithmetic witness, not a packaged
+  dependency, production path, full encoder, image-quality, or speed claim.
+  Portable SLEEF packaging and composed-block/full-trajectory gates remain.
+  Pins, controls, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A hash-gated Qwen3-VL block-0 donor staircase on the same 244-token fixture
+  reduced final BF16 mismatches from 117,358/999,424 with native attention to
+  32,960 with official attended, 6,739 with official O projection, 4,608 with
+  official MLP gate, 239 with official MLP up, and zero with official MLP down.
+  The repeated attended arm was bitwise stable; a token-row-rotated O donor
+  yielded 997,926 mismatches. These cumulative interventions identify an
+  arithmetic frontier after attention, not additive error shares or a native
+  full-block/full-encoder fix. Next compose exact attention with O/MLP
+  arithmetic and then test full conditioning and same-seed images. Report
+  hashes, controls, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A guarded DiT call-10/block-29 replay held the exact native norm1 output
+  fixed while crossing Q8 versus official BF16 Q/K/V weights/routes. Linear-V
+  relative L2 to official MPS fell from 0.639860% to 0.287049%; image-row
+  block-output L2 fell from 0.491089% to 0.465618%, and predeclared face-20
+  rows from 0.467986% to 0.441722%. The no-op arm was bitwise identical, but
+  the image-row worst absolute error rose. A 0.307398% norm1-input gap is
+  already present and is not explained solely by final BF16 rounding. Weight
+  quantization and matmul route remain confounded, and neither decoded face
+  quality nor speed improved by this one-block evidence. Next cross official
+  norm1 input with both QKV routes; report, pins, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- The captured DiT call-10/block-29 BF16 `norm1` is exactly reproducible by
+  isolated Torch 2.6 MPS LayerNorm on its hash-pinned input (0/5,136,384
+  mismatches, repeated); a wrong-epsilon control changed 164,399 words.
+  Official MPS norm1 plus BF16-staged modulation also reproduced the saved
+  QKV input exactly. Native Metal F32-fused norm/modulation nearly equals the
+  Torch CPU F32 formula (`6.67e-8` relative L2), while CPU BF16-staged
+  norm/modulation reduced input-level relative L2 to official from 0.307254%
+  to 0.198771%. The MPS-versus-CPU norm arithmetic still differs, so this
+  does not identify a single standalone fix or prove block/image improvement.
+  The subsequent norm/modulated-input-by-QKV block crossover is recorded
+  below; scripts, pins, guards, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-attended Qwen3-VL block-0 CPU A/B switched only O-projection
+  arithmetic: the existing Torch-2.6-compatible helper matched all 999,424
+  official BF16 O values, reducing block-end mismatches from 32,960 to 6,739
+  versus CBLAS; gate/up/down still differed. Root checked the raw sidecars.
+  The exact helper took 9.339 seconds versus 0.444 for CBLAS in one
+  unbenchmarked block replay, so this is an arithmetic oracle, not a fast
+  production path or image-quality claim. The report, controls, pins, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded call-10/block-29 factorial crossed native versus official
+  modulated QKV input with Q8_0 versus BF16 Q/K/V projection packages. The
+  selective GGUF loader first reproduced the old whole-mmap Q8 baseline
+  output and all taps bit-for-bit; root independently checked the tap files.
+  Image-row block-output L2 to official was 0.491089% (native+Q8), 0.488738%
+  (official-input+Q8), 0.465618% (native+BF16), and 0.462611% (both). The
+  BF16 package has the larger local effect, but also changes matmul route;
+  a substantial residual remains and no decoded-face benefit is established.
+  Keep image promotion gated on a full matched trajectory and same-VAE
+  decode. Report, controls, pins, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A guarded, fixed-context Qwen3-VL block-0 MLP factorial held the pinned
+  official QKV/attended and exact-O context, independently reconstructed the
+  residual/postnorm exactly, and crossed CBLAS versus Torch-2.6-compatible
+  gate/up/down projection arithmetic. Root checked the raw sidecars: all
+  three exact projections and the final block endpoint match official BF16
+  byte-for-byte. Endpoint mismatches fall from 6,739/999,424 with native MLP
+  to 239 with exact gate+up and native down, then zero with all three exact;
+  a rotated-input control yields 998,068. The scalar helper is far slower
+  than CBLAS and is an attribution oracle only. Native QKV/attention, the
+  other 35 layers, and image quality remain unverified. Report pins, guard
+  scope, and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch call-10/block-29 QKV probe separated weight values from dispatch:
+  on two 32-row native-input samples, Q8 versus resident F32 dispatch of the
+  same Q8 values differed by approximately 6e-8..1e-7 relative L2, whereas
+  official BF16 values versus Q8 values on the same F32 route differed by
+  0.00127..0.00622 in the 20-row geometric ROI. Root checked input selection,
+  pins, old/new first-32 output hashes, and repeat/input-sensitivity controls.
+  This supports local weight-representation attribution only. Batch 32 uses
+  the older batch kernel, not the default M2 Max batch-1254 register-reuse
+  kernel; no attention, full-block, trajectory, or decoded-eye benefit was
+  tested. Preserve the disabled full-block guard and require larger-route
+  controls before promotion. Report pins, metadata caveats, resource scope,
+  and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch Qwen3-VL block-0 replay now composes the entire pinned 244-token
+  block without official intermediate donors: production norm/RoPE/residual/
+  SiLU, Torch-2.6-compatible QKV/O/MLP projections, and qualified CBLAS/SLEEF
+  attention reproduce all 16 saved official BF16 stages, including all
+  999,424 endpoint words. Root independently compared raw bytes and hashes.
+  Candidate four-token no-op/sensitivity controls and full-fixture explicit
+  parity-config production controls passed. This is a single-block CPU
+  arithmetic certificate, not a fast production route, full 36-layer
+  conditioner, or image-quality result; candidate cost was about 99.56 s.
+  The report, source/runtime pins, guard scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next vectorize while preserving the
+  exact reduction/rounding policy, then test the full conditioner.
+- A fresh full-1,254-row call-10/block-29 QKV control exercised the default
+  M2 Max register-reuse Q8 kernel against resident F32 on exactly the same
+  dequantized Q8 values. Relative L2 was 5.74e-8..9.96e-8 overall, with the
+  same ordering in prefix/image/ROI groups. Root independently recomputed
+  all subgroup metrics from six raw sidecars, checked source/input/output
+  pins, and found full-row Q8 bytes identical to authoritative linear taps;
+  Q8 repeat and both routes' first-32 cross-batch hashes also matched. This
+  closes the smaller-batch dispatch gap for Q/K/V only, not attention, a
+  full block, denoising, or face quality. Keep a same-route full-block
+  weight-value intervention and matched trajectory/decode gate next. The
+  bounded command, evidence pins, resource scope, and refresh triggers are
+  in `docs/qwen-image21-gguf-frontier.md`.
+- Two completed 244-token Qwen3-VL block-0 scratch NEON output-channel SIMD
+  repeats preserve the qualified scalar reduction/rounding policy and match
+  all 16 saved official and prior scalar BF16 stages. Root independently
+  checked all 32 raw files (33,980,416 words) with zero mismatches and a
+  comparator mutation control. This is a one-block CPU accuracy certificate,
+  not full-encoder, image-quality, Metal, or production-speed verification.
+  The same-build scalar arm was aborted before freezing by the unchanged
+  50%-free system-memory guard; the original triplet remains IN_PROGRESS and
+  no paired speedup is available. SIMD block timers were 24.453/24.961 s.
+  Preserve the partial manifest/start lock; admit no new heavy run without a
+  fresh >=55%-free launch gate. Source/evidence pins, decay triggers, and the
+  root streaming DoD are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded four-arm call-10/block-29 intervention now separates complete
+  block QKV weight values from dispatch: original Q8/no-op reproduce the
+  baseline exactly; same Q8 values on F32 differ by image-row L2 1.62e-7;
+  official BF16 values on that same F32 route reduce error versus official
+  output from 0.491089% to 0.465618%, while image maximum absolute error
+  increases. Official-values/F32 output also equals the prior BF16-kernel
+  arm byte-for-byte. Root froze all candidate outputs before reference
+  comparison and independently streamed metrics, audited actual raw weight
+  hashes, and ran negative/calibration controls. This is ROBUST for one
+  fixed official-input block, not an additive drift attribution or decoded
+  eye/face fix. Keep the prior native-QKV attention-staging regression;
+  test upstream QKV rounding and attention together before trajectory/VAE
+  promotion. Pins, DoD, resource scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; production code/defaults are unchanged.
+
+### Continuation 2026-09-30 — Qwen3-VL composed four-block accuracy frontier
+
+- Active goal remains end-to-end Qwen3-VL/DiT/VAE accuracy, then performance;
+  this CPU diagnostic does not close native conditioning or image quality.
+  Source state was clean `0df8f95bea4a00c9da09b968802ee18a2cc9848a`.
+- One frozen, donor-free-intermediate forward used native embedding lookup,
+  all seven exact-order SIMD projections per block, and qualified CBLAS/SLEEF
+  attention for blocks 0..3 of the pinned 244-token Russian fixture. Only the
+  3,904-byte token-ID/mask slices were read before candidate freeze; official
+  intermediate payloads were opened afterward by separate comparators.
+- Root independently checked all 64 sidecars (135,921,664 bytes): hashes,
+  sizes, and finite BF16 values passed. All 16 block-0 official taps match
+  bitwise. Embedding and post-block-0 endpoints have zero mismatches; after
+  blocks 1/2/3 the counts are 2,007/138,022/399,176 out of 999,424 words each.
+  Relative L2 is respectively 0.0002304651/0.0010191808/0.0026801615, not a
+  perceptual quality score. Exact block-0 arithmetic does not establish
+  composition across later blocks. First divergent operation is still open.
+- DoD executed, exit 0:
+  `/usr/bin/python3 -B /private/tmp/qwen21-fourlayer-root-compare-20260930.py`;
+  comparator SHA-256 is
+  `5be0b248e12e16ee16e20e500db9fe290ce7cd90770dbb64c49ce77793567f17`.
+  The one-word comparator mutation control detects exactly one difference.
+  Scope-limited adversary verdict is ROBUST for the saved comparisons only;
+  full-encoder parity is not verified. Candidate timer was 94.852 s, not a
+  paired speed benchmark; the wrapper's reported counter undercounts wall.
+- Evidence root: `/private/tmp/qwen21-fourlayer-composed-simd-20260929-K5kws2`.
+  Frozen `candidate_manifest.json` SHA-256:
+  `1cf6a3bc7f7997ba072a4570fe464dc4c0ce8633ace24c31ece861f0bad41313`.
+  `root_audit_report.json` SHA-256:
+  `afc786164039d5b17eb091f941fd38b39718a458c66335dc1a9ebd463e82e6ec`.
+  Runner source SHA-256:
+  `9802c25f466300e478cbb886330404f439388d3bb218d0791355a859e11c2dba`.
+- Next falsifier: replay official block-1 input RMSNorm on frozen block-0
+  output (already equal to official hidden001), then capture all block-1 taps
+  if needed. A full teacher replay must match official hidden002 before its
+  per-operation comparisons can localize native drift. Scratch preparation:
+  `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`; no teacher model
+  run has been admitted yet. Do not change production norms speculatively.
+- Keep this separate from the three-face photo A/B: that pair shares official
+  conditioning and the same VAE; its differences arise between Q8/native and
+  BF16/official DiT routes, with representation and arithmetic confounded.
+  No Qwen3-VL-specific or VAE-specific fault follows from those images.
+- Standing resource boundary: alternate heavy windows with thread
+  `01a0ba62-98aa-7813-b466-cfed8d20037f`; it owns the slot after our explicit
+  03:47 UTC release. Reacquire before any model/build, require fresh >=55%
+  free memory and preserve the 50% runtime floor/3 GiB cap for the proposed
+  one-thread CPU probe. Do not overwrite the frozen candidate/start lock.
+  Torch's dynamically loaded SLEEF helper remains a diagnostic dependency,
+  not standalone native packaging. Refresh evidence if source, weights,
+  fixture, arithmetic policy, runtime changes, or scratch files disappear.
+
+### Continuation 2026-09-30 — Qwen3-VL block-1 post-attention norm frontier
+
+- Source state is `a172f807caf7172dd1b7e4219d1c04bbae44ad96`; numerical
+  sources still match the four-block candidate at `0df8f95`. No production
+  arithmetic was changed. The goal remains open for all 36 encoder blocks,
+  DiT representation/backend parity, VAE, and matched performance checks.
+- The fixed-input input-RMSNorm route is refuted for this input: official
+  norm-only replay and root's raw-word comparison agree on all 999,424 BF16
+  words. Output SHA-256 is
+  `c44c5ad3401ba520ae4583e4081132a8b6a7c34f064a402cc0833d17427b76f0`.
+  This does not establish all RMSNorm inputs or layers as exact.
+- The isolated official block-1 replay froze 16 taps before reading official
+  hidden002. Its endpoint self-qualified bitwise against hidden002, SHA-256
+  `8c6c005fede303627c3f6af40ab21ab3720b021ae5e2eb6e72755d6d8009543f`.
+  It loaded only 11 block-1 weights (385,892,864 bytes), not the whole encoder.
+  Candidate hidden001 was the compute input; only the authorized 1,952-byte
+  attention-mask slice was read from the fixture before teacher freeze.
+- Root independently checked all 32 teacher/candidate sidecars for hashes,
+  sizes and finite values, then self-qualified the endpoint and compared raw
+  BF16 words. The 11 saved boundaries through attention o_proj are exact.
+  First divergence is post_attention_layernorm: 51 words, all in token row 50.
+  Subsequent gate/up/down projections differ in 484/2,255/2,978 words, and the
+  endpoint differs in 2,007, also confined to row 50. This localizes the
+  residual-add -> post-attention RMSNorm interval, not the exact operation.
+- DoD executed, exit 0: `/usr/bin/python3 -B
+  /private/tmp/qwen21-block1-root-audit-20260930.py`. Comparator SHA-256:
+  `839aaec97866d2d9cf15cb0b6147f49e28b570620d4ce6509cf4f3bbf41663c9`.
+  One in-memory BF16 word mutation produced exactly one difference. Adversary
+  verdict is ROBUST for this saved-tap localization; full encoder and image
+  quality remain unverified. No ordinary batching/fusion is called LTP/WBA.
+- Evidence root: `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`.
+  V2 runner SHA-256:
+  `31edc9977443ca4ce2623ad1e0f7d28b1a6a945cd91df3a6a1517ab5c7f4a01d`;
+  frozen teacher manifest:
+  `41ef73b39cb13c12fb5d4db1295b0d36dacd2c563f926955ee9de6840cb42a8f`;
+  separate comparison:
+  `b6bd770bb5366f95fc82d551ccc623e0e34bcd6b5891ba245ac31466aa1ff36c`;
+  root audit report:
+  `87fd4656973d7a07e222f0052f9ebaeabf6f9731db4d8b2a24b145e30924fdf7`.
+  V1 was never run: root found wrong strict state-dict keys lacking `.weight`;
+  the corrected V2 preserves V1 and uses a fresh lock/output namespace.
+- Next falsifier: qualify a fixed-input residual-add/post-norm replay against
+  the saved full teacher norm, then separate variance reduction from inverse-
+  RMS policy. Generic native F64 variance versus official F32 reduction and
+  `1/sqrt` versus `rsqrt` are hypotheses; do not patch either speculatively.
+  The V3 probe remains static preparation, with no runtime grant. Preparation
+  refreshed the saved V2 norm hash; this is not observer-blind validation.
+  Computation must use only frozen candidate operands and pinned weights,
+  with reference-value comparison separated after new output freeze.
+- Reject the fused nn.LayerNorm/Welford source route for this probe: pinned
+  Qwen3VLTextRMSNorm.forward instead uses F32 `pow(2).mean()` and tensor
+  `rsqrt`, then BF16 normalization and weight multiplication. The formulas
+  and dispatch paths are not interchangeable merely because both are norms.
+- The human photo assessment identifies slight middle-face/collar changes
+  and a softer door-jamb shadow, with the other faces stable. It is separate
+  from native Qwen3-VL drift: that photo pair shares official conditioning
+  and VAE, while Q8/native versus BF16/official DiT remains confounded.
+  DiT profile V2 static checks pass, including 11 malformed-log controls;
+  no profile model run is admitted yet. Two steps are a new schedule, not a
+  prefix of the saved 40-step run, and cannot establish quality or speed.
+- Heavy teacher run exited 0 and the slot was explicitly released before
+  04:29 UTC. Alternate with thread `01a0ba62-98aa-7813-b466-cfed8d20037f`;
+  its subsequent verification run also released the slot at 04:44 UTC; root
+  holds no new window. Reacquire before any model/build. Preserve the fresh >=55%
+  launch gate / 50% runtime floor. Refresh this evidence after source, model,
+  fixture, arithmetic/runtime changes, or missing scratch artifacts. Preserve
+  frozen locks; after this docs-only commit, refresh V3's HEAD pin before its
+  preflight without changing prior frozen probe metadata.
+
+### Continuation 2026-09-30 — qualified fixed-input RMSNorm reduction cause
+
+- Source state is `b38ac259f0ca9f32ed434dcaec1dc5b8e47caff4`; this change
+  records evidence only. The four native numerical source hashes remain
+  unchanged from candidate `0df8f95`. No production arithmetic fix, encoder
+  parity promotion, image-quality improvement, or performance claim follows.
+- The new V4 replay consumed only frozen candidate hidden001 and exact
+  attention o_proj operands plus the pinned 8,192-byte layer-1 post-attention
+  norm weight. It read no official fixture payload or teacher intermediate
+  as a compute input. `USE_HUB_KERNELS=0`, offline resolution and one CPU
+  thread were explicit. It captures inputs to a norm-only replay, not a new
+  full-decoder residual hook. Preserve the existing V3 runner and preflight.
+- All three attribution gates pass over 999,424 BF16 words: official replay
+  norm equals the saved full-block teacher norm; Torch BF16 addition equals
+  F32 addition followed by BF16 RNE; source-shaped sequential-F64 native
+  RMSNorm equals the frozen candidate norm. Changing only variance formation
+  to official F32 `pow(2).mean(-1)` makes the norm output exact against the
+  teacher. Both tested inverse-root policies give the same BF16 output for
+  each tested variance policy. Thus sequential-F64 versus official-F32
+  variance formation explains these 51 saved norm differences, all in token
+  row 50. This is reference-arithmetic parity, not proof that F32 is a more
+  mathematically accurate reduction or that every norm/layer is now exact.
+- Root's separate stdlib audit verified all eight frozen sidecars, hashes,
+  lengths and finite words; independently rebuilt all 999,424 native F32-add
+  residuals; and rebuilt all 4,096 norm outputs in row 50 with explicit scalar
+  Float32 rounding and BF16 RNE. It read only the safetensors JSON header
+  (49,792 bytes) and the pinned 8 KiB norm weight for that scalar check.
+  A one-word in-memory mutation was detected as exactly one mismatch, while
+  the identical control stayed at zero. ROBUST within this fixed-input
+  residual/RMSNorm boundary; not a full-decoder residual capture or engine fix.
+- Executed DoD, exit 0: reviewed V4 `--run-probe` under `scripts/run_safe.sh`
+  (120 seconds, 3 GiB process-tree cap, unchanged 50% free-memory floor,
+  fresh independent 75% >=55% launch gate; wrapper observed 74%), followed
+  by separate `--compare-frozen` and `/usr/bin/python3 -B
+  /private/tmp/qwen21-postnorm-root-audit-20260930.py`. Run handle 80318 was
+  terminal exit 0 (~4 seconds), then explicitly RELEASED before comparison.
+  Comparison 90744 and independent audit 64894 also reached terminal exit 0.
+  Norm-call timing is not an encoder or image-generation benchmark.
+- Evidence root remains `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`.
+  V4 runner SHA-256:
+  `08bfb75a765ac52dd224f33ea1703c9991dafc1b527d1b7a84d58b8f27a5d11f`;
+  static preflight:
+  `9a1c4a03c8e04b81081854a49949fe03e214ceaafac06430145ce343933ef6ef`;
+  frozen manifest:
+  `486be8149a6f4b688b82925147ef8706113bd2a7614aa7d74844fbaefa7de32a`;
+  separate comparison:
+  `345fc2d15be559c3621b7457ea300206d1b8569c7509db936254167d979d9bb1`;
+  independent audit source:
+  `1e8c9076f366489d05abfedcf8a97af955d79ea644bc75ec454e572ce174e255`;
+  independent audit report:
+  `05a08e76c071c07efdda020d21e632fb16d9eb524ed04e3f8fc7847cab7937b4`.
+- Next falsifier: freeze actual official F32 mean-square and inverse scales,
+  then compare source-shaped 4-lane/8-lane cascade reductions on the same
+  frozen residual. Source-only dispatch inference is insufficient. Before
+  any production change, obtain a failing 4096-wide regression and preserve
+  generic/default/non-4096 behavior. V5 is static preparation only; after
+  this docs-only commit use a new HEAD pin/preflight, not rewritten evidence.
+- The shared-conditioning/shared-VAE photo pair remains a separate DiT
+  question with Q8/native versus BF16/official representation and arithmetic
+  confounded. These Qwen3-VL findings do not explain the face, collar or
+  door-jamb defects in that pair. The overall goal remains IN_PROGRESS.
+  The evidence-packet skill's template/validator are absent in both checkout
+  and installed skill; this compact source-linked ledger is the fallback.
+  Thread `01a0ba62-98aa-7813-b466-cfed8d20037f` has the next serial heavy slot
+  after explicit Qwen release. Root holds no window. Reacquire before any
+  model/build; preserve >=55% launch gate and the 50% runtime floor.
+  Refresh after numerical source, weights, fixture, runtime/profile changes
+  or missing scratch artifacts. Do not overwrite any frozen metadata/locks.
+
+### Continuation 2026-09-30 — captured 4096-wide RMSNorm reduction policy
+
+- At source `56633e0ab616d0997a139c76710a69ec5170ee9c`, V7 captured the
+  actual official F32 pow, mean, epsilon add, rsqrt, precast multiply, and
+  two BF16 materialization boundaries on the qualified V4 fixed residual.
+  The actual norm agrees with the prior full-block-qualified replay at
+  0/999,424 BF16 mismatches. No full model or decoder block was loaded.
+- The conditional four-lane ILP-4 cascade matches all 244 captured F32 means
+  and inverse scales and all 999,424 BF16 norm words. The eight-lane policy
+  differs at 133 means, 72 scales, and 51 norm words (token row 50). This is
+  a compatible measured arithmetic policy, not identification of active
+  compiled dispatch, a general Torch backend emulator, or a production fix.
+- Root froze a differently constructed scalar chunk/stream reduction before
+  opening any new captured statistic. Its W4/W8 sums and means match the
+  worker's source-shaped simulation exactly. A separate root audit rebuilds
+  all powers, epsilon adds, precast multiplies, BF16 RNE conversions and
+  weighted norm outputs. The native F32 sqrt/reciprocal yields the same
+  captured scales and W4 norm output on this fixed input. Clean/seeded word
+  controls return 0/1. ROBUST within the fixed 244x4096 norm boundary only.
+- V5 failed before producing statistics because its dispatch hook omitted
+  `return result`; no model conclusion follows. V6 was rejected statically:
+  its package-root guard misplaced Torch/NumPy in the Transformers scratch
+  dependency directory. Preserve both namespaces and locks. V7 adds a bound
+  hooked/unhooked synthetic self-test, required-op counts, missing-op rejection,
+  exact runtime module admission, and self-test-to-capture binding. Both V7
+  instrument qualification and real capture passed; comparisons ran only
+  after output freeze and authentication.
+- V7 evidence root: `/private/tmp/qwen21-block1-norm-reduction-v7-yusAb2`.
+  Runner SHA-256 `20aae125543e2522aa26319babf89fd6dcb87d98889ea6d8df3928119543fc60`;
+  self-test `4d631f2733891a664cb4475f368ed1a1f10e93bb860d928f6001eb0dd2498b4e`;
+  frozen manifest `d2c097abb3f76b322403c18bdfb3d1a383268a8134c468a167b39c6fdb3c37e1`;
+  comparison `1fe132af16d1ddb38655f9bb58e96defcbb3edcd86a654607c87f7ce43765acd`;
+  independent root audit `8417cfed69d89b82e550008726ebbdd3eda406d9fb95d2c4671d21b03c540012`.
+  Root candidate freeze manifest is
+  `251c8edd02b7c4be8be8646073510ad3a143f419db2e6457fcd5d35927ab9a4e`.
+  Executed modes were `--self-test`, `--run`, then `--compare-frozen`;
+  root ran the separate audit with the frozen capture directory and runner
+  SHA argument. V7 self-test handle 50439 and capture 87337 were terminal exit 0; the heavy
+  slot was explicitly released before the small post-freeze comparisons.
+- The native arithmetic red was subsequently observed before editing the
+  production helper: `/private/tmp/qwen21-hiddennorm-native-wk3pJa/row50_red_runner.cr`
+  (SHA `e7a7796346f79066e5473f6eb7950ad8b3cc770fde6e794e144893fefec25f03`)
+  called the current private helper on one pinned 4096-value residual row and
+  the selected 8 KiB gamma payload. It reported exactly 51 BF16 differences;
+  comparator clean/seeded controls were 0/1. Candidate row SHA
+  `c08973ab32dd7096efb8a51c665526bea6ee210b974a1d668caf58fa6836344b`
+  independently agrees with the prior frozen native-emulation row. The teacher
+  row was read after candidate computation. `crystal run` under `run_safe.sh`
+  (180s, 3 GiB, fresh 76% launch / 50% runtime floor) reached intentional
+  arithmetic-red exit 1, handle 47932; slot released immediately. Earlier
+  sandbox handle 92200 exited 75 because process-group isolation was unavailable
+  and supplies no arithmetic evidence. The guarded retry isolated only its own
+  child group. No full shard, model or decoder block was materialized.
+- Root admitted the independent opt-in 4096-wide hidden-norm policy after
+  ordinary and release tests, with unchanged default, non-4096, QKV and Q/K
+  behavior. Both actual `forward` norms use the checked public seam; the shape
+  product uses Int64 and rejects Int32::MAX token-count input without a large allocation.
+  Its bounded contract and DoD command are recorded in
+  `docs/qwen-image21-gguf-frontier.md`. Composed-layer parity and
+  image quality remain open. The shared-conditioning/shared-VAE photo pair's
+  middle-face/collar/shadow differences remain a separate, confounded DiT
+  question. Overall goal IN_PROGRESS. Refresh on numerical source, compiler,
+  runtime, input/weight/output changes or missing scratch evidence.
+- Post-change DoD: with `QWEN3VL_HIDDEN_NORM_FIXTURE_DIR` explicitly pointing
+  at the qualified V4 frozen directory, root ran the new focused and full-sidecar
+  specs plus existing Q/K, text-block, text-reference and text-weight specs under
+  `scripts/run_safe.sh /opt/homebrew/bin/crystal 180 3072 spec ... --error-trace`,
+  then repeated with `--release`. Ordinary handle 21309 was terminal exit 0:
+  38 examples, 0 failures/errors/pending, 913.39 ms test runtime (~2s wrapper).
+  Release handle 54670 was terminal exit 0 with the same 38/0/0/0 result,
+  420.29 ms test runtime (~7s wrapper). These are correctness gates, not a
+  matched performance benchmark. Both launches independently observed 74%
+  free memory (>=55% gate), with wrapper/spec 50% pressure floors and 3 GiB
+  RSS limits. No model was loaded. Slot was released immediately; NEXT yielded
+  to `01a0ba62-98aa-7813-b466-cfed8d20037f` for its queued Tuple oracles.
+- Every profiled BF16 word and full output hash matches the frozen teacher
+  (0/999,424); the generic output retains its saved hash and exactly 51
+  differences. Clean/seeded comparator results are 0/1. Default/non-4096/QKV
+  independence, Q/K and malformed-input controls pass in both builds. Root's
+  static counterexample check found all nine existing projection/QK/RoPE helper
+  bodies unchanged and both production hidden-norm consumers using the new
+  checked seam. Verdict ROBUST only for this isolated pinned norm boundary.
+- Verified file SHA-256 identities: production text block
+  `2fdaf3ad62b58fcc8961eab594bc86fa2090fa0e9b136f17720a022e34ff4049`;
+  fixture support `9ad16a416305c224087e5b61aefd753f343e7c1ee9a0cd30998b405d50c1d057`;
+  focused spec `d0d56801e9f105711a1ff4d0211377a984434c9eb7f0ec3dd96e94f7cb15aa24`;
+  full-sidecar spec `973aa2ea0a85d155dbdfc02d95ee1dbad531b8431815aedabfb6013cd64c004c`;
+  embedded row fixture `796952d4f883df30fe2f0e9f815ab15ee871674f9bdd59ecc2e90f6a3c23eefa`.
+  Root independently authenticated all three 8192-byte embedded sections and
+  all three 1,998,848-byte sidecars before runtime. Source stayed unchanged
+  while root mechanically formatted tests and corrected Hash lookup / module
+  constant syntax. Formatter-only exit 1 and compiler handles 11494 / 17912
+  exited before numerical examples; they supply no arithmetic evidence.
+- User's visual assessment of the shared-conditioning/shared-VAE photographs:
+  near/far faces are visually alike, the middle face changes slightly; the
+  near person's collar and the jamb shadow edge differ. This is not pixelwise
+  identity or proof of a VAE defect. The far face is blurred in both images,
+  so this pair does not establish error as a function of face pixel size.
+- Next wider falsifier: a fresh, newly source-pinned composed-layer replay using
+  the actual checked hidden-norm seam at both stages; preserve old frozen runs
+  and compare candidate artifacts only after freezing. Do not enable native
+  conditioning automatically or infer image-quality/DiT improvements. A new
+  heavy slot must be explicitly acquired with unchanged memory guards first.
+
+### Continuation 2026-09-30 — four-layer hidden-W4 composition qualified
+
+- Numerical source is local commit `75aca5c176d797768c81a5a402960a343e794056`
+  on `codex/qwen-image21-metal`; no push. The opt-in norm change passed both
+  38-example ordinary/release gates before that atomic commit. Existing
+  prefill landmarks and the dirty primary checkout were preserved.
+- A fresh runner calls the actual checked hidden-norm seam in both places
+  through text blocks 0..3 on the pinned 244-token fixture. Its seven projections
+  are the qualified SIMD diagnostic route; attention remains CBLAS F32 plus
+  the libtorch-SLEEF-dependent shim. It is not the entire production `forward`
+  route, full encoder, Metal engine, or dependency-free packaging.
+- Candidate inputs are only the two authenticated 1952-byte ID/mask slices;
+  embedding lookup is native. No teacher hidden-state bytes enter computation.
+  Each block is loaded/hashes checked/forwarded/frozen, then trace references
+  are cleared and GC requested. All old frozen namespaces remain intact.
+- Release build 52929 and metadata preflight 52480 were terminal exit 0.
+  W4 candidate 42280, W4 repeat 34026 and generic control 19716 were terminal
+  exit 0; each had fresh 75% free memory (>=55% independent admission),
+  unchanged 180s/3 GiB, 50% runtime floor and single-thread libraries.
+  Serial slot was yielded after the first candidate and after the final
+  repeat/control terminal. There is no pending heavy launch or model process.
+- Root separately authenticated all 64 sidecars per candidate (67,960,832
+  finite BF16 words/run), source/binary/manifest hashes and connected layer
+  boundaries before teacher comparison. Post-freeze comparator checks all
+  192 candidates plus all 64 old generic sidecars before teacher payloads.
+  W4 repeats match all 64 stages; new generic matches all 64 old stages.
+- Five official endpoint comparisons show generic mismatches
+  `0, 0, 2007, 138022, 399176` at hidden states 000..004; W4 is
+  `0, 0, 0, 0, 0` in both runs (999,424 BF16 words/endpoint).
+  All 16 official block-0 taps match both modes. Root's independent native
+  integer-array comparator reproduces all available teacher counts and
+  clean/seeded controls 0/1. Four-token row rotation changes 16,373 words;
+  its generic-vs-W4 control is nondiscriminating, not negative evidence.
+  ROBUST within this pinned four-layer diagnostic boundary only. Layers 1..3
+  have endpoint teacher references but no internal teacher stage taps.
+- Evidence root: `/private/tmp/qwen21-fourlayer-hiddenw4-20260930-alv3qL5f`.
+  Runner SHA `40545ab381de5ad22eb6cce6e358a287c1fb173530a3027f46a18d218bb1376b`;
+  binary `c00a1111fd51f2eebffb0779d94f6647bb71ea0f869df9a4e9f7c0ef600dbaa6`;
+  preflight `0a789fb4e70bba125637340df52d4c0f4237365a84b7d6a182acac521afe0e43`.
+  Frozen manifests repeat0 / repeat1 / generic respectively:
+  `7cadb26b97a9259887640b1569504a724e8f29580b1bb6558cec272f00e6b9b4`,
+  `21b30d2341271c0d56f58d8c9be3ec65bec49d1842d49e2430383798ea555d32`,
+  `0dbf2892a3f3b75c7cbb2d72065e4b72db17d9e17b1e07687c1b0143f4e71520`.
+- Comparison script SHA `75561ccdfdc76670bc4afaa0355dd2d41c4fbb7985478f7b0e889941e58bdad8`;
+  report `bac9a2f9a6b2c065601c764f6b690577ce38b49a1ea66bd144eeea0263843eeb`.
+  Independent root teacher auditor source
+  `a99a5d766f49941c90826037dde16e3d47d22b317bb646b24b0a3c5f16228de7`;
+  report `bcfcdc91ceea1636c4fcee082f1cf93268146b8a46007ea03e00484681f6cca1`.
+  Root candidate auditor source `48df752c2392ff0dfb613c3476cfbee5fdbf7984001a200b902d9ab43f2fd780`;
+  repeat0 / repeat1 / generic reports:
+  `a7d658f1fa6f5b486623c7d7d0aecb9027c792a4c5804f6edbcde457400690b0`,
+  `a63f53931113da52494283462471a2cb8c2737a161ec8e6050a70b7824ed57bb`,
+  `baaef6e0d1464e92fccd12b931b664f977a85ccce59a2a47fb20bf1d351af773`.
+- DoD commands and claim boundary are in the hidden-width RMSNorm section of
+  `docs/qwen-image21-gguf-frontier.md`. All numerical/source pins stayed unchanged
+  across build and three runs; metadata-only evidence-label and formatting
+  corrections were completed before build. The initial Python syntax check
+  failed only on an unwritable system bytecode cache; the scratch-cache retry
+  exited 0, and no comparator/model ran during that failure.
+- Next text falsifier is beyond four layers, with fresh source/build binding,
+  unchanged fixture/weights and separately admitted resource bounds. Keep raw
+  last-block output distinct from final-normalized hidden state. Native
+  conditioning stays default-off; this does not close full 36-layer parity.
+- Photo return pointer: shared official conditioning + shared CPU F32 VAE;
+  middle face/collar/jamb-edge changes still confound native Q8 weights with
+  official BF16 weights and arithmetic. Do not attribute those differences
+  to the now-qualified text norm or infer size-dependent VAE failure. First
+  separate weight values and projection arithmetic on one frozen DiT input;
+  the two-step V2 route/timing profiler alone cannot do that. Overall goal
+  remains IN_PROGRESS. Refresh on source/compiler/runtime/fixture/weights/
+  artifacts changing or missing scratch evidence; do not silently reuse the
+  released heavy slot. Standing authority remains scoped local goal work,
+  serial resource coordination and atomic verified local commits, not push.
+
+### Continuation 2026-09-30 — photo block-0 QKV dispatch/weight contrast
+
+- At clean numerical source `92fca21217e5c8424b75739ecf570962d71a4c80`,
+  a selective real-path eval-0/block-0 capture freezes native norm/modulated
+  input `[1,1164,4096]`, 140 text plus 1024 image rows. Original Q8 A and
+  decoded-same-Q8-values F32 B differ by Q/K/V relative L2
+  `5.57686117e-8 / 5.80048666e-8 / 7.37779253e-8`; B versus BF16-weight-values
+  widened to F32 C on the same route differs by
+  `0.00179041063 / 0.00168473276 / 0.00292274453`. Denominators are B/C
+  respectively. Actual M2 Max Q8 register-reuse and F32 pipelines are recorded.
+- Capture/fresh-A, A-repeat, B-repeat and inverse-row-permuted B are exact.
+  Root independently checks raw controls, complete BF16 shard identity,
+  header/raw/widened C weight hashes and all 18 F64 metrics. Model/capture and
+  guarded donor/comparison/audit processes exited zero with fresh 76%;
+  ROBUST within this local dispatch/weight-value boundary only, not independent
+  model replication. Scoped resource guards stayed unchanged;
+  queue released, no pending model process, no peak/latency claim.
+- This supports a local QKV weight-value contrast, not quantization-only,
+  official BF16 arithmetic, historical-photo binary reproduction, full-block,
+  trajectory, face/collar/jamb-shadow or VAE causality. Keep BF16 rounding and
+  non-QKV operators open. The photo pair shares official conditioning and CPU
+  F32 VAE; the human's subtle differences must not be turned into pixel parity.
+- Source/build pins, executed DoD and evidence digests are in
+  `docs/qwen-image21-gguf-frontier.md`, Photo block-0 QKV section. Scratch root
+  `/private/tmp/qwen21-dit-qkv-factorial-XSQDbN`; comparison/auditor report SHA
+  `dd2aa4a11a3d554f144ee422c0060d85eb212f6c257ac8d03d3f4ceaff6ee181` /
+  `7465a0ea015479723284273802e3f795c7c0fc856f5e23038f6268350fa66718`.
+- Next falsifier: frozen same-input full-block weight-value A/B/C with no-op
+  and common B/C route, then matched official endpoints before trajectory or
+  image intervention. Do not promote replacement weights yet. Refresh on
+  source/compiler/runtime/device/weights/input/schedule drift or missing
+  scratch; a docs-only successor still needs a newly bound runner for any
+  rerun. Overall goal active; local commits permitted, push not authorized.
+
+### Continuation 2026-09-30 — photo block-0 full-block QKV factorial
+
+- Clean source `0a3d7be5d7a962afd1400c0bc8cbb67a144921a7`: actual public
+  one-block replay on frozen eval-0 photo frame `[1,1164,4096]`, with only Q/K/V
+  varied and fourteen non-QKV identities/operators fixed. Capture X/QKV,
+  tapped/untapped output, fresh-constructor no-op, Q8/F32 repeats and all
+  public-output/tap controls are exact; seven guarded arms exited zero.
+- Same-Q8-values dispatch output relative L2 is `4.41296844e-8` all /
+  `5.70821459e-8` image; common-F32-route Q8-value versus BF16-widened-value
+  output contrast is `0.000155231239` all / `0.000227356738` image. Attention
+  context contrasts are `3.63036928e-7` / `0.00456849356` all. Root separately
+  authenticates externally frozen arm manifests, all sidecars and exact
+  controls, and recomputes all 78 stage/subgroup metric sets. No image fix,
+  quantization-only attribution, official BF16 parity or global drift claim.
+- Evidence: `/private/tmp/qwen21-dit-block0-factorial-FRyOlS6A`, comparison SHA
+  `6e9ad896ecd66128cacfe999b98ecac3cc52c351185e99b9a705ed06496413d3`,
+  root audit `0196f0ec997a99fd97807b8dcdcfe7d60ed0a79ce391e2f06ea688a06c7bbf53`.
+  DoD/source/build pins and scoped ROBUST verdict are in the full-block photo
+  section of `docs/qwen-image21-gguf-frontier.md`. Thirteen synthetic comparator
+  tests pass, including internally rehashed changed-repeat rejection. C waited
+  for a newly observed neighbor build to stop; no quiet-host or timing claim.
+- Active goal remains full Qwen3-VL/DiT/VAE accuracy then performance. Next
+  falsifier: matched direct official/native full-block endpoints with all weight
+  values and input/precision semantics held equal, then trajectory/same-VAE
+  image checks for the middle face/collar/jamb edge. A scratch official adapter
+  is being prepared; it has not run a model. Do not promote replacement weights.
+  Refresh on source/runtime/device/weights/frame/schedule/artifact drift; new
+  execution requires source/build rebinding. Frozen numerical probes are not
+  rebound by this docs-only commit. Local commits allowed, push not authorized;
+  outgoing neighbor messages remain unapproved, and resource checks are read-only.
+
+### Continuation 2026-09-30 — official frozen block-0 replay qualified
+
+- Supersedes the preceding 'adapter has not run a model' frontier: two fresh
+  direct pinned official block-0 processes passed on the native-produced
+  eval-0 frame, all nine BF16 donor weight values, separately qualified F32
+  and once-rounded-BF16 input/operator modes. Their saved trees are exact
+  repeats. No matched native all-weight result or photo fix exists yet.
+- Evidence root `/private/tmp/qwen21-official-block0-adapter-iFCjtk`;
+  both run manifests SHA
+  `dba7920d45b91ecdb31c14065e9d31ca13ba3d598d2850c109cd684716b6e42c`;
+  root independent no-Torch audit
+  `6fb485a91710d786dc4de3aa0084f2ed4ac56fa07726541240df1a05c729e468`.
+  Exact adapter/mapping/output pins, DoD and scoped verdict are in the
+  official replay section of `docs/qwen-image21-gguf-frontier.md`.
+- Prior photo runtime selectors are Miniconda base Python, Torch 2.6.0,
+  NumPy 1.26.4 and the photo dependency overlay plus pinned Diffusers src.
+  Default `/usr/bin/python3` instead imports older user-site Torch; do not
+  change user packages. The BF16 constructor casts on meta before allocation.
+- Combined input/operator precision contrast is image-output relative L2
+  `0.0032036593750892433` versus official F32. This is not pure operator
+  attribution, native fault, Q8-only effect or evidence about face quality.
+- Active goal/return pointer: matched native F32 full block on the same
+  original frame and all nine exact widened donor values; then isolate input
+  rounding from operator rounding and test trajectory/shared-VAE photo crops.
+  Capture producer `0a3d7be5` differs from docs-only consumer `38ba4769`.
+  Fresh native execution needs a current source/build binding; frozen runs
+  are not rebound by documentation commits. Refresh on source/runtime/device/
+  weights/frame/layout/schedule/artifact drift. No production change or push;
+  outgoing neighbor coordination remains unapproved, resource checks read-only.
+
+### Continuation 2026-09-30 — matched all-weight F32 block-0 endpoint
+
+- Supersedes the preceding missing-native-endpoint frontier. Root executed the
+  actual public native block twice on the immutable eval-0 frame with all nine
+  original BF16 donor values widened to F32. Capture producer `0a3d7be5`,
+  clean consumer `4103c3e5`; native outputs and recorded F32 routes repeat
+  exactly. Versus the official F32 output, relative L2 is
+  `1.5850071278480055e-6` all / `2.5465473352029342e-6` image, using
+  official reference norms. This is not bitwise official parity or a photo fix.
+- Root independently rechecks donor raw/widened bytes, gate-up order, frozen
+  inputs, build/source pins, finite outputs, slices, repeats and F64 metrics.
+  Both model runs, the 11-test comparator suite, real comparator and separate
+  no-Torch audit exited zero under unchanged guards. Evidence root
+  `/private/tmp/qwen21-dit-block0-f32-stream-uZKGsb`; comparison SHA
+  `de476554718a3a8fb78d5c1c2ded962cb6c60230cef7903fbc5242df2fddd79a`;
+  audit `dca6c6797e03d57e99c19f9802196887e3ed8ac146b5eb7b73d91a0fd0aa9250`.
+  Full pins, DoD and scoped ROBUST verdict are in the matched all-weight
+  section of `docs/qwen-image21-gguf-frontier.md`.
+- Preserved first loader abort exceeded the unchanged 3072-MiB sampled
+  tree-RSS guard; exact stage unknown, no output. The new bounded streaming
+  loader avoids duplicate large float arrays without relaxing the cap.
+  Comparator's initial nested-input reader mismatch was corrected in a fresh
+  scratch root with a negative fixture; no model artifact was modified.
+- Return pointer: isolate input rounding from operator rounding, then matched
+  later/composed blocks and denoising trajectory. Global norms do not certify
+  middle-face/collar/jamb-shadow ROI quality. The frozen photo pair shares
+  conditioning and CPU F32 VAE; decoder/manifold fault remains unproven.
+  No production fix or weight promotion; goal active. Refresh on source,
+  runtime/device/weights/frame/layout/schedule drift or missing scratch.
+  Any new run needs current source/build binding; a docs-only commit does not
+  rebind frozen outputs. Local verified commits allowed, push unauthorized;
+  outgoing neighbor messages unapproved, read-only resource checks retained.
+
+### Continuation 2026-09-30 — block-0 input rounding separated from dtype path
+
+- Two fresh official B-arm processes passed: hidden and mapped modulation
+  round CPU F32 to BF16 once, widen exactly to F32, and enter the same F32
+  block as A with all nine identical widened official donor weights. B's
+  canonical BF16 input bytes equal C's; full B run trees repeat exactly.
+  Frozen native frame producer remains `0a3d7be5`; checkout `7d24ab41` is
+  context only. No new native build or production change was made.
+- Root independent image-output relative L2: B-A/A-norm
+  `0.0008911621733418225`; C-B/B-norm `0.003472243559069559`;
+  combined C-A/A-norm `0.0032036593750870224`. The combined absolute
+  difference is smaller than C-B: vector effects partly cancel, norms are
+  not additive causal shares. C-B is a compute/activation-dtype path contrast,
+  not isolated kernel error. This remains one eval-0/block-0 result only.
+- Evidence root `/private/tmp/qwen21-official-block0-inputbf16-f32-cjemkH`;
+  both manifests `12340fb84c54e9908c25065fff163586fdee18fa60a20fd5da761ffc18a3009f`;
+  comparison `23f39051ed590f8408547057bc72011e6418d54d4addb0ae1ceab18f5dfc0e00`;
+  root audit `329e5872db25dca2497c274234c8aebd81774974305842938c48db3ffd708c49`.
+  All source/input/output/runtime pins, DoD and limits are in the new first
+  section of `docs/qwen-image21-gguf-frontier.md`.
+- Executed controls: 13 adapter tests, 12 real-Torch known rounding/transfer
+  values, header-only preflight, wrong-baseline external pin rejection,
+  separate primary/repeat under unchanged 180s/3072-MiB/50%-free guards,
+  root nine-test comparator suite, actual comparator and independent no-Torch
+  selected-donor/integer-RNE/F64 audit; all positive commands exit zero.
+  Root checks signed word semantics, finite outputs and target slices;
+  self-consistently rehashed changed repeat rejects. ROBUST within this
+  frozen-block byte/metric scope; not full-model or image-quality closure.
+- Return pointer: matched later/composed blocks, then trajectory with shared
+  VAE and fixed middle-face/collar/jamb-shadow ROIs. Neither F32 nor BF16
+  reference norm is image-quality ground truth; VAE manifold fault remains
+  unproven. Future text-embedding perturbations are distinct from internal
+  DiT states and were not executed here. Refresh on source/runtime/device/
+  weights/frame/layout/schedule/artifact drift; documentation does not rebind
+  frozen runs. App goal snapshot is `blocked`, not resumed/completed by this
+  bounded update. Local verified commits allowed; push and outgoing neighbor
+  messages remain unauthorized. All preceding prefill landmarks are preserved.
+
+### Continuation 2026-10-14 — DRAMA-3 native Metal profile and exact-order kernels
+
+- Pinned native text-to-WAV base is `e1065a75`; source/model/reference identities
+  and unchanged numerical gates are in `docs/drama3-native-frontier.md` and
+  `docs/drama3-metal-evidence.json`. Metal is opt-in with `-Ddrama3_metal` plus
+  `DRAMA3_BACKEND=metal`; CPU remains the default rollback.
+- Initial CPU profile selected packed Q4/Q8 expert matvec (87.40 s) and DAC
+  (141.45 s). Metal preserves scalar FP32 group order and convolution
+  accumulation order. Batched gate/up and down expert dispatches reduce
+  38,400 expert waits to 3,200; the DAC adds 44 commands. Dense projections,
+  tower, routing, gating, and sampling still use CPU/Accelerate.
+- Reject typed/aligned shard-offset assumptions: actual U32 data starts at
+  byte 1,032,369,718 (2 mod 4); BF16 scales can begin beyond 4 GiB. Use 64-bit
+  byte offsets/LE loads, raw scalar conversion, retained mmap owners, bounded
+  codec cache, and scratch ownership through GPU completion/readback.
+- Same final binary, `Hello.`, seed 0, 17 frames through EOS on M2 Max:
+  CPU 250.55 s / Metal 51.61 s inference (4.86x); backbone 101.54/35.36 s,
+  tower 7.84/11.27 s, DAC 141.07/4.91 s. Earlier batched Metal was 48.54 s.
+  Host was not quiet; this is a local observation, not a universal latency
+  bound or cold-start measurement. First-use pipeline/mapping costs occurring
+  during inference are included; initial setup is excluded.
+- Prompt IDs, all codes, EOS, and WAV bytes agree exactly with CPU. The
+  243 backbone/726 tower trace values agree exactly with prior CPU and pass
+  existing upstream gates. Fresh real/synthetic MLX DAC gates pass; complete
+  17-frame MLX PCM replay remains within one PCM16 count. Final suites passed
+  25 Metal, 18 CPU, four synthetic codec examples and six Python contracts.
+  Correlated read-only adversary found no scoped ownership/index/order blocker.
+- Next: dense CPU/tower and first-use preparation. Per-expert mapped GPU
+  views are a candidate, not an established fix. Refresh fixed-input parity
+  and matched generation after source, precision, weights, compiler, device/OS,
+  workload or artifact drift. No stock BF16, long-form, quality, concurrency,
+  or real-time claim. Library model unload must clear CodecMetal and reset
+  MetalBackend; CLI exit releases retained globals.
+
+
+### Continuation 2026-10-14 — DRAMA-3 resident Metal graph
+
+- The opt-in Metal CLI now uses ResidentGenerator and CodecResident. Backbone,
+  tower, routing, FP32 sampling, recurrent/KV state, generated codes, and DAC
+  execute on GPU. The original frame allocation feeds both later backbone
+  rows and DAC; the sidecar's terminal code read does not cause re-upload.
+  CPU remains the default rollback; no Qwen runtime changes.
+- Ordinary Hello./seed-0 inference reads 152 control bytes (18 attempts of
+  4-byte EOS plus 4-byte finite status, then two 4-byte terminal status checks)
+  and 140,012 terminal bytes (codes and F32 PCM). No activation or diagnostic
+  reads were observed; call-site audit supports the ledger. Tokenizer, input
+  preparation, scheduling, EOS branch and terminal I/O remain on the host.
+- Final fixed-input upstream gates pass unchanged: 243 backbone traces,
+  726 tower traces plus strict final-hidden/head-logit gates, 29 DAC internal
+  stages and 4096 waveform values. Full 17-frame pinned MLX DAC replay differs
+  by at most one PCM16 count. Correlated review is source evidence only;
+  executed upstream comparisons establish the declared numerical support.
+- Reject universal exact CPU seeded sampling: the GPU uses FP32 probabilities
+  and rounded uniforms, whereas CPU uses Float64. An equal-logit cutoff probe
+  at top_p=0.99999999 deliberately retains a different candidate on GPU.
+  Also reject the initial main-candidate endpoint bound: EOS adds a head row,
+  so candidate vocab_size must map to semantic_end. Its failing regression
+  now passes for direct/retry selection and still rejects one-past-end.
+- Same corrected binary, Hello./seed-0, M2 Max: CPU 244.1005 s / resident
+  19.9842 s (12.21x observed). Backbone 96.4977/15.0293 s, tower 8.2569/2.0170 s,
+  DAC 139.2602/2.7622 s. Prompt IDs, 17 frames and EOS agree; PCM differs by at
+  most one count. The sidecar timer includes generator initialization through
+  WAV writing but excludes tokenizer/WeightStore/process startup. Earlier
+  resident runs were 22.18/23.92 s; host not quiet, no statistical speed bound.
+- Focused checks pass 39 Metal / 18 CPU examples and six Python contracts.
+  They cover finite faults hidden behind finite outputs, GPU expert bounds,
+  eight-row ring/cache continuation, empty EOS prefix, DAC frame layouts,
+  poisoned main token, and raw singleton alpha/weight_g shapes.
+- Resident buffers and pending views retain ownership through checked command
+  completion; mapped weight globals retain mmap owners. Use one serialized
+  inference and finish before cache reset/unload. Frame/count guards do not
+  establish an aggregate RAM budget or long-form admission. No concurrent,
+  subjective-quality, stock BF16, real-time or broad speed guarantee.
+- Results, source/binary/input hashes, commands and readback formulas live in
+  docs/drama3-native-frontier.md and docs/drama3-resident-evidence.json. The
+  first row (9.34 s in the final GPU run) remains the next profiling target:
+  separate mapping/conversion/pipeline preparation from compute before another
+  optimization. Refresh gates, readback audit and matched timing on source,
+  precision, asset, compiler, input, device/OS or evidence-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 resident rank batching and Delta layout
+
+- Baseline is `b91ad1e7`. Packed top-8 expert projections now batch ranks in
+  three GPU dispatches, retaining original affine-group and final rank order
+  (49 rank-dependent dispatches per layer become 6). Private Delta state uses
+  `[head,key,value]` so neighboring value lanes are contiguous; each lane's
+  key-order recurrence stays unchanged. The per-model frozen rollback flags
+  `DRAMA3_MOE_BATCH=0 DRAMA3_DELTA_TRANSPOSE=0` restore the previous routes.
+- Four same-binary AB/BA fresh-process Hello./seed-0 pairs on M2 Max give median
+  optimized/previous ratios 0.8812 autoregressive backbone, 0.9438 GPU interval
+  sum and 0.9611 complete inference. Every pair improves; full profiled runs
+  are 22.3971–23.6972 s previous versus 21.5529–21.7429 s optimized. Preparation
+  remains inside the timer. Host not controlled; this is a bounded observation.
+  One normal-path pair is 23.8942/19.3659 s, not a general 19 percent claim.
+- Seven matched actual-shape Delta microbenchmark pairs give GPU ratio 0.6969;
+  all final state/output bits agree. Reject interpreting this kernel result as
+  a 30 percent whole-model improvement. Source: examples/drama3_delta_benchmark.cr.
+- Fresh 243 backbone / 726 tower / strict 20 terminal / 30 DAC upstream gates
+  pass at unchanged tolerances. All traces are bitwise identical to preceding
+  native values; full prompt/codes/EOS/WAV bytes match in all measured runs.
+  Normal reads remain 152 control / 140,012 terminal bytes. Focused suites pass
+  42 Metal / 18 CPU examples and six Python contracts, including rank-order
+  cancellation, unaligned Q4/Q8 shared/per-rank projection tails, and every
+  recurrent-state bit at asymmetric/actual shapes. Correlated source adversary
+  found no bounded indexing, lifetime or arithmetic-order blocker.
+- GPU residency does not imply autonomous GPU control. Ordinary inference
+  still submits 90 CPU-managed command buffers with row/control/DAC-stage
+  completion waits; profiling adds component waits (129 commands). EOS/finite
+  control is 8 bytes per attempted frame; terminal code/PCM reads remain.
+  Intermediate tensors are not read back. Reducing these waits must preserve
+  bounded scratch ownership and EOS/finite handling.
+- First-command timestamps show 10.9795 s before GPU start and 0.1348 s of GPU
+  execution; synchronous library/function/pipeline APIs total about 13 ms.
+  Deferred driver work, resource preparation, pinning and page faults remain
+  indistinguishable in this probe. No driver/resource/timer-hoisting change
+  promoted. Next: attribute this startup interval and unnecessary host waits.
+- Evidence and reproduction: docs/drama3-resident-speed-evidence.json and
+  docs/drama3-native-frontier.md. Refresh numerical, residency and performance
+  claims on source/reference, precision, asset, compiler, input, device/OS or
+  artifact-availability changes. No broad realtime, concurrent/reset, quality,
+  stock BF16 or cross-device guarantee. Primary dirty Qwen checkout untouched.
+
+### Continuation 2026-10-14 — DRAMA-3 CogniGraph bounded handoff
+
+- Scope and rollback: opt-in `DRAMA3_COGNIGRAPH_MAX_INFLIGHT=1|2`; default and
+  rollback are depth zero. `Resident::Context` wraps CogniGraph's FIFO queue on
+  one Metal queue; context owner identity follows buffer slices, rejecting
+  ordinary foreign views. This is not a security boundary: internal backing
+  handles/reconstruction or raw external writes can bypass tags. Scope the safe
+  claim to the serial single-context CLI without external mutation, rebinding,
+  or concurrency. Leases retain temporary bindings; directly bound persistent
+  caches and mapped weights remain model/backend-rooted until completion. Keep
+  model and Context owners alive until drained. Scratch is fresh, with no pool.
+- Eight same-binary runs across four graph/legacy pairs reproduced 17 frames,
+  EOS and WAV bytes exactly. Commands and completion waits each fell 90→73;
+  readbacks stayed 152 control / 140,012 terminal bytes, with no activation or
+  diagnostic reads. Evidence: [CogniGraph run packet](docs/drama3-cognigraph-evidence.json).
+- Graph/legacy full-wall ratios: 0.870419, 1.048293, 0.980546, 0.974302;
+  median 0.977424. One pair regressed 4.8%. `/usr/bin/time` per-process peak
+  footprint rose from 1.576–1.639 GB to 1.709–1.765 GB. The
+  31,903,032,324-byte retained counter is conservative whole-backing
+  accounting, can double-count, omits directly
+  bound packed weights, and is not RAM usage. The 40,960 MB process-tree RSS
+  cap and 25% free-memory floor are separate run guards.
+- Final owned-binary depth-0/2 replays passed with exact WAV bytes; all three
+  upstream trace sets match and intermediate values are bitwise equal to the
+  previous native path. Pinned gates are 243 backbone traces / 497,664 values,
+  726 tower traces / 2,042,880 values, 20 strict-head traces / 77,824 values,
+  29 codec internal stages (max absolute 1e-3, RMS 2e-4, normalized RMS 2e-4),
+  and a per-sample waveform absolute-error bound `max(5e-5, abs(reference) *
+  1e-3)` over 4,096 values. Final ownership guards passed; Metal depth 0 and
+  depth 2 each passed 60 examples, CPU passed 18, and Python passed six tests.
+  See [the frontier](docs/drama3-native-frontier.md) and [evidence
+  packet](docs/drama3-cognigraph-evidence.json).
+- MiniQuad/LTP disposition: Spike exposed redundant row waits; the bounded
+  Ladder queue passed lifecycle/parity replays. Collapse and speed promotion
+  remain withheld: full-run timing is inconsistent and measured peak footprint
+  increased. Fewer waits do not certify global potential descent.
+- Next falsifier: attribute the roughly 11-second first-command pre-GPU
+  interval. Refresh matched timings and memory bounds on source, weights,
+  compiler, input, device/OS, or evidence drift.
+
+### Continuation 2026-10-14 — DRAMA-3 first-submit extent and shared mapping
+
+- Base `0f62797e`. The old binary reproduced 14.310 s before first GPU start
+  versus 0.173 s GPU execution. A new bounded diagnostic repeats five identical
+  dispatches per command: same-file 16 KiB / 5.50 GB views yield first waits
+  0.881/0.817 ms versus 518.645/519.265 ms in four fresh processes. This
+  reproduces an extent-associated delay without model compute; it does not
+  isolate driver pinning, page faults, deferred compilation, or cold caches.
+- Keep opt-in `DRAMA3_MMAP_SHARED=1`; default/rollback `0` stays MAP_PRIVATE.
+  Both modes use PROT_READ and unchanged owners/whole-shard no-copy GPU views,
+  kernels, Shared storage, tracked hazards, and queue ordering. Stable immutable
+  checkpoints and reset only after every referencing context drains remain
+  caller requirements; exposed raw handles/pointers are unsafe plumbing.
+- Two same-binary full-process AB/BA shared/private pairs measured 11.00/20.97 s
+  and 18.60/25.20 s, using the earlier timed binary (formatter-only delta to
+  final); cache/host state was uncontrolled. An unpaired shared run took 9.89 s.
+  All completed graph runs preserved exact 17 frames/EOS/WAV, 152 control /
+  140,012 terminal read bytes and drained leases. Three later full attempts
+  (private and shared)
+  hit the unchanged 25% system-free-memory guard; retain them as incomplete,
+  not successful timings. Foreign workloads were untouched. No stable speed,
+  physical-RAM, default-promotion or LTP/WBA Collapse claim.
+- Fresh final-binary synchronous shared generation at graph depth zero passed
+  exact WAV/readbacks; application time 11.084 s. A separate profiled final run
+  measured pre-GPU 2.079 s, GPU 0.159 s, complete process 12.16 s;
+  host/cache state differs from
+  the predecessor. Pinned replays passed 243 backbone / 726 tower / 20 strict
+  head traces, 29 DAC stages and 4,096 waveform values at unchanged tolerances;
+  all traces bitwise match prior native. Metal 63 examples at each depth 0/2,
+  CPU 20, Python six passed. Mapping guards include queued GC/owner lifetime,
+  unchanged fixture bytes, malformed flags and byte-range rejection.
+- Reject the CPU prefault route in the measured probe (24.02 s setup + 5.74 s
+  wait). Tensor-view code was removed after four full-process view/default
+  ratios 1.029940/1.045088/0.887771/1.025412; smaller backing-extent bookkeeping
+  was not RAM evidence. No inference madvise change was retained.
+- Canonical scope, source/binary/artifact identities, DoD and failed attempts:
+  [.landmark/evidence/drama3-startup.json](.landmark/evidence/drama3-startup.json).
+  Next falsifier: repeated complete same-binary AB/BA pairs at depths 0/2 with
+  sufficient headroom and explicit cache-state controls. Refresh numerical,
+  ownership, residency and timing evidence on source/reference, assets,
+  precision, compiler, input, device/OS or artifact-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 controlled mapping gate
+
+- Keep MAP_PRIVATE as default (`DRAMA3_MMAP_SHARED=0`); shared remains opt-in
+  (`1`). New Darwin-only harness: `scripts/drama3_mapping_benchmark.py`.
+  Same-binary private/shared AB/BA pairs, graph depths 0/2, model-scoped
+  read-only cache invalidation, exact zero/all-resident mincore admission,
+  immutable file-stat/source/binary checks, and separate preparation/process
+  timing. No foreign process changes, global purge, activation readback, or
+  LTP/WBA transformation. The user authorized the 15% sampled reserve; the
+  global run_safe default is unchanged. Ten CPU controls and a 1 MiB fixture
+  self-test passed, including owned-child abort, final reserve invalidation,
+  prelaunch partial-cache rejection, cleanup, and the two-pass repair bound.
+- Preserve attempts a/b/c/d separately. Initial 30%-reserve attempt a stopped
+  its first private arm; b completed three pairs before a warm-preparation
+  failure. Holding all six maps through full reads let c complete eight pairs,
+  but still lost resident pages while mapped. A cache-only missing-page probe
+  converged once; this did not certify repeatable conditioning.
+- Final d completed nine pairs / eighteen arms before warm/depth-two/private
+  preparation failed after both permitted missing-page repair passes. Median
+  paired shared/private process ratios were 0.730317/0.786786 for zero-resident
+  depths 0/2, and 0.638089/0.611097 for all-resident depths 0/2; counts were
+  2/2/3/2 rather than the required four each. All completed pairs favored shared,
+  but none of these cells may promote. Every completed arm reproduced exact
+  baseline WAV/prompt/codes/EOS, 152 control / 140,012 terminal read bytes, and
+  zero pending/retained graph resources. A separate artifact recheck agreed.
+  Minimum sampled inference headroom was 26%. Failed preparation had 71–78%
+  free but only 1,456,273/1,578,824 resident pages after cleanup. This refutes
+  reliable bounded read/repair conditioning on this host, not the speedup.
+- Harness adversary: ROBUST in the executed guard scope; default-promotion
+  claim: VULNERABLE / IN_PROGRESS. No production code or default changed.
+  Canonical evidence: `.landmark/evidence/drama3-mapping-controlled.json` and
+  `docs/drama3-native-frontier.md`. Earlier upstream intermediate replays are
+  unchanged-source lineage, not rerun by this harness.
+- Next mapping falsifier needs a changed cache-conditioning premise or a
+  controlled host, not more identical retries. For further acceleration,
+  attribute fixed-input sampler/projection groups with existing whole-command
+  GPU timestamps and one final drain; current component profiling adds waits.
+  Actual sampled vectors are 4097/4096, not the 252288 text vocabulary. Other
+  hypotheses are shared-input backbone projections, ordered tower gathers,
+  and DAC convolution/Snake work; no kernel speedup is established from source.
+  The bounded external sampler probe stopped after two build-command errors
+  (`-I`, then `--path` unsupported); no compile, GPU run, or timing resulted.
+  Source/latest log/curated diagnostic are indexed in the mapping packet;
+  correct the build command before reopening this operator-magnitude probe.
+  Refresh on source/reference/assets/precision/compiler/input/device/OS/evidence
+  drift; performance additionally decays with host/cache state.
+
+### Continuation 2026-10-14 — DRAMA-3 sampler cost measured without intermediate waits
+
+- The earlier `-I`/`--path` compile blocker is superseded by the repository
+  example `examples/drama3_sampler_benchmark.cr`: relative require, release
+  Metal build, unchanged `Context.sample` and finite guard. Diagnostic only;
+  inference kernels/defaults and MAP_PRIVATE promotion decision are unchanged.
+- Final invocation `80ab95a36d308772874d86d58da91914`: seven profiles, two
+  warmup plus seven alternating-order measured pairs each, main 36 calls
+  (18 normal, 18 retry), tower 153 calls. Each pair submits two command buffers
+  at graph depth two and drains once after both. Zero intervening Context
+  waits/readbacks; 126 total submitted/completed/waits, final pending/retained
+  zero, 11,907 exact scalar-FP32-oracle IDs. Wrong-ID and depth-one controls
+  fail. Nine parser controls include invocation mixing, global profile order,
+  missing/reused/shifted timestamps, invalid duration and drain failures.
+- Retained tower rows with explicitly synthetic main/EOS proxies measure
+  median 413.687–441.401 ms per 189 calls (main 78.760–83.665 ms, tower
+  334.678–357.682 ms). Synthetic ascending costs 4407.456 ms versus descending
+  354.414 ms. Timings include finite guards; they are hot fixed-input
+  command-group GPU spans, not per-dispatch or production attribution.
+- Fresh CPU audit executes pinned Fish-Speech sampler revision
+  `541566932abbaebcb0a40e562a1f846738383f38`. Non-tie normal support matches
+  10/10 role-cases (probability max error 5.96e-8), retry 5/5 (7.45e-9).
+  Flat/cutoff ties diverge because native prefers lower IDs and upstream CPU
+  unstable sort reorders them. Uniform versus exponential-race RNG also
+  prevents same-seed parity claims. No actual main logits were retained.
+- Adversary ROBUST for the bounded probe with executed negative controls;
+  correlated source review is not independent numerical evidence. Universal
+  sampler equivalence and any full-model speedup remain unsupported. Earlier
+  backbone/tower/DAC/WAV gates are unchanged-source lineage, not fresh runs.
+- Next attribution experiment: actual-shape shared-input backbone `qkv/z/b/a`
+  projection groups, with no additional completion waits, before proposing
+  fusion. Earlier combined prefill/generation 6.67 s and DAC 1.75 s are
+  different boundaries and cannot rank individual operators. Strongest
+  counterexample is a mixed production sampler distribution costing much
+  more than the three retained rows; retain that uncertainty. Kernel changes
+  require relevant pinned upstream intermediates and full-WAV replay.
+- Canonical evidence: `.landmark/evidence/drama3-sampler-cost.json` and
+  `docs/drama3-native-frontier.md`; local raw artifacts in
+  `~/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/`. Refresh on source,
+  reference, assets, precision, compiler, input, device/OS or artifact drift;
+  timings additionally decay with host state. Keep the 15% sampled reserve
+  and never modify unrelated workloads to obtain a quiet host.
+
+### Continuation 2026-10-14 — opt-in DRAMA-3 dense backbone kernels
+
+- `DRAMA3_BACKBONE_DENSE_REDUCTION=simd` applies only to qkv/z/b/a in the
+  30 linear-attention blocks. Default/rollback stays `tree`; generic dense
+  selection independently defaults to `tree`. The checkpoint's 120 affected
+  tensors are BF16 (1,517,813,760 bytes), all at even mapped offsets. The
+  candidate uses aligned ushort loads plus a guarded 32-lane SIMD shuffle
+  tree. FP32 product/add order, tensor decoding, device allocations, mapped
+  owners and queue scheduling are preserved. Non-32-lane fallback is reviewed
+  in source but unexercised on this M2 Max.
+- Three real normalized upstream inputs, seven AB/BA pairs each: paired median
+  speedups qkv 1.068–1.083x, z 1.095–1.109x, b 1.587–1.635x,
+  a 1.578–1.611x. Tree/tree control medians 0.994–1.002x. Each invocation
+  verifies 1,474,560 elements bitwise, queues two buffers before final drain,
+  has zero intervening waits/reads and drains all leases. Shuffle-only was
+  rejected for negligible large-projection and whole-generation benefit.
+- Standalone layer-0 projections pass pinned MLX-audio F32 replay at unchanged
+  atol 6e-5 / rtol 3e-4: 37,056 values, max abs error 3.815e-6. Full native
+  tree/SIMD traces are bitwise identical (243 tensors / 497,664 F32 values).
+  All 14 full-generation runs retain identical WAV/codes/EOS/prompt and
+  readback counts (152 control / 140,012 terminal bytes), with per-depth
+  submissions/waits 73 at depth2 and 90 at depth0. Final release specs:
+  15 examples, no failures/pending; 14 Python tests pass.
+- Full GPU command sums improve 0.76% at depth2 (four pairs) and 2.91% at
+  depth0 (two pairs). Process medians are +2.4% and -9.6% respectively on a
+  shared host; general latency improvement is unproven. A warm-driver
+  diagnostic finds only 0.263 ms setup for the extra SIMD pipeline, not a
+  cold-start guarantee. Keep the sampled memory reserve 15%; no foreign
+  process manipulation or cache-control claim.
+- Default-promotion frontier remains open: both native arms fail the refreshed
+  full MLX tolerance gate at exactly row1/layer39 hidden[33], 0.921100616 vs
+  0.921916962 (abs 8.16345e-4; allowed 3.36575e-4). Upstream without dense
+  instrumentation is bitwise identical to the captured reference. The first
+  failing boundary is the final MoE/residual, not an altered dense output.
+  Different expert order/reduction is a hypothesis only. Next falsifier:
+  capture exact router logits, expert IDs/order, weighted outputs and partial
+  sums for row1/layer39 on the same normalized input; preserve tolerances and
+  native precision. Do not promote the default from local kernel speed alone.
+- Adversary ROBUST for the bounded opt-in change and measurements; VULNERABLE
+  for default promotion/full upstream parity and general process speedup.
+  Canonical evidence: `.landmark/evidence/drama3-dense-backbone.json` and
+  `docs/drama3-native-frontier.md`; local runs `dense-20261014/`. Reference
+  MLX-audio revision e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1,
+  checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8. Refresh on
+  source/assets/reference/runtime/compiler/input/device/OS/artifact drift;
+  timings also decay with host/cache state. MAP_SHARED remains default-off.
+
+### Continuation 2026-10-15 — DRAMA-3 layer-39 MoE localization
+
+- Active goal: resolve the full-backbone row1/layer39 hidden[33] mismatch
+  without widening atol 6e-5 / rtol 3e-4, changing precision or adding ordinary
+  inference GPU/CPU boundaries. Base `7bf40df8`; original gate remains one
+  failure in 497,664 values (0.921100616 vs 0.921916962). Dense stays `tree`,
+  SIMD opt-in; MAP_SHARED default-off. No arithmetic/kernel fix in this step.
+- Exact upstream normalized-input replay passes router logits, expert weights
+  by ID, gate/up and activation at fixed tolerance. Raw selected orders differ:
+  upstream 159,194,245,154,230,191,171,108; native
+  108,171,191,230,154,245,194,159. First failing boundary is expert down output
+  (expert 108 coordinates 469/766). Tolerance equality is not bitwise equality.
+- Causal GPU probe feeds exact stored upstream activation to native affine-Q4
+  down: expert108[33] remains -9.0419435501 vs -9.0411090851, delta
+  -0.0008344650. Native down replay from its own activation is bitwise equal
+  to captured down (16,384 values); its reduction reproduces captured native
+  sum bitwise (2,048). Native reduction of upstream terms/weights in upstream
+  order reproduces upstream official sum bitwise across all 2,048 values.
+- Order-only interventions reorder both rows and weights by explicit ID.
+  Neither changes coordinate33; other-coordinate bit differences pass fixed
+  tolerance. Router weight drift changes sum[33] by only 9.54e-7. This rejects
+  routing/order as the dominant cause at this coordinate, not universally.
+  Native full-input drift (max 1.907e-6) and small residual/shared deltas remain;
+  the down projection is the dominant contribution, not a complete proof of
+  all full-pass errors. Exact Q4 suboperation responsible is still unknown.
+- Capture fidelity: upstream detailed/no-capture full arrays (243) and common
+  full/isolated MoE stages match bitwise. Native detailed/no-detailed captures
+  match 8,192 output values; three final outputs plus target residual/hidden
+  match retained native baseline. Actual returns and diagnostic auxiliary
+  prefix/weighted records have distinct authority labels. Inference/probe
+  arithmetic stays on GPU; serialization/report analysis follows one final
+  drain. Actual graphs show zero pre-drain submissions/waits, one final each,
+  and no serialization-induced submission/wait. Default-nil hooks add no GPU
+  diagnostic allocation, dispatch, readback or completion boundary.
+- Actual loaded `WeightStore` bytes for 14 target-MoE tensors, config and index
+  are hashed before GPU context creation in both diagnostic examples. Target
+  digest matches upstream `648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc`.
+  The checkpoint must remain immutable during a run. Final checks: 21 Crystal
+  examples, 20 comparator tests and one upstream capture regression pass;
+  real trace/ablation exit 0. The numeric comparator still exits 1 as expected.
+- Mini-Quadrumvirate adversary: ROBUST for bounded common-input/down-boundary
+  localization; original production parity correction remains IN_PROGRESS.
+  Next falsifier: expert108 official MLX quantized matmul versus MLX dequantize
+  plus F32 matmul on identical activation/packed weights. Do not infer MLX
+  internal FMA/reduction from unavailable core kernel source. A production
+  correction needs the original full gate passing plus adjacent guards.
+- Evidence: `.landmark/evidence/drama3-moe39-diagnostic.json`,
+  `docs/drama3-native-frontier.md`; local raw artifacts `moe39-20261015/`.
+  Checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8, MLX-audio
+  e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1. Refresh on source,
+  model, reference/runtime, input, precision, compiler, device/OS or artifact
+  drift. Continue through `scripts/run_safe.sh` with sampled reserve 15%,
+  `DRAMA3_PROFILE` unset, no unrelated process manipulation and no push.
+
+### Continuation 2026-10-15 — expert-108 quantized/F32 down discriminator
+
+- At base `4e76054b`, compare the exact stored upstream row1/layer39 SwiGLU
+  activation and raw Q4 down weights on GPU. Full-eight `gather_qmm` reproduces
+  all 16,384 official upstream down values bitwise; single-expert gather and
+  direct `quantized_matmul` reproduce expert108's 2,048 values bitwise too.
+- `mx.dequantize` plus F32 M=1 `mx.matmul` fails the unchanged atol6e-5/rtol3e-4
+  against upstream at 469/766, maximum absolute error 0.00390625. Against the
+  retained native down on exact upstream activation, it passes all 2,048
+  values, without bitwise equality. Native versus quantized retains failures
+  469/766/1555. At33: quantized -9.041109085083008; decoded F32
+  -9.04194164276123; native -9.041943550109863. No accuracy-oracle claim.
+- Explicit GPU uint4 `scale*q+bias` decoding equals `mx.dequantize` across all
+  1,048,576 weight bit patterns. This is a native-style formula control in MLX,
+  not a capture of native Metal decoding. Together with matched input/weights,
+  the experiment isolates a quantized-dot versus decoded-F32 arithmetic-path
+  difference. Exact affine grouping/reduction/FMA subcause remains open.
+- Pinned MLX v0.31.1 source at `ce45c52505c8158ea48d2a54e8caae05efd86bfe`
+  shows group-affine regrouping plus SIMD reduction. Actual M=1 shapes/dtypes
+  are asserted before eval; source predicts QMV/GEMV without NAX/TF32, and the
+  run sets MLX_ENABLE_TF32=0. Runtime GPU kernel names are not profiled.
+- Probe arithmetic/metrics stay on GPU; one explicit terminal mx.eval precedes
+  six result/metric read calls. No intermediate host activation read or explicit
+  synchronize API; internal backend submissions/waits are not instrumented.
+  CPU handles loading/provenance, fixture setup and terminal report analysis.
+- Mini-Quadrumvirate found and closed a missing current-replay-source hash
+  check: negative test fails before the guard, final 32 Python tests pass.
+  Second qualified GPU run reproduces all 22,528 projection values bitwise
+  across four arms. Actual target-MoE/down bytes and separate normalized-input/
+  expert-activation hashes bind the evidence before GPU array construction.
+- Next falsifier: opt-in GPU reproduction of MLX low-M Q4 affine grouping and
+  reduction, then exact-input down and the original full upstream gate. No
+  production arithmetic/default/scheduling change; original hidden[33] gate
+  remains open. Dense default tree/SIMD opt-in and MAP_SHARED off remain.
+  No performance or LTP/WBA promotion claim. Rollback: revert this probe commit.
+- Evidence: `.landmark/evidence/drama3-down108-qmm.json`,
+  `docs/drama3-native-frontier.md`; local `down108-20261015/`. Same pinned model
+  and MLX-audio revisions as the preceding investigation. Refresh on source,
+  model, input, runtime/reference, precision, device/OS or artifact drift.
+  Adversary ROBUST for the bounded differential, not production parity.
+  Continue sequential heavy runs through run_safe with sampled reserve15%,
+  profiling unset and unrelated processes untouched; no push.
+
+### Continuation 2026-10-15 — native MLX Q4 down arithmetic
+
+- At base `31920e41`, add an opt-in native affine Q4/group64 GPU path using
+  MLX0.31.1 packed lane expressions and SIMD reduction. On the exact upstream
+  row1/layer39 SwiGLU activation and verified target-MoE bytes, all 16,384
+  eight-expert outputs and expert108's 2,048 scalar outputs match upstream
+  bitwise. Repeat and scalar/batched controls match bitwise. The default
+  native arm reproduces failures 469/766/1555; no tolerance/precision change.
+- The original full gate was actually rerun: 243 boundaries, 497,664 values,
+  one remaining failure at row1/layer39.hidden[33]. Candidate absolute error
+  0.00034999847412109375 exceeds allowance 0.00033657508850097655; prior native
+  error 0.00081634521484375. Default-native capture equals its retained trace
+  bitwise on all 497,664 values. This is capture fidelity, not upstream parity.
+- GPU probe and full capture each have zero pre-drain reads/submissions/waits,
+  one final submission/wait, and unchanged counters during terminal reads.
+  A passive device-buffer callback replaces host boundary reads for the full
+  diagnostic. CPU handles checkpoint/fixture provenance and terminal analysis.
+- Exact normalized-input MoE replay at graph depth 2 passes every compared
+  intermediate/down/routed/shared stage at fixed tolerance, but final official
+  MoE output fails 1012/1111. Own gate/up activations are not bitwise upstream;
+  the full native input differs and is unqualified for exact-input localization.
+  Depth 0 comparator attempt was invalid (exit 2); depth 2 rerun is valid
+  (exit 1). Capture control matches 8,192 values bitwise; no added wait.
+- Observed guards: 24 Crystal examples and 32 Python tests pass. Distinct
+  K=1024 blocks, odd raw affine offsets, mixed F32/BF16/F16 metadata and shuffled
+  GPU IDs test indexing with exactly representable fixtures; they do not prove
+  general rounding equivalence. Actual 14 target-MoE tensors are byte-pinned.
+  Historical full reference lacks all-shard hashes; retain that provenance
+  limit and the immutable-checkpoint assumption.
+- Mini-Quadrumvirate verdict ROBUST for local down reproduction and measured
+  negative full gate; full production parity IN_PROGRESS. Selector
+  DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4 is frozen per backbone and remains opt-in;
+  native default, dense tree and MAP_SHARED off remain. No speed or LTP/WBA
+  promotion. Rollback: disable the selector or revert the atomic change.
+- Next falsifier: GPU substitutions of upstream gate/up-derived activation and
+  shared output on common normalized input, then the official final MoE sum;
+  retain full hidden[33] gate before promotion. Return pointer:
+  docs/drama3-native-frontier.md and .landmark/evidence/drama3-native-mlx-q4.json;
+  local raw artifacts mlx-q4-20261015/. Same pinned model/MLX-audio/MLX revisions
+  as prior discriminator. Refresh on source/model/input/reference/runtime/
+  precision/compiler/device/OS/artifact drift. Standing authority: sequential
+  run_safe runs, sampled reserve 15%, profiling unset, no unrelated process
+  manipulation and no push.
+
+### Continuation 2026-10-15 — DRAMA-3 thirty-word timing and silent suffix
+
+- At base `a21ee640`, native Metal seed1/temperature0.8/topk30/topp0.9,
+  graph depth2, native expert down/tree dense/MAP_SHARED off generates 489
+  frames with EOS in 186.776 s wrapper time: generation133.147 s and
+  DAC52.538 s, WAV22.709 s. This is a shared-host, uncontrolled-cache
+  measurement, not a speedup or steady-state claim. Phase clocks add no GPU
+  operation/read/wait; initialization means resident object construction.
+- Full 30-word delivery fails: user hears excellent whisper but no remaining
+  speech. Every half-second from9.5 s onward peaks at only1–2 PCM16 units.
+  Official DAC with identical codes is equally quiet. Whole-clip DAC error
+  max7/RMS0.168956 PCM16 fails the unchanged one-LSB gate; second-half max1.
+  A repeated main token spans frames198–262, but its causal role is unproved.
+  EOS/global RMS cannot certify word delivery; do not count silence as speech.
+- GPU teacher-forced common-prefix capture compares 140 steps, 1670 stages,
+  6269068 F32 values per arm, with F32-promoted upstream floating tensors and
+  packed integers preserved. Steps0/1/2/4/8/16/32/64/128/192/256 and every
+  361–489 are captured. Both down selectors first fail at447; all captured
+  through446 pass at atol6e-5/rtol3e-4. Native failures1051036/max0.861520767;
+  opt-in failures1051066/max0.861519337. Top1 differs448/463, top30 overlap
+  minimum28/30. Late observed drift cannot explain earlier silence. Sparse/
+  dense overlap146 stages/546829 F32 values matches bitwise in both paths;
+  this controls capture perturbation only on those overlaps.
+- Independently sampled low-level official controls use the same87 prompt IDs
+  and settings, rowwise prefill1 and different RNG. Canonical BF16/Q4 core
+  reaches768 cap with weak activity after1 s; F32 core returns384 frames with
+  near-silence after10.5 s. Neither verifies the requested speech. Initial
+  canonical load hit sampled free13% and was stopped by reserve15%; cache0
+  retries complete. Official EOS/DAC scalar reads remain. These controls
+  bypass public high-level chunking and do not establish a unique cause.
+- The public `Model.generate` F32 control returns both expected chunks with
+  default300-byte chunking/prefill128 in108.865 s wrapper time. Chunk0 has
+  534frames/24.799 s, with near-silence from8 s to its end (half-second peaks
+  20–28 PCM16); history-conditioned chunk1 has114frames/5.294 s and activity
+  through4.5 s followed by a quiet tail. Neither reaches its cap; exact stop
+  reason is unavailable. Public chunking does not remove chunk0's silent
+  tail. Changed chunking/prefill/RNG prevents a single-cause inference; no
+  speech-content or full-delivery pass is claimed.
+- Public F32 prompt ablation removes only the whisper wrapper, preserving all
+  words, laughter cue, settings and two chunk boundaries. It returns451/104
+  frames (20.944/4.830 s) in129.996 s wrapper time. Chunk0 half-second peaks
+  remain1–4 PCM16 from7 s onward. Removing the wrapper does not remove the
+  quiet suffix in this run; its contribution to the original trajectory is
+  still open. The port documents laughter cues but merely passes paired tags
+  through tokenization; that source behavior is not a learned-semantics proof.
+- Observed guards:18 Crystal examples and15 Python tests pass,87 prompt IDs
+  match, real CLI invalid range/cache bounds reject. Frame cap permits1–1024
+  with existing1024-row resident-cache guard; default160 and arithmetic stay.
+  Native selected control/terminal reads3928/4027404 bytes; replay pre-drain
+  reads0 and terminal serialization adds no submission/completion wait.
+- Mini-Quadrumvirate: ROBUST for bounded timings, capture fidelity and negative
+  gates; speech delivery/parity/root cause remain IN_PROGRESS. Evidence:
+  `.landmark/evidence/drama3-whisper30.json`, `docs/drama3-native-frontier.md`;
+  local raw artifacts `whisper30-20261015/`. All9 cached files are SHA-bound,
+  with post-run metadata recheck; not authenticated remote identity.
+- Generation next falsifier: equal reference precision, aligned random draws
+  and boundaries around first trajectory divergence/silence onset. Original
+  return frontier remains MoE39 row1 hidden[33], with common
+  normalized-input GPU substitutions described in `drama3-native-mlx-q4.json`.
+  No precision/tolerance/default/performance/LTP-WBA promotion. Rollback:
+  revert this measurement/probe commit. Refresh on source/model/input/reference/
+  precision/runtime/compiler/device/OS/artifact drift. Standing authority:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, no push.
+
+### Continuation 2026-10-15 — DRAMA-3 listening feedback and decoder clock
+
+- At base `f908862d`, the user confirms that both selected native seed1 and
+  F32 MLX clips lose all speech after the whispered phrase. The native whisper
+  sounds faster and higher to the user; no fundamental-frequency measurement
+  or word alignment is claimed. Other reference clips remain unlistened.
+- Read-only PCM analysis finds last RMS>32 windows ending at9.02 s native and
+  10.36 s F32 MLX, using20 ms windows. All three selected/same-code WAVs are
+  mono PCM16/44100 Hz with2048 samples per code frame. Same-code lengths match
+  exactly and PCM delta max7/RMS0.168956, excluding a substantial decoder-clock
+  shift for this pair while retaining the failed one-LSB codec gate.
+- The independent runs diverge at main token0 (250521 vs248764), with no
+  identical frame prefix. Text/87 prompt IDs/explicit settings match; RNGs
+  differ, so this comparison cannot isolate numerical error or explain pitch.
+- A NumPy activity probe through run_safe reserve15% and a separate stdlib
+  calculation agree on all three activity counts/endpoints and input hashes.
+  Local report: `listening-feedback-20261015/analysis.json`, SHA256
+  44f78b93d5cb1884595e5a48ce85040c5a5f8bafc8333e462794b9b224470751.
+  Scope is existing artifacts, not a fresh model run or speech/pitch proof.
+- Root cause remains open; generation next needs common-prefix GPU sampling
+  diagnostics with equal precision and aligned sampling inputs. Original MoE39
+  hidden[33] return frontier remains unchanged. See docs/drama3-native-frontier.md.
+  Refresh on artifact drift; no tolerance/default/precision/performance promotion.
+
+### Continuation 2026-10-15 — DRAMA-3 common uniforms and bilingual omissions
+
+- At base `3fc3de68`, add diagnostic-only fixed-logit GPU sampling and a pinned
+  MLX generation control using one uploaded F32 uniform tape in native call
+  order: main, unconditional retry, nine residual heads. This is an explicit
+  inverse-CDF shadow, not stock seeded MLX RNG parity. F32 core/Q4 integers and
+  checkpoint-dtype DAC follow the existing reference contract.
+- Original thirty-word outputs share448 full11-code frames (~20.8s), while
+  both become near-silent from9.5s. First emitted difference448 is too late
+  to explain that onset. Denser onset teacher forcing captures sparse0..64
+  and every96..223:6127752 values pass unchanged atol6e-5/rtol3e-4; terminal224
+  is separate/counterfactual. The unique checkpoint/reference cause stays open.
+- Actual tape/history replay matches9/9 RAS decisions. Main250598 is new at198;
+  at199 first/retry both accept it; at208 both filters retain only candidate2500.
+  Upstream retries once and may accept a repeat. This explains persistence,
+  not the earlier quiet transition. Do not change RAS to hide this negative gate.
+- Exact bilingual text preserves `Holliwood`. User hears RU+EN for native
+  seeds1/2, Russian only for3. Later blind ASR conflicts with the seed3 content
+  report; treat English omission as unresolved (see follow-up below). Seed3
+  and matched MLX retain all179 emitted frames and EOS equal; seed1 all197
+  equal. Seed2 diverges at12, column8. Randomized variants are not controlled
+  speaker identities. PCM/EOS cannot certify words.
+- Style ablations: whisper-only first diverges26; laughter-only198; both cues
+  all287 equal. Removing both cues from original30words yields768 identical
+  frames in both, at cap, with half-second peaks<=1 PCM16 from5.5s onward.
+  Whisper is unnecessary for the observed near-silent suffix.
+  No-cue full-text listening remains pending; do not infer transcript from RMS.
+- New discriminator: long styled/no-cue texts are360/332 UTF-8 bytes, exceeding
+  the high-level MLX default300-byte threshold. Existing controls deliberately
+  call one-prompt generate_codes, bypassing default chunk/history orchestration.
+  Official splits are265+94 /237+94 bytes. Two controls now use official
+  Model.generate split/history policy with F32/Q4,prefill1 and common uniforms.
+  No-cue emits515+89frames (23.917+4.133s); styled741+78 (34.412+3.622s), allEOS.
+  No-cue chunk0 half-second peaks<=5PCM16 from7s onward; styled chunk0 peaks
+  37–51 from12s onward. High-level orchestration retains a long quiet suffix.
+  Chunk1 signal is active; word delivery still requires listening. Within-text
+  controls change split/history/DAC segmentation together; across-markup
+  differences do not isolate chunking. Cap768 is per chunk versus per prompt,
+  not a matched total termination budget. Plain bilingual93bytes is unaffected.
+- New opt-in --chunk-text adapter builds official zero-code history prompts,
+  replaces guarded audio spans onGPU, then terminal-byte-compares all4prompts
+  against restored official build_chunk_prompt: all equal. One tape upload,
+  per-chunk frame caps/global capture indices. No in-loop actual history-code
+  readback by source inspection; official row-prefill/frame-EOS/DAC syncs stay.
+  Native styled chunk0 shares exacttext/71promptIDs/model/settings/initial
+  variates;427vs741frames,111fullframes equal, then columns9/10 differ at111.
+  This new fork is unlocalized, not a numerical parity pass. Native consumes
+  only main/retry on EOS versus all11slots inMLX; no native chunk1 or
+  cross-chunk draw-consumption parity. This is a custom sampler-shadow/GPU
+  history control of pinned text orchestration, not full stock execution.
+- Short-whisper replay all0..26 passes1216539 actual values. At26 residual
+  codebook4, candidates135/764 reverse rank by1.9–3.8e-6 scaled-logit units.
+  SharedU0.33058440685 selects rank6 away from a CDF boundary; both samplers
+  agree per fixed arm. This localizes the sampled fork to input rank sensitivity,
+  not the original arithmetic operation. No tolerance/precision/tie-band change.
+- Fixed-logit onset199cases agree on IDs/order/masks/common-noise IDs, but
+  strict parity FAILS on two one-ULP upstream discarded-tail CDF decreases at
+  unchanged1e-7 monotonic guard. Whisper67cases PASS, including3 RAS checks.
+  Native probes assert0 pre-drain reads/waits,1 queued batch/final wait;
+  terminal reads add no submission/wait. Existing generation EOS/status and
+  official MLX scalar controls remain. No new per-step activation readback.
+- Same-code PCM max/RMS: plain1=16/0.618570, plain3=10/0.464103,
+  whisper+laughter=10/0.228216, original-no-cues=3/0.182296. All retain failed
+  one-LSB DAC gate. Equal lengths/44100Hz headers do not establish F0 parity.
+- Evidence index: `.landmark/evidence/drama3-sampler-voices.json`; raw artifacts
+  `sampler-voices-20261015/`; details/next probes in `docs/drama3-native-frontier.md`.
+  Source/build/run receipts bind the observed harness externally; report shader
+  hashes alone are not execution attestation. All9 local checkpoint files are
+  SHA-bound with post-run metadata recheck; remote revision label unauthenticated.
+- Final tooling DoD: 20 sampler and 9 generation-control CPU tests pass;
+  AST/Crystal format/diff checks pass. Guards reject changed role parameters,
+  missing trace provenance, edited source bytes and vectors rebound to matching
+  outputs. Final retained comparisons reproduce onset FAIL (exactly two CDF
+  invariants) and whisper PASS; no ID/RAS mismatch. Correlated adversary ROBUST
+  for local artifact consistency, not strict parity or unique causation.
+- No production/default/performance/LTP-WBA promotion. Speech delivery, unique
+  silence cause, strict sampler/DAC parity remain IN_PROGRESS. Prior numerical
+  return frontier: MoE39 row1 hidden[33], see `drama3-native-mlx-q4.json`.
+  Rollback: revert diagnostic commit. Refresh on source/model/input/random tape/
+  reference/precision/runtime/compiler/device/OS/artifact drift. Standing scope:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, local commit only and no push.
+
+
+### Continuation 2026-10-15 — listening feedback and ASR falsifier
+
+- Base `3156210b`: user confirms no cat sentence in either named native/MLX
+  styled first chunk. Delayed “шорох / происходит” reply has ambiguous file
+  identity; do not assign it to both no-cue WAVs.
+- Direct audio input was rejected by this session. No model listening claim.
+  Pinned local Whisper turbo FP16 on MLX GPU ran 10 full/negative and 7 isolated
+  controls without target text, hotwords or transcript conditioning. ASR and
+  resampling host control are separate from unchanged DRAMA inference.
+- The empty-silence guard FAILS: both digital zero and actual quiet tail yield
+  “Thank you.” Full no-cue controls also append “Продолжение следует...”. ASR
+  outputs remain candidates, never proof of speech presence/absence.
+- Full seed3 and its isolated post-4s crop yield English, contradicting earlier
+  human Russian-only feedback. All three sequence segments byte-match their
+  seed WAVs, including3 and zero gaps. Reopen the English-omission inference;
+  preserve human report and ASR conflict. All179 matching codes/EOS still hold.
+- No cat sentence in either first-chunk ASR candidate; both last chunks yield
+  the requested final sentence as an ASR candidate. No full-delivery pass.
+  Original shared-code quiet onset remains measured; unique cause open.
+- Index `.landmark/evidence/drama3-listening-asr.json`; details in
+  `docs/drama3-native-frontier.md`. Next falsifier: full-stream cross-decode of
+  saved first-chunk codes, with an audible positive stream. Do not extend
+  shared-prefix decoder agreement to the diverging continuation. Refresh on
+  source/model/audio/preprocessing/options/runtime/listening-evidence drift.
+
+### Continuation 2026-10-15 — full-stream GPU DAC cross decode
+
+- Base `1898cc55`: four full saved streams (197 bilingual positive, native427
+  and MLX741 styled first chunks, common768 no-cue) decoded by native Metal
+  and pinned official MLX DAC on identical ten-book inputs, main excluded.
+  All58 actual boundaries compared on GPU; observer MLX output matches an
+  unobserved official decode elementwise4/4. Native observer-on/off spec
+  preserves output bits. No production arithmetic/precision/default changes.
+- Every embedding exact; all ten projections and combined sum within old
+  gates4/4. First failed observed boundary is post-transformer layer0 in all4;
+  max errors for first3 are0.0249863/0.0291367/0.0316620. Whole-block mismatch
+  does not locate the arithmetic primitive. All waveform and one-LSB parity
+  gates FAIL; PCM max16/4/13/3. No tolerance widening or parity promotion.
+- Lazy-GPU loader audit: independent541 sanitized tensor names/shapes exactly
+  match, all541 bind to supplied checkpoint array objects. Naive strictload
+  rejects120 nestedconv runtimealiases in60modules; all are overwritten from
+  loaded g/v/bias before every call/step. Alias-aware guard passes without
+  evaluation/decode. No missing independent weight found; this does not
+  certify checkpoint semantics or exclude a shared reference/codec defect.
+- Native427 quiet region4–19.830s peaks36–57PCM16; MLX741 region12–34.412s
+  peaks37–51; no-cue768 region5.5–35.666s peaks1. Each half-second peak equals
+  the cross decoder's. Quiet is low residual signal, not literal digitalzero
+  or a transcript. Native archived WAVs match bytewise3/3; legacy MLX PCM
+  reconstructed exactly3/3 after its half-away rounding. New WAVs use native
+  ties-even policy in both arms. The pinned MLX substitution does not restore
+  the quiet continuation: native-DAC-only explanation refuted for these codes.
+  Unique generation/shared-codec cause and speech delivery remain unresolved.
+- No native activation host reads before completed decode; depth2 retains32
+  submitted/completed buffers and terminal reads add no submissions/waits4/4.
+  Reference fixtures export only after full MLX evaluation and upload once
+  before native decode. Input/fixture/final serialization are outside inference.
+  No claim of zero existing GPU waits; timings include diagnostics, not perf.
+- DoD: GPU reducer corruption/F64-oracle/finite/index/window checks pass;
+  resident2 examples pass including passive hook/layouts; reference-input10
+  tests pass; Crystal format and diff checks pass. Source/run/fixture index
+  `.landmark/evidence/drama3-codec-cross.json`, raw `codec-cross-20261015/`.
+  Correlated adversary ROBUST for scoped substitution result, no parity or
+  unique-cause promotion. Device callback's buffer is mutable; read-only
+  behavior is checked for this probe rather than guaranteed by the API type.
+- Next silence falsifier: same full codes through original Fish codec or
+  independently validated speech codes; MLX alone cannot exclude shared
+  codec/checkpoint/representation error. Numeric frontier: capture layer0
+  attention_norm/QKV/postRoPE/attention/residual/FFN on matched input, allGPU
+  terminal comparisons. Return pointer: styled code fork111 and MoE39 row1
+  hidden[33]; no attribution without onset discriminator. Refresh on source/
+  compiler/model/input/reference/artifact/runtime/device/OS/gate/layout or
+  bound listening-evidence drift. Standing authority unchanged: sequential
+  run_safe, reserve15%, profilesunset, unrelated processes untouched, local
+  atomic commit and no push. Rollback: revert diagnostic commit, hookdefaultsnil.
+
+### Continuation 2026-10-15 — original Fish full-stream DAC control
+
+- Base `c259151d`: original Fish source54156693 and original codec74fc41c5
+  decode the same complete197/427/741/768-frame ten-book streams. Direct DAC
+  CLI F32 loader semantics preserve535F32 parameters, parametrized weight norm
+  and3BF16 RoPE buffers; complete Fish BF16 serving/text generation is untested.
+  All58 actual boundaries captured on MPS. Both full model calls have host-
+  tensor/scalar-extraction guards and CPU fallback disabled. Observed original
+  waveform equals separate unobserved full decode elementwise4/4.
+- Fish actual versus MLX reference: waveform pointwise and one-PCM-LSB gates
+  pass4/4, strict full-stage parity only2/4. Native427 fails8 stages, first
+  upsample1convnext; common768 fails postlayer7 alone. All gates unchanged.
+  Native versus Fish fails4/4 first at postlayer0; PCMmax16/4/13/3. Native WAVs
+  byte-match prior cross-decodes4/4; new MLX-reference regression reproduces
+  all58 stage metrics and WAV exactly. No production arithmetic/default change.
+- All3 decoders give identical half-second PCM peaks in measured quiet tails:
+  native427 at4–19.830s36–57, MLX741 at12–34.412s37–51, common768 at5.5–35.666s1.
+  Original Fish substitution does not restore the quiet continuation for
+  these saved codes. This rejects a decoder-port-only account, not shared
+  checkpoint/representation defects or generation/conditioning failures.
+  Peaks are not transcripts; prior human listening remains the content source.
+- CPU byte/source audit: all541 original tensors equal MLX after the exact
+  converter's BF16 promotion. Original535F32/3BF16/3bool; converted538F32/3bool.
+  MLX loads the serialized RoPE caches over its F32 constructor values; loaded
+  coefficients equal Fish BF16 values expanded to F32. Native recomputes
+  F32cos/sin. Concrete path difference, not measured cause. Next numeric
+  falsifier: replay exact loaded coefficients on GPU before block-level gates.
+- Original model/manifest/source/runtime/run hashes and measured DoD indexed
+  in `.landmark/evidence/drama3-fish-codec-cross.json`; raw full stages/WAVs
+  in `fish-codec-cross-20261015/`, not Git. Terminal diagnostics add no native
+  graph work/waits; existing depth2 drain remains32 completions. No performance
+  promotion or zero-existing-waits claim. Overall silence-cause frontier open.
+- Return frontier: generation quiet onset with matched conditioning/sampler
+  inputs; prior code fork111 and MoE39 row1hidden[33] remain distinct until a
+  discriminator connects them. Refresh on source/compiler/model/input/artifact/
+  runtime/device/OS/gate/layout or bound listening-evidence drift. Sequential
+  run_safe, reserve15%, unrelated processes untouched, local commit/no push.
+  Rollback is this atomic diagnostic commit; production kernels are unchanged.
+
+### Continuation 2026-10-15 — emotion placement and voice-control audit
+
+- Base51789b83: eight WAVs complete for RU/EN emotion-with-whisper-last and
+  matching no-cue bodies, seed1,512-frame cap, shared F32 uniform prefix.
+  Prompt IDs exact4/4. EN-end512, RU-plain463, EN-plain239 code frames exact
+  native/MLX; RU-end forks262 and lengths512/494. All inference arithmetic
+  stays GPU; existing EOS/status/drain reads remain. No precision/gate change.
+- User hears final phrase only in native RU-end, not EN-end. Both EN-end
+  decoders have matching peak9–22PCM16 half-second windows6.5–23.777s and no
+  EOS before cap. Code divergence is not necessary for this English result.
+  RU-plain also contains2–2.5s low intervals at peak2 in both decoders, so
+  tags are not necessary for those intervals. Signal windows are not words
+  or sentence alignment; no unique whisper/exit/language cause established.
+- Original Fish/MLX/native controls pass style cues as learned text, without
+  a whisper-state/reset parser. EOS/cap controls length; no energy stop or
+  scheduled inter-sentence gap. One-shot RAS checks prior16main IDs, not audio
+  silence; retry may repeat. Speaker0 is a participant token, not fixed voice.
+  Upstream cloning conditions on reference audio codes plus transcript;
+  native currently lacks reference prompt input/encoder. All8 omit references.
+- Report `docs/drama3-emotion-placement.md`; curated index
+  `.landmark/evidence/drama3-emotion-placement.json`; raw receipts/analyzer/
+  source-tokenizer audit/human bindings in `emotion-whisper-end-20261015/`.
+  Analysis/structural provenance checks pass; exact-code results do not close
+  floating-point parity. Correlated review only; silence cause IN_PROGRESS.
+- Next causal falsifier: same body with only whisper-position changed;
+  separately same plain text/draws with one fixed reference. Return numeric
+  frontier: loaded RoPE coefficients, then code-fork111/MoE39. Refresh on
+  source/model/tokenizer/sampler/conditioning/artifact/runtime/device/OS/gate
+  or bound listening-evidence drift. Authority: sequential run_safe, reserve15%,
+  unrelated processes untouched, local commit/no push. Revert docs/index for
+  rollback; no production behavior changed.
+
+### Continuation 2026-10-15 — bilingual whisper with native reference input
+
+- Base `7ad03c3c`: native reference audio/transcript support is now present;
+  the older voice-control audit's missing-native-reference statement is
+  historical. Four native and four pinned MLX WAVs repeat the exact historical
+  RU whisper/laugh text and a new EN translation, fixed public 3.904s reference
+  pair versus none, seed1/cap512. Actual 5632-F32 sampler input digests match
+  the native producer probe and common MLX prefix, not merely seed equality.
+- RU-reference all347 frames/11IDs exact, both EOS, no >=1s quiet run; GPU ASR
+  recognizes the requested continuation in both. RU-no-reference quiet from
+  9.5s, first code fork448 after quiet onset; native489EOS versus MLX512cap.
+  EN-no-reference all390 frames exact/bothEOS, quiet7–18s; EN-reference first
+  codebook fork28/main30, both512cap, quiet7.5–23.5s. Full-window ranges exclude
+  qualifying partial final windows. Reference-as-universal-remedy refuted;
+  native token divergence unnecessary for these quiet onsets. No language-only,
+  audio-only, unique-cause, laughter-delivery or voice-identity claim.
+- Fresh102 encoder/VQ boundaries, exact850 reference IDs/full prompt and
+  first-prefill pointwise gates pass for each language at depths0/2; metrics
+  identical cross-depth. Largest encoder maxAbs0.00062561035; all old tolerances
+  unchanged. Reused binaries freshly source/shader/checkpoint-bound, not rebuilt.
+  No intermediate activation/code host handoff or added drain; existing EOS/
+  control reads, CogniGraph waits, initial uploads and terminal diagnostics remain.
+- Unprompted GPU Whisper on8 full WAVs plus source-positive and exact-zero
+  negative: EN recognizes only pre-close text; RU-no-ref adds unrequested words
+  with an out-of-clip timestamp. Digitalzero says "Thank you." ASR/segment times
+  are fallible observations, not word/speech certification. GPU normalization/
+  resampling, no source-waveform CPU DSP;5 synthetic GPU resampler oracle cases
+  pass fixed2e-5/2e-6. Initial reserved-Metal-identifier compile failure retained
+  and narrowly resolved by exact-source-hash-checked rename; no threshold change.
+- Analyzer adds EN filename namespace and accepts actual max_frames status
+  with strict EOS/cap/count/tape/geometry checks. Step0 exporter admits strictly
+  validated capped captures while preserving raw termination and marking them
+  incomplete.51 CPU contracts pass. Report `docs/drama3-whisper-reference.md`,
+  curated `.landmark/evidence/drama3-whisper-reference.json`, raw receipts/WAVs
+  in local `whisper-reference-20261015/`. Correlated mini-Quad ROBUST for narrow
+  measurements; full generation/decoder numeric parity and silence cause open.
+- Next discriminator: replay common EN-reference prefix and compare tower/
+  codebook decision28 on identical uniforms, then main30. Separate causal probe:
+  vary only whisper-cue placement/syntax on fixed conditioning. Return to
+  MoE39/DAC frontiers without attributing silence absent a connecting test.
+  Refresh on source/checkpoint/input/tape/reference/artifact/runtime/device/OS/
+  gate or bound listening-evidence drift. Authority: serial run_safe, reserve15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback tooling/
+  report commit; no production inference arithmetic changed.
+
+### Continuation 2026-10-15 — acting prompts and wider output window
+
+- Base `8e1f326a`: two no-reference Russian prompts (newsreader/storyteller and
+  a newly written Max/Juffin dialogue), each native/MLX at caps512 and768.
+  Actual native F32 uniform prefixes proved and matched upstream shadow
+  sampler; the wider plan changes only the cap. All four same-backend first512
+  code prefixes equal their initial runs exactly on GPU, all11 IDs.
+- 512 was an experimental cap, not the native context ceiling. Metal requires
+  prompt_rows+max_frames-1<=1024; prompt lengths158/190 permit867/835 frames.
+  The768 tests fit925/957 resident rows. Beyond1024 needs full-attention
+  scratch/guard changes (`scores[1024]`), not only a CLI override or KV eviction.
+- Wide news: native768cap/35.666s, MLX741EOS/34.412s, all-ID fork704. Both
+  quiet from11.5s through the final full windows35.5/34.0; partial peak2PCM16.
+  This rejects a512-cap-only explanation for this prompt/seed's missing voiced
+  continuation; silence cause remains open. Wide dialogue: native525EOS/24.381s
+  and MLX645EOS/29.954s, code/main forks126/132, long internal pauses persist.
+  ASR recognizes final dialogue reply in both; no listening/acting certificate.
+- First-prefill hidden/main-logit GPU gates pass unchanged3e-5+3e-4abs(ref),
+  zero failures/nonfinite for both prompts at prompt-only and wide capacities.
+  Wide probes request1frame with768 cache budget, not full768-step traces.
+  Terminal metric reads add no graph work at depth2. Comparison stdout and
+  embedded support shaders are bound to executed binaries;14 CPU guards pass.
+- ASR still omits news storyteller, adds unrequested "Продолжение следует...";
+  exactzero says "Thank you." No words/identity certification from ASR or
+  amplitude, no full generation/DAC numeric parity. Native remains speaker0;
+  two actor roles are learned cues, not separate speaker assignments.
+- Report `docs/drama3-acting-tests.md`, index
+  `.landmark/evidence/drama3-acting-tests.json`, raw receipts/WAVs in local
+  `directing-roles-20261015/` and `directing-roles-wide-20261015/`. Retained first
+  wide sampler compile failure resolved by proper Metal flags before generation.
+  Correlated mini-Quad ROBUST for narrow measurements/cap falsifier, VULNERABLE
+  for successful acting or unique cause. No production/default/precision change.
+- Next causal probe: direction/cue-format-only ablation, fixed spoken text and
+  sampler inputs; no established newline cause. Return numeric frontiers:
+  generation common-prefix forks and prior MoE39/DAC, without causal promotion.
+  Refresh on source/model/tokenizer/input/tape/conditioning/artifact/runtime/
+  device/OS/gate or bound listening-evidence drift. Authority: serial run_safe,
+  reserve15%, unrelated processes untouched, local atomic commit/no push.
+  Rollback this report/index/landmark commit; keep raw evidence outside Git.
+
+### Continuation 2026-10-15 — wider Metal window and explicit DAC scratch
+
+- Base `f74318bf`: Metal resident allocation accepts up to 4096 total positions
+  (`prompt_rows+frame_bound-1`); <=1024 retains the legacy attention kernel.
+  Wider allocation uses persistent device score scratch with unchanged scalar
+  reduction order. CPU remains 1024; default generation remains 160 frames.
+- Three DAC scratch slabs are allocated once per decode, reused by backing-handle
+  liveness exclusion, then explicitly released after the existing finish. Traces
+  bypass scratch; uncertain error drains quarantine. Other temporary buffers,
+  wrappers and host outputs still use GC. No whole-pipeline GC-free claim.
+- Same actual 768 codes, serial private-mmap pairs at depths 0/2: all four F32
+  digests exact; 32 submissions/waits, 4 control bytes and 6,291,456 terminal bytes
+  unchanged. Requests 27.004->3.549GiB; sampled peak Metal 21.855/25.030->5.276GiB.
+  Arena timings 108.817/106.528s versus fresh 82.531/87.173s are slower on shared
+  host, so `DRAMA3_DAC_SCRATCH=0` remains default; no speed promotion.
+- Actual 2048-frame DAC cyclic replay completes in 237.252s, 95.109s output, 4.5GiB
+  total scratch, sampled peak Metal 9.639GiB; 32 existing waits, no terminal-read
+  graph work. This is saved-code allocation evidence, not 2048 LM steps.
+- Final 17 CPU/18 GPU specs pass, including wide attention lengths 1025/2048/4096
+  at depths 0/2, exact legacy 1024 output, alias/trace/error/quarantine guards.
+  Valid per-buffer red tests found conv-history and doubled-q-projection
+  omissions; checked byte maxima repaired. CPU and Metal CLIs compile.
+- Pinned upstream first-prefill gates pass at capacity 2205 (2048-frame budget),
+  hidden/logit maxAbs 4.7683716e-6/1.4305115e-5, unchanged 3e-5+3e-4abs(ref), zero
+  failures/nonfinite. Fresh 58-stage DAC metrics equal the earlier control;
+  quantizer.post_module.layers.0/full/one-LSB failures remain, maxPCMerror 16.
+- Full native news bound 1100 allocates 1257 resident rows, stops EOS at 773 before
+  old execution ceiling. All 768 prior native frames/11IDs exact on GPU; pinned
+  MLX fork remains 704. Actual 12,100-F32 sampler upload hash bound to producer;
+  first 8448 uniforms exactly equal prior native/upstream tape. No 1100-step,
+  full upstream trajectory, silence repair or acting-quality claim.
+- Experimental auto budget keeps 15% physical reserve+1GiB margin, checks mapped
+  inventory/static copies/caches/decoder/temporaries and maxBufferLength. First
+  live plan refuses under pressure; final-source plan admits 687 frames/844 rows
+  after headroom increases. Plan-only outcomes, not auto-sized generation or
+  physical reservation: host GC/driver retention remains uncertified.
+- Report `docs/drama3-window-memory.md`, curated
+  `.landmark/evidence/drama3-window-memory.json`; raw receipts/hashes/WAVs in
+  local `window-scratch-20261015/`. Correlated mini-Quad ROBUST for narrow
+  results, VULNERABLE for speedup/physical guarantees; neither promoted.
+- Next performance discriminator: interleaved fresh/arena GPU timeline versus
+  host encoding time; broader backbone/tower workspace remains separate.
+  Native 773 run records 1,419,434 Context.alloc calls, not allocation time.
+  Return numeric frontier: MoE39/common-prefix forks and prior DAC stage, with
+  old gates intact. Refresh on source/model/input/tape/fixture/runtime/device/OS/
+  precision/gate/graph-policy drift. Authority: serial run_safe, reserve 15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback disable
+  arena/auto and use <=1024 positions, or revert the feature commit.
+
+### Continuation 2026-10-16 — opt-in tower codebook embedding fusion
+
+- Base `37ee7fdd`: an eight-codebook sum drops 26 allocations/dispatches to one
+  GPU kernel reading mapped BF16/F16/F32 bytes at their original byte offsets.
+  Sequential FP32 addition, semantic masking and clipping are preserved; scaled
+  tensors fall back. Existing command leases retain weight/frame/output; no new
+  hot-loop readback or wait. `DRAMA3_TOWER_EMBEDDING_FUSION=0` remains default.
+- Four focused Metal examples pass. At depths0/2, 1,179,648 output elements per
+  depth are bitwise exact; seven alternating 64-op pairs show median paired GPU
+  speedups10.00x/10.69x for this operation only. No per-operation fence.
+- Eight cold/warm native worker jobs in 0/1/1/0 arm order produce the same60
+  frames/all11IDs and WAV bytes. Warm allocations135590->133034; readbacks and
+  122 submissions/waits unchanged. Warm request medians29.53s/31.54s reject
+  whole-generation speed promotion on this shared-host sample.
+- Fresh pinned MLX F32 control with the same704-F32 sampler inputs matches the
+  complete60-frame code trajectory. First-prefill hidden/logits pass unchanged
+  3e-5+3e-4abs(ref), maxAbs4.7683716e-6/1.4305115e-5. No stock-RNG, general
+  MoE/DAC, long-generation, silence or voice-quality parity claim.
+- Report `docs/drama3-tower-embedding.md`; curated receipts
+  `.landmark/evidence/drama3-tower-embedding.json`; raw local
+  `drama3-runs/studio-20261015/`. Correlated mini-Quad ROBUST within these bounds.
+  Next falsifier: interleave whole jobs and separate host encoding/allocation
+  time from GPU time before workspace reuse. The135590 allocations are a lead,
+  not a measured cause. No LTP/WBA certificate.
+- Refresh on source/shader/model/input/tape/runtime/device/OS/graph/precision/
+  tolerance drift. Authority remains serial run_safe,15% reserve, unrelated
+  processes untouched, local commits/no push. Rollback flag0 or this commit.
+
+### Continuation 2026-10-16 — local native voice studio
+
+- A loopback Crystal HTTP app now owns persistent editing sessions, reference
+  voices, segment revisions, immutable takes, serialized generation/export jobs
+  and local WAV/MP3/Opus files. Build with `make drama3_studio`; usage and bounds
+  in `docs/drama3-studio.md`, admitted frontier in `drama3-studio-frontier.md`.
+- One lazy native Metal worker reuses static model mappings/tensors/pipelines;
+  every job receives fresh KV/recurrent state. Reference encoding, generation
+  and DAC remain resident. Existing EOS/terminal reads and waits remain; host
+  media I/O and between-job GC are explicit. No GC-free or total-speed claim.
+- Revision snapshots keep late results in history without selecting over newer
+  edits. Exports snapshot selected takes in order. Selected/active/export-source
+  assets have deletion guards; metadata failures roll back and pause/retry the
+  consumer. Startup fails interrupted jobs and recovers deletion tombstones.
+  Worker quiet timeout5min and ffmpeg timeout30s kill/reap owned hung children.
+- Final18 CPU examples pass, including stale revisions, persistence faults,
+  invalid HTTP/ranges, ordered PCM/codecs and hung-child recovery. Release Metal
+  Makefile build passes. All final Crystal sources match the tested source;
+  served embedded assets match source bytes. UI polls retain drafts, focus/caret,
+  disclosures and export format; frame/detail progress does not rebuild editor.
+- Real browser flow: two sessions across restart; one public reference import;
+  three GPU jobs (one no-reference/two reference, two warm); take selection,
+  rename/archive/restore; three exports and byte-exact Opus download. WAV PCM
+  exactly equals ordered selected-source PCM. Chromium decodes/advances all three
+  formats. Desktop/mobile have no horizontal overflow or JS errors in final
+  bounded probe. Mocked UI progress/fault transitions are not GPU evidence.
+- No-reference browser WAV equals the eight-job repeated probe; pinned MLX
+  shared-tape60-frame/full11ID check and old prefill gates pass. No general
+  MoE/DAC, silence/prosody, seamless segment or voice-identity certificate.
+  Hard crashes may leave unregistered output/report files; no orphan sweep or
+  fsync durability guarantee. Keep service local; no multi-user boundary.
+- Curated `.landmark/evidence/drama3-studio.json`, raw local
+  `drama3-runs/studio-20261015/`; correlated mini-Quad ROBUST for bounded workflow.
+  Next falsifier: longer reference-conditioned sessions plus listening and
+  unchanged upstream gates. Return numeric frontier remains MoE39/common-prefix
+  and DAC first post-module stage. Refresh after source/assets/schema/model/input/
+  tape/runtime/device/graph/precision drift. Standing authority: serial run_safe,
+  reserve15%, own children only, local commits/no push. Rollback studio commit;
+  preserve local data and use standalone generator.
+
+### Continuation 2026-10-16 — generation workspace allocation reuse
+
+- Base `ce592825`: optional `DRAMA3_GENERATION_SCRATCH=1` gives backbone,
+  tower.prefill, tower.sample and main one GPU backing per call ordinal. Slots
+  allocate on first use, remain ordered on the same tracked queue, then release
+  after the existing terminal boundary. Uploads/static conversions/finite status
+  stay fresh; escaping frames stay persistent; traces bypass reuse and late
+  enablement rejects. Growth retains replaced backings; abort quarantines them.
+- Short warm worker generation drops 135139->1894 backing allocations and
+  1596632160->22125244 requested bytes; four plans total 22110080 bytes and end
+  with zero live slots/bytes. V1 host construction clocks819–892->7.15–9.37ms
+  measure only MetalBuffer.new. Per-job plans, wrappers/metadata/GC and codec
+  allocations remain; this is ordinary reuse, not an LTP/WBA certificate.
+- All18 paired full jobs (6 timer-on,8 timer-off v1,4 timer-off final source)
+  retain all60frames/11IDs, WAV bytes and sampler/readback/graph ledgers:
+  122 submits/waits, maxpending2, control496bytes, terminal494160bytes. Final
+  source includes retired-backing and fresh-only capacity guard fixes; old
+  timing receipts are not promoted to final-source measurements.
+- Warm v1 request medians28.588s fresh/29.546s reuse; final-source one-per-mode
+  warm27.618s/31.935s. No stable request-to-WAV speedup; default scratch0 remains.
+  Next discriminator: host encoding/bookkeeping/GC versus DAC host-time variation
+  using paired jobs and existing GPU timestamps, not allocation count as value.
+- Final native full60-frame GPU comparison matches the saved pinned MLX F32-core
+  control on shared effective tape draws. Actual reused158-row prefill at2205
+  capacity gives zero fresh/reuse hidden/logit bit mismatches and zero failures
+  under unchanged3e-5+3e-4abs(ref). Post-first backbone/tower.prefill scopes create
+  no new backing allocations; both arms retain159 existing submits/waits.
+- Final49 Metal and29 CPU examples plus release build pass. Depths0/2, two pending
+  commands+GC, actual slot growth/retired storage, status/zeros, ownership, retained
+  traces, late-enable rejection, generated-frame handoff and reference guards
+  covered. Native wait source establishes terminal Metal completion before
+  status errors; generic foreign-queue/hardware-loss recovery remains untested.
+- Report `docs/drama3-allocation-reuse.md`, curated
+  `.landmark/evidence/drama3-allocation-reuse.json`; raw local
+  `drama3-runs/allocation-reuse-20261016/`. Correlated mini-Quad ROBUST within
+  bounded storage/numeric checks; no overall performance promotion. The first
+  external prefill helper failed on config nesting before inference; corrected
+  native TowerConfig helper passes and both receipts remain.
+- Return numeric frontier: MoE39/common-prefix forks and DAC post-module stage;
+  no long-speech/identity/prosody, stock-RNG, cross-job pool or whole-GC claim.
+  Refresh on source/shader/checkpoint/input/tape/fixture/precision/gate/graph/
+  runtime/device/OS drift. Authority: serial run_safe,15% floor, unrelated
+  processes untouched, local atomic commit/no push. Rollback flag0 or feature
+  commit. Paired host noise/uncertified speed is an explicit default blocker.
+
+### Continuation 2026-10-16 — host command and GC attribution
+
+- Base `b3144c85`: optional `DRAMA3_HOST_PROFILE=1` uses fixed timer/counter
+  arrays for backings/views, workspace, pipeline, encoder API, retention and
+  command creation/submission. Separate existing waits from encoder acquisition;
+  nested wall timers overlap GPU work. Coarse managed-GC snapshots and the
+  existing between-job GC are explicit. No shader/arithmetic/precision/tape or
+  GPU submit/wait/read boundary change. Disabling fine clocks leaves the facade
+  and coarse snapshots; reverting this commit removes all instrumentation.
+- All44 worker jobs (24 primary,12 old/current,8 existing-timestamp controls)
+  retain full60-frame/11-ID codes, WAV bytes, sampler and queue/read ledgers.
+  Warm profiled generation medians: backing770.3->8.2ms, full-GC1222.5->20.5ms,
+  encoder API54.6/46.3ms, retention16.9/19.7ms fresh/reuse. GC overlaps timers;
+  counters/managed bytes are not a typed object census or CPU-time budget.
+- Timeline-off warm request medians26.853s fresh/28.466s reuse for2.786s audio:
+  9.6/10.2 request seconds per audio second, including WAV/report/post-job GC,
+  excluding model loading. Paired deltas and same-mode repeats vary by seconds.
+  Existing timestamps stay near15.5s generation-command sum/6.0s DAC; waits vary.
+  Unique slowdown cause, zero instrumentation overhead and general speedup are
+  unproven. Scratch remains opt-in; no broad host-object rewrite is justified.
+- Final33 CPU/51 Metal examples, release build, saved MLX shared-tape full-code
+  comparison and158-row prefill pass unchanged gates. Prefill fresh/reuse is
+  bitwise equal; graph depths0/2 transparency and terminal reduced metrics keep
+  existing boundaries. No fresh MLX audio, stock-RNG, long-speech or general
+  MoE39/DAC numerical/voice-quality claim. Final mini-Quad review is ROBUST
+  within this diagnostic scope; same-lineage review is correlated.
+- Report `docs/drama3-host-attribution.md`, curated
+  `.landmark/evidence/drama3-host-attribution.json`; raw local
+  `drama3-runs/host-attribution-20261016/`. Source seal binds42 production files
+  across8 commands and the same current binary; old binary matches its prior
+  hash and committed per-file source. Refresh on source/shader/checkpoint/input/
+  tape/gate/precision/graph/runtime/device/OS drift or contradictory results.
+- Next falsifier: attribute generation GPU kernels and command-wait variation,
+  keeping DAC separate; return numeric frontier remains MoE39/common-prefix and
+  DAC post-module stage. Authority: serial run_safe,15% floor, own children only,
+  unrelated processes untouched, atomic local commit/no push. No LTP/WBA claim.
+
+### Continuation 2026-10-16 — GPU kernels and command-start variance
+
+- Base `22c99628`: optional native timeline surrounds the existing commit/wait,
+  preserves authoritative status when timestamps/callbacks fail, and logs after
+  the measured wait. All six full requests retain codes/WAV/tape/ledgers; 732
+  command timestamps are valid. A 6.5175s warm wall spread has +6.5398s before-GPU
+  wait and -0.2943s GPU duration sum. First prefill contributes 6.2344s of the
+  before-GPU increase; residency/resource/driver/competing-work cause remains
+  unresolved.
+- Bounded Instruments capture qualifies 54508 shader samples/44 labels but has
+  overlapping intervals and no additive family weighting. M2 Max rejects
+  dispatch-boundary counters. No dominant-kernel ranking follows. Raw traces
+  were removed; capture harness now uses an explicit environment allowlist.
+- Opt-in `simd32` dense preserves the original 64-lane partial-sum tree, with
+  original-kernel fallback outside SIMD width32. Native affine expert32 uses
+  unchanged group order only at <=32 groups; group33 retains64. Independent
+  Q4/Q8 scalar/shared/per-rank constants cover that boundary. Defaults stay
+  dense tree/expert64; no LTP/WBA or zero-instrumentation-overhead claim.
+- Actual-weight tower probes are bitwise equal and locally faster. Captured
+  upstream-input expert32/64 probes give paired GPU ratios1.04383 and1.06120,
+  seven faster32 pairs per capture. Three full ABBA matrices,12 jobs each,
+  retain complete outputs/ledgers but establish no request-to-WAV gain. Latest
+  expert64/32 warm medians29.7862/30.5885s for2.7864s audio, RTF10.690/10.978.
+- Final62 Metal/10 offline tests, same-tape saved-MLX60-frame/full11-ID GPU
+  comparison and combined simd32/expert32 reused158-row prefill pass. Native
+  fresh/reuse is bitwise equal; upstream remains within unchanged3e-5/3e-4.
+  Source seal binds43 production files across11 final commands. Older dense/
+  timeline evidence retains capture-time lineage; saved-baseline differing
+  source bytes remain unavailable. General MoE39 numerical failure stays open.
+  Final correlated mini-Quad review is ROBUST within this bounded scope.
+- Report `docs/drama3-gpu-kernels.md`, curated
+  `.landmark/evidence/drama3-gpu-kernels.json`. Stable reference/run files moved
+  to `/opt/mldata_ssd/cogni-ml`:25067 files/52095286973bytes SHA-verified, original
+  paths remain compatibility symlinks. All6 DRAMA weight shards stay local;
+  active browser log retains its local inode. Cold timings cannot span the move.
+- Next falsifier: separate pre-start resource/residency from other GPU/driver
+  work, or compare guarded aligned Q4 loads with existing byte loads on captured
+  inputs. Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+  Streaming is design only; first check stateful chunked DAC against whole
+  decode, then prove PCM ownership/backpressure/cancel behavior. No latency claim.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS drift or contradictory evidence. Standing authority: serial
+  run_safe,15% floor, unrelated processes untouched, exact-path local atomic
+  commit/no push. Rollback flags/defaults or this isolated feature commit.
+
+### Continuation 2026-10-16 — first-prefill startup attribution
+
+- Base `ccb0d178`: default-off `DRAMA3_METAL_RESOURCES=1` observes process
+  user/system CPU, task page-ins/faults and process disk-read/resident/footprint
+  counters. Requires graph depth1/2 and implies timeline. Passive Metal kernel
+  scheduling timestamps are read after the existing completion wait. No shader,
+  precision, inference synchronization, GPU activation read or default change.
+- Twelve off/on/on/off requests retain full60x11 codes, WAV, sampler and
+  122-wait/read ledgers. Six observer-on first commands show10.7–24.7ms before
+  commit,11.38–11.96s cold or0.35–4.83s warm driver scheduling, and0.163–0.195s
+  GPU execution. Cold after-commit process counters add1,464,429 page-ins and
+  about24GB reads; warm has zero registered page-ins/reads and0.35–4.82s system
+  CPU. Cold means new process/mappings, not purged filesystem cache. Page-in is
+  insufficient to explain warm spread; its duration and pure GPU queue delay
+  remain unidentified. Kernel timestamp epoch is not assumed mach-relative.
+- Separate own-worker warm CPU samples locate Metal submission in
+  `IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap`; main thread
+  waits at the existing completion boundary. Three additional outputs remain
+  exact. Samples do not identify work below the trap or turn stack counts into
+  CPU time. Overlapping resource windows are distributions, never request sums;
+  mini-Quad rejected and corrected the initial additive interpretation.
+- Native observer test,63 Metal/6 CPU/23 offline cases, same-tape saved MLX full
+  codes and158-row prefill pass unchanged3e-5/3e-4 gates. Known MoE39 full
+  intermediate failure stays open. Pair-wrapper interruption is disclosed:
+  child driver PASS and12 manifests establish completion, no wrapper exit or
+  uninterrupted memory guard is claimed. No performance gain is promoted.
+  Final correlated mini-Quad verdict is ROBUST for the bounded diagnostic and
+  attribution scope; work below the driver kernel trap remains unresolved.
+- Report `docs/drama3-prefill-startup.md`, curated
+  `.landmark/evidence/drama3-prefill-startup.json`; raw local external SSD
+  `drama3-prefill-start-20261016/`. Next falsifier: establish resource
+  revalidation in the submission corridor; compare stable resource identity
+  with fresh wrappers over the same mappings, preserving queue/numeric gates.
+  Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS changes, contradictory results or evidence eviction.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  exact-path local atomic commit/no push. Disable diagnostics or revert the
+  isolated commit to roll back; no residency/lifetime rewrite is admitted yet.
+
+
+### Continuation 2026-10-16 — mapped weight wrapper lifetime
+
+- Base `99a4f447`: an opt-in, single-Context raw-weight bank compares persistent
+  no-copy Metal buffers with whole-bank release/recreation over the same mmap
+  owners, addresses, extents and offsets. Rotation requires an already terminal
+  queue, rejects active/aborted boundaries without a drain, and quarantines owners
+  on failure. Ordinary inference keeps its global cache through a nil-bank branch;
+  no shader, precision, inference wait/read or default policy changes.
+- Eighteen requests (two new-worker primes, sixteen warm) yield eight balanced
+  adjacent P/R pairs. Six mappings declare 25867452416 bytes; this is not physical
+  residency. Warm prepare medians 2.646us/1.087167ms, paired request R-minus-P
+  median -0.000816s, range -5.439325..+6.644850s, four wins each. Both modes retain
+  seconds-long first-driver spread. No speed/default promotion or equivalence
+  follows. Actual factory calls and backing identity are qualified; internal
+  driver registration reuse is unobserved. Quiet host is off.
+- Refresh also clears raw tensor-view objects, while converted GPU F32 weights
+  stay cached. Not every refreshed shard reaches the first warm command. This
+  is a combined wrapper/view-cache intervention, not pure Metal identity cost.
+  Warm first-command process page-ins/reads are zero; request-wide reads need
+  not be zero and process windows overlap. Zero counters do not prove residency.
+- All 18 full 60x11 codes/WAV/tape and 122-wait/read ledgers remain exact. Final 67
+  Metal cases, two saved-control MLX-GPU full-code checks and final hidden/logits
+  after 158-row prefill pass unchanged 3e-5/3e-4 gates. Prefill rotates five model
+  shards and also enables tested workspaces in arm 2; it is a combined numerical
+  guard, not per-row/layer parity or a performance contrast. MoE39 remains open.
+- Correlated mini-Quad verdict ROBUST within that scope; exact-run shard/cycle
+  objections are resolved by receipt/artifact qualification. Report
+  `docs/drama3-weight-wrappers.md`, index
+  `.landmark/evidence/drama3-weight-wrappers.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/`.
+- Next falsifier: view-only sham preserving Metal handles, balanced against P/R
+  on one Engine, plus passive per-shard first-command binding counts. Return
+  numeric frontier: MoE39/common-prefix and DAC post-module stage. Refresh on
+  source/model/layout/queue/input/tape/observer/host/OS drift, contradiction or
+  evidence eviction. Standing authority: serial run_safe,15% floor, unrelated
+  processes untouched, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated commit.
+
+
+### Continuation 2026-10-16 — raw weight views and binding exposure
+
+- Base `c37f4d91`: Context-mediated view-only reset retains identical raw Metal
+  buffers/mmap owners, while fresh reset recreates them. Existing terminal
+  guards reject active/pending/aborted use without draining. Passive binding
+  capture arms at the current command index, counts host set_buffer returns,
+  seals after the first existing submit and publishes only at terminal;
+  abort discards it. Direct bank use/concurrency and future aliases are outside
+  the supported boundary. No shader, precision, queue or inference read/wait
+  changes; disabled observer branch overhead is unmeasured.
+- One Engine completes one excluded prime and six P/V/R permutations (18 warm
+  jobs). P/V/R preparation medians 2.542us/3.917us/1.075104ms; first-driver ranges
+  0.391–5.862/0.393–9.054/0.377–6.375s. Within-triplet R-minus-P request median
+  -0.018379s, range -1.049909..+6.465244s, three wins each. All arms retain long
+  spread; no stable gain, equivalence, internal-registration inference or
+  default promotion. Active-host order/carryover remains a confound.
+- Every warm first command has 5442 bindings, 862 raw across five model shards
+  (100/183/198/190/191); codec 0. Six mappings declare 25867452416 bytes, not
+  physical residency or bytes read. All 566 converted GPU cache entries retain
+  their host identities. Warm first-command page-ins/reads are zero while
+  system-CPU time spreads into seconds; process windows are nonadditive.
+- All 19 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  69 relevant Metal/14 offline cases, three saved-control MLX-GPU code checks
+  and both V/R 158-row final hidden/logit gates pass unchanged 3e-5/3e-4. No
+  activation read or new inference synchronization. Endpoint parity does not
+  close MoE39 or establish general voice/prosody/DAC/long-speech parity.
+- Correlated mini-Quad verdict ROBUST for the bounded diagnostic, executed
+  numerical/queue contract and descriptive observations. Report
+  `docs/drama3-weight-views.md`, index `.landmark/evidence/drama3-weight-views.json`,
+  external raw root `/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/`.
+  Offline analysis alias failure is retained; v2 passes, with no GPU rerun.
+- Next falsifier: whole-shard versus narrower page-aligned no-copy resource
+  extent, with the view sham, mmap ownership/alignment/range checks and unchanged
+  numerical/queue gates. Earlier per-tensor views had no stable gain; the new
+  qualified sham/exposure addresses a missing discriminator, not that result's
+  automatic reversal. Return numeric frontier: MoE39/common-prefix and DAC
+  post-module stage. Refresh on source/model/layout/input/tape/tolerance/queue/
+  observer/device/OS drift, contradiction or artifact eviction. Standing
+  authority: serial run_safe, 15% floor, unrelated processes untouched, external
+  scratch/local weights, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — mapped weight resource extents
+
+- Base `30833811`: Context-mediated diagnostic transitions whole-shard to
+  page-rounded full-Tensor no-copy resources at the existing terminal boundary.
+  Release all old handles before construction; retain immutable mmap owners,
+  rebase/guard full raw intervals and all dynamically selectable experts. Exact
+  envelopes deduplicate; read-only overlaps report sum and union separately.
+  Replacement/legacy refresh discard stale first-command receipts, while a
+  same-layout view clear preserves them. No shader/arithmetic/precision or
+  inference submit/wait/readback changes; ordinary defaults remain whole-shard.
+- One Engine completes S/N/N/S blocks, each excluded prime then P/V/V/P:
+  twenty requests, sixteen scored. N-minus-S block medians favor N for P
+  (-3.477684/-5.359322s) but S for V (+9.493018/+2.230206s). No uniform layout
+  gain, equivalence, internal-driver explanation or default promotion follows.
+  First-driver intervals still span 0.316–9.421s. Active-host CPU/scheduling
+  variability, layout-by-view interaction and carryover remain confounds.
+- Mappings rise from 6 to 1310, first-command active resources from 5 to 853.
+  Warm raw binds remain 862; bound interval union falls only 0.0768%, about 24 GB still
+  exposed. All-resource sum/union are 24752242688/24732073984B for N, versus
+  25867452416B for S. These are API intervals, not RAM/residency or bytes read.
+  All 566 converted-cache host identities stay fixed; scored mapped-resource
+  construction/retirement is zero. Cold histogram differs and is excluded.
+- All 20 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  76 relevant Metal and 7 new/14 existing offline cases, four saved-MLX GPU code
+  checks and final 158-row hidden/logit gate pass unchanged 3e-5/3e-4. The latter
+  also enables existing workspaces and is a combined numerical guard. Known
+  MoE39 full-intermediate and DAC post-module frontiers remain open.
+- Two analysis-only failures are preserved: baseline list-length assumption,
+  then cold-versus-warm histogram scope. V3 and cross-artifact/source verification
+  pass without rerunning/excluding any matrix requests. Report
+  `docs/drama3-weight-extents.md`, index
+  `.landmark/evidence/drama3-weight-extents.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/`.
+  Correlated mini-Quad verdict ROBUST for the Context-mediated diagnostic,
+  fixed numerical/queue contract and descriptive conclusion; no independent
+  replication or causal timing claim follows.
+- Nomic comparison: GPU route and selected-rank projection batching already
+  exist in DRAMA (MoE dispatches 49 to 6). Nomic's historical cross-token batched
+  workload gain is not a DRAMA prediction: current prompt prefill/decode are
+  row-by-row, and transfer first needs a real multi-token backbone path. Do not
+  import its different quantized/FP16 arithmetic as a precision-preserving move.
+  Return numeric frontier remains MoE39/common-prefix and DAC post-module.
+- Reopen extent timing only with a new discriminator for host scheduling and
+  layout/view interaction. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/observer/device/OS/storage drift, contradiction or raw artifact eviction.
+  Standing authority: serial run_safe, 15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+  Rollback by omitting diagnostic enabling or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — genuine native batched prefill
+
+- Base `a15d4253`: opt-in layer-major backbone prefill batches dense and affine
+  expert projections across token/rank pairs. Temporal attention/conv/delta
+  updates preserve explicit causal base+row order; routing ties, reductions,
+  dtype and quantization are unchanged. Host and ResidentPrompt generators
+  teacher-force the original N-1 pairs, with separate prefill scratch and
+  borrowed-output lifetime guards. `DRAMA3_PREFILL_CHUNK=1..32`, default 1;
+  measured candidate 16. Normal execution adds no activation read/wait/submit.
+- Genuine missing matvec_rows RED witness, 86 Metal and 29 offline cases pass.
+  At graph0/2 the 158-row prompt has 932 native bitwise checks per depth, exact
+  following decode/head and saved-MLX terminal hidden/logits at unchanged
+  3e-5/3e-4. Twelve bounded 60-frame requests preserve all codes/WAV/tape/read
+  ledgers; WAV SHA256 bc4c5b258c08f25828c727c69c1033691da651dc936ab30583ade88a0994ff31.
+  Submitted/completed/waited counts are 310/309 at depth0 and 251/250 at depth2,
+  scalar/batch, pending zero. Exactly one empty multirow-tail command is elided.
+- Fresh pinned MLX scalar/sequence captures contain 109/110 tensors, all hashed;
+  canonical route IDs match independently reconstructed SwitchGLU IDs. The
+  unchanged intermediate 6e-5/3e-4 gate remains OPEN: per native arm scalar MLX
+  fails 100 elements across eight stages, sequence 222 across eleven. Native
+  scalar/batch metrics are identical, also across graph depths. Failures include
+  late residuals, expert down and routed/shared/output sums; not every coordinate
+  is proven to be the historical expert108 discrepancy. Passing endpoints do
+  not close this gap. Final parity writes 1307 checks and exits 1 as intended.
+- Isolated warm scalar/batch medians: backbone 20.296115/8.747524s at depth0,
+  18.912527/8.031174s at depth2 (2.320x/2.355x). MoE39 on the same 158 normalized
+  rows gives 2.192x/1.357x wall and 1.889x/1.201x GPU-interval-sum ratios.
+  Bounded-request wall medians are 47.263830/38.826715s and
+  45.247341/33.115445s (1.217x/1.366x); GPU-sum ratios 1.362x/1.340x.
+  Isolated ABBA+BAAB has four scored observations per arm; requests ABBA two.
+  Primes excluded, persistent weights/context, fixed seed/tape/input. These are
+  active-host descriptive observations with command-count-scaled telemetry,
+  not causal shader timings. GPU intervals may overlap; depth0 lacks spans.
+  The frame cap truncates output at 2.786395s, so no long-speech RTF follows.
+- Rejected fresh-Context timing pilot is retained. Early parity capture exit0
+  on a red JSON gate is superseded by final fail-closed CLI. `verify-final`
+  replays raw qualification, checks reference/source/log/build hashes and the
+  cross-depth numerical/output/queue scope: PASS_WITH_UPSTREAM_GATE_OPEN.
+  Correlated mini-Quad verdict ROBUST for bounded native mechanics/regression,
+  VULNERABLE for upstream compatibility/promotion. Default remains chunk1.
+  Report `docs/drama3-batched-prefill.md`, index
+  `.landmark/evidence/drama3-batched-prefill.json`, raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/`.
+- Next numerical falsifier: earliest late upstream failed row/channel on matched
+  inputs, separating expert-down reduction from shared/residual accumulation.
+  Direct token-row addressing to avoid GPU expert-input expansion is an
+  unmeasured performance candidate. Return numeric frontier also retains DAC
+  post-module fidelity. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/workspace/observer/device/OS/storage drift, contradiction or artifact
+  eviction. Standing authority: serial run_safe, 15% floor, unrelated processes
+  untouched, external scratch/local weights, exact-path atomic commit/no push.
+  Rollback by selecting chunk1 or reverting this isolated slice.
+### Continuation 2026-10-16 — late-layer matched-input fidelity
+
+- Base `d05bc45d`, diagnostics only. Original MLX scalar/sequence returns on
+  the same 158-row F32 input; selected exact operands at layers34–39. All219
+  overlapping prior arrays are bitwise unchanged. Config/index/all5 shards
+  hashed; stat identities unchanged through final verification. New shared
+  internal captures lack a prior no-hook control.
+- First bit difference is layer0 attention residual. First strict sequence
+  boundary is layer35.hidden row154/channel1277 (7.4863434e-5 error against
+  6.1382445e-5 allowance); scalar layer37.hidden row154/channel1557
+  (6.592274e-5 against6.5157314e-5). No widened tolerance. All162 boundary
+  metrics per depth reproduce the prior saved strict full-prompt gate.
+- Matched shared operations pass; exact routed+weighted-shared and exact
+  residual+upstream-MoE additions are bitwise through layers34–39. Native down
+  fails locally only at39 (7 scalar/1 sequence); first witnesses expert108.
+  Existing mlx_q4 down is scalar-bitwise on15,532,032 values but fails7
+  sequence39 values. Whole native MoE/residual replay failures are also39-only.
+  This cannot explain the earlier35/37 crossing; accumulated input drift and
+  local39 error are separate findings, and the former cause remains open.
+- All318 groups have identical metrics/witnesses at graph0/2, no nonfinites.
+  One66144-byte terminal receipt plus existing4-byte finite status; comparisons,
+  maxima, first64-bit coordinate and expert witness stay GPU. No intermediate
+  finish/read. Eleven submissions/completions/waits per depth; depth2 max2
+  pending and22,928,410,032 retained bytes, not physical residency. Both full
+  native CLIs retain exit1 for the red strict boundary gate. Production source
+  and defaults unchanged. One Metal oracle/16 offline tests and final source/
+  binary/weight/prior-gate crosschecks pass.
+- Correlated mini-Quad ROBUST for bounded observations; VULNERABLE for full
+  upstream compatibility or a single-cause explanation. Report
+  `docs/drama3-late-matched.md`, evidence
+  `.landmark/evidence/drama3-late-matched.json`, raw
+  `/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/`.
+- Active speed target is sustained RTF0.8–0.9 and separate first-audio latency.
+  Next performance discriminator: aligned packed-word expert loads preserving
+  exact arithmetic, then full trajectory timing if local output/timing passes.
+  Next numerical discriminator: sequence upstream quantized down on identical
+  operands, followed by earlier cumulative-coordinate decomposition. Refresh on
+  source/model/input/reference/tolerance/queue/device/OS drift or evidence loss.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+
+### Continuation 2026-10-16 — exact DAC Conv1d weight layout acceleration
+
+- From `fc717747`, normalized ungrouped Conv1d packs its effective F32 weights
+  as `[in,tap,out]` inside the existing apply pass. Scale reduction, serial
+  multiply/add order, bias/padding/dilation, allocation and dispatch counts
+  remain unchanged. `coalesced` is default; frozen
+  `DRAMA3_DAC_CONV_LAYOUT=native` restores the original path. Grouped/depthwise
+  and transpose kernels keep their original layouts.
+- Seven Metal examples pass. Direct weight/output guards stay GPU with a
+  20-byte receipt. All 58 real DAC stages,157,782,720 values, match native bits
+  with no nonfinites; negative controls pass. The first standalone report was
+  invalidated for lazy iterator exhaustion; only rebuilt r2 qualifies it.
+  Timed decodes have no observers/reads and retain32 existing commands/waits.
+  The untimed stage/negative receipts total472 bytes, including one separate
+  negative command. The 197-frame upstream control has identical58 metrics
+  and WAV in both arms; historical full DAC gate remains red, first at
+  post-module layer0. No tolerance changes or upstream compatibility claim.
+- Standalone DAC ABBA/BAAB medians6.298823/2.841204s (2.217x). Full-request
+  ABBA mirrored wins1.35797x/1.15125x; worker warm medians28.994506/23.131649s
+  for2.786395s audio,RTF10.406/8.302. All12 requests retain complete codes,
+  WAV,tape,reads/waits. Fresh unset-selector Studio cold/warm controls also
+  pass exact original baseline. Active-host generation timing shifts are
+  confounds; these are not independent replicas or realtime performance.
+- Correlated mini-Quad ROBUST within bounded parity/speed scope, with actual
+  root execution. Index `.landmark/evidence/drama3-dac-layout.json`, report
+  `docs/drama3-dac-layout.md`, immutable raw receipt
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS drift or
+  raw evidence loss; timing generalization also needs new host/input controls.
+- Packed-Q4 word loads gave no sustained win and were rejected. Next speed
+  discriminator is packing several output rows per64-lane affine expert group,
+  retaining native F32 subtotal/final-sum order. Numerical return pointer is
+  the late-layer slice above; neither strict backbone nor DAC gate is closed.
+
+### Continuation 2026-10-16 — guarded expert row-packing experiment
+
+- From `3a83aadb`, optional batched native Q4/Q8 group64 expert dispatch packs
+  several output rows per64-thread group for supported shapes. Byte loads,
+  F32 subtotal/final reduction order, allocations and command count stay the
+  same. `DRAMA3_EXPERT_PACKED_ROWS=0` is the frozen default and rollback;
+  scalar, MLX-Q4, requested32 and unsupported groups keep existing paths.
+- Two local captured-layer39 probes preserve7,077,888 values bitwise each,
+  with zero nonfinites and rejecting bit/NaN controls. Final paired native/
+  candidate ratios1.02022 gate,1.02347 up,1.29316 down; all7 pairs per family
+  favor the candidate. Timings are overlapping command intervals, not additive
+  family cost. All13 production Metal examples pass, including odd tails,
+  invalid IDs, fallbacks, branch-cache checks and env flips before dispatch.
+- Full12-request ABBA preserves codes,WAV,sampler tape,reads/waits, but
+  mirrored request ratios0.853759/1.018696 do not establish request benefit.
+  Keep default off. Fixed DAC timing also varies; no isolated causal expert
+  regression follows. DAC coalesced default and its prior qualification stand.
+- With packing enabled, the complete matched-input MLX report is identical
+  to native-depth2:162 boundaries+156 replays, same reads and11 waits. The
+  known strict gate remains false; neither backbone nor DAC parity is closed.
+  Correlated source mini-Quad review plus root execution support bounded
+  native parity, not independent replication or realtime performance.
+- Evidence `.landmark/evidence/drama3-expert-packed-rows.json`, details
+  `docs/drama3-expert-packed-rows.md`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/expert-packed-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS/host-load
+  drift or artifact loss. Next distinct hypothesis is shared-input qkv/z/b/a
+  multi-output dispatch with exact original row reductions; current additive
+  dominance is unproven. Require local GPU parity/timing then full requests.
+
+### 2026-10-17 — exact-tree backbone qkv/z/b/a dispatch experiment
+
+- From `932e7b6b`, a frozen opt-in selector combines four shared-input decode
+  projections into one dispatch, preserving byte decoding and the original
+  F32 lane/reduction order. Same four ordinal output allocations; no new
+  production commands, waits or reads. Unsupported formats/reductions fall
+  back. Unset/`DRAMA3_BACKBONE_DENSE_FUSION=0` retains the original four
+  inline calls and remains the default/rollback.
+- Final local production-API probe compares 2,668,032 values bitwise on GPU,
+  rejects bit/NaN controls, passes 37,056 upstream projection values at the old
+  tolerance, and gives 1.16824 pooled paired command ratio (21/21 wins).
+  This is a local command interval result, not an additive family cost.
+- Seventeen Metal examples pass. The new decode `#step` harness observes
+  frozen off/on arms and compares 243 boundaries / 497,664 native values exactly;
+  both arms have identical 243 upstream metric records. The existing strict
+  failure remains row 1/layer 39 hidden. Only 729 compact GPU receipts cross the
+  terminal diagnostic boundary (14,580 B plus existing 4 B finite control), with
+  one final command/wait. The older late-layer prefill gate cannot qualify
+  this changed decode dispatch.
+- All 12 full-request ABBA trajectories/WAV/tapes/reads/waits and corresponding
+  cold/warm allocation counts/bytes match. Request ratios 0.983651/0.952369
+  do not establish benefit; generation ratios disagree and unchanged DAC
+  varies. Warm worker request medians 24.626830/25.464262 s for 2.786395 s audio
+  give observed RTF 8.838/9.139. Keep default off. Do not infer causal slowdown
+  of this kernel or full upstream compatibility from these observations.
+- Correlated mini-Quad review plus root execution supports bounded native
+  parity/local timing. Details `docs/drama3-dense-fusion.md`, index
+  `.landmark/evidence/drama3-dense-fusion.json`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-commands.json`.
+  Refresh on source/compiler/model/input/reference/tolerance/queue/device/OS
+  drift or evidence loss; request timing also decays with host-load drift.
+  Sustained RTF 0.8–0.9 remains open. A separate possible next discriminator is
+  exact-tree tower FFN w1/w3 fusion; no current dominance claim is established.
+
+### 2026-10-17 — opt-in exact-tree tower FFN paired projections
+
+- From `2149cd03`, a frozen `DRAMA3_TOWER_FFN_PAIR_FUSION=1` combines
+  shared-input w1/w3 projections. Equal-row aligned BF16 pairs use two
+  independent original F32 64-lane trees with one shared input load;
+  supported other pairs use combined row domains. Unsupported cases retain
+  the established separate calls. Unset/`0` remains the default and rollback.
+  The two ordinal output allocations, production submissions, waits and reads
+  are unchanged; the new borrowed-buffer observer is normally nil.
+- Twenty release Metal examples pass. The final local probe preserves
+  2,654,208 values per arm bitwise, rejects bit/NaN controls, passes six MLX
+  projection controls at unchanged tolerances, and observes 1.16337 pooled
+  paired command ratio with 21/21 wins. Intervals overlap; they are not
+  isolated kernel times or additive family costs. The first generic variant
+  gave only 1.04135 locally and no reproducible complete-request benefit.
+- On the pinned 87-hidden-row fixture, 674 selected tower trace sites plus
+  the first decode frame give 675 exact off/on comparisons. These are 675
+  comparison triplets (2,025 raw records); the 675 per-arm upstream metrics
+  match across arms and between the two variants.
+  Three residual8 failures already occur in the unfused capture; strict MLX
+  compatibility remains false. This covers prefill row85 and decode row0,
+  not every cache history. Six projection payloads are hashed, not the whole
+  checkpoint; unchanged dispatch.cr was omitted from recorded source maps.
+- Final profiler-off ABBA and complete reverse BAAB preserve all24 codes,
+  sampler tapes, WAVs and allocation/read/wait ledgers. Warm worker request
+  medians separate/fused are 23.175658/24.907944s and 26.576364/28.817057s
+  for2.786395s audio. Mirrored request ratios0.904047/0.960349 and
+  0.787350/1.078039 do not establish request benefit. Unchanged DAC also
+  varies on this active host. Keep default off; sustained realtime is open.
+- The first reverse attempt is excluded after9 exact results because an
+  unfused worker aborted at exit. Its stack reaches the repeating GCD
+  watchdog's process-global mutex in unchanged bridge.mm after drained
+  graphs. Static-mutex teardown racing the callback is a hypothesis, not a
+  proven cause. The full unchanged repeat exits cleanly; this does not fix
+  the captured failure. Keep the strict worker-exit assertion.
+- Correlated mini-Quad review and root execution support bounded native
+  parity and the local observation, not independent replication or default
+  promotion. Details `docs/drama3-tower-pair-fusion.md`, index
+  `.landmark/evidence/drama3-tower-pair-fusion.json`; selected current and
+  historical source scopes remain separate under
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/`.
+  Refresh on source/compiler/bridge/model/reference/input/tolerance/queue/
+  device/OS changes or raw evidence loss; timings also decay with host load.
+  Next performance discriminator: full decode GPU attribution checked
+  against profiler-off WAV requests. Separate reliability return pointer:
+  a minimal watchdog/process-exit reproducer. Standing authority remains
+  serial run_safe,15% memory floor, external scratch/local weights,
+  unrelated processes untouched, exact-path local atomic commit/no push.
+
+### 2026-10-17 — complete decode capture and bounded watchdog teardown fix
+
+- `6ab91a4a` fixes process-lifetime ownership of the Metal watchdog registry.
+  The same final real-bridge teardown probe fails against the recorded source
+  with exit134/invalid mutex after a completed command and empty registry;
+  the candidate exits0 with the actual late callback completed. Normal,
+  disabled, concurrency and terminating-timeout guards pass. This establishes
+  a sufficient matching cause, not every possible shutdown fault. See
+  `.landmark/evidence/metal-watchdog-exit.json` and `docs/metal-watchdog-exit.md`.
+- Eight complete requests on the rebuilt binary (three workers exiting0)
+  preserve full frame codes, sampler tape and WAV against the saved baseline.
+  All five warm requests preserve allocation counts/bytes and read/wait/graph
+  ledgers. The fixed 60-frame request produces2.786395s audio; profiler-off
+  warm observations23.661635–26.733517s give RTF8.492–9.594 on this active host.
+  No new speedup, selector, tolerance, inference wait or activation read.
+- Native command-window unions place decode at11.07–11.23s, prefill4.56–4.62s,
+  DAC2.62–2.69s. They are not additive shader costs. First prefill waits include
+  6.3–8.6s before execution; page-in/resource/driver/contention cause is unknown.
+- Refuted route: phase-specific Shader Timeline family attribution. Despite
+  122 unique order-joined submissions and agreement with native GPU-window
+  unions,5,033 codec-labelled sample rows overlap mapped generation decode.
+  Source invokes DAC only after generation. V2 suppresses family/shader tables
+  and reports phase_attribution_rejected. V1 distributions are superseded;
+  do not infer DAC execution in decode, runtime bounds or a dominant family.
+- The bounded tower GPU replay reproduces all2,025 raw comparison records and
+  ledgers exactly;675 native off/on sites remain exact. The same three late
+  residual8 MLX failures remain at unchanged tolerances. This is no regression
+  at prefillrow85/decode0, not complete backbone/DAC upstream compatibility.
+- Confirmed performance frontier: validate a representative captured-input
+  decode replay with homogeneous production families, batched drains and exact
+  GPU checks before another kernel candidate. Full-WAV profiler-off pairs still
+  decide promotion. An isolated generation/DAC trace can separately test sample
+  semantics. Numerical return pointer: `docs/drama3-native-frontier.md`, late-layer
+  matched-input fidelity and layer39 MoE sections; strict gates remain open.
+- Details `docs/drama3-complete-decode-profile.md`; index
+  `.landmark/evidence/drama3-complete-decode-profile.json`; raw selected exports,
+  pinned executed harness and command receipts under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/`. Raw trace removed.
+  Current capture startup/cleanup refinements are CPU-tested; the recorded
+  experiment used the separately hashed earlier harness. Correlated mini-Quad
+  and root execution support only the declared scope. Refresh on source,
+  compiler/runtime, model/reference/input/tolerance/queue/device/OS or artifact
+  change; timing also decays with host load. Standing authority: serial
+  run_safe,15% memory floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commits/no push. NVIDIA work stays parked.
+
+### 2026-10-18 — GPU projection replay qualifies a bounded decode ranking
+
+- Diagnostic-only capture on the pinned short request covers exact projection
+  names in all40 backbone layers and all4+9 tower blocks at rows0/29/59:
+  597/598/598 calls. The first main head is explicitly omitted. Inputs, expert
+  IDs and outputs are snapshotted and compared on GPU before mutation; snapshots
+  add41,924,840B, with no extra capture wait or activation read.
+- The final role-split replay has423 paired identical-arm cells/rounds,
+  1,269 commands,55,616,202 checked values per arm, no bit/nonfinite mismatch,
+  and negative control[2,1]. Full60 codes/sampler tape/WAV and normal122-command
+  ledgers match. Exact inventory and kernel/reduction homogeneity guard against
+  missing or mixed captures;7 Crystal and13 Python guard examples pass.
+- Local per-row medians: expert down16.14–16.29ms, gate/up12.75–13.05ms,
+  qkv8.61–8.72ms. Other linear roles are separate. Recurrent state, attention
+  execution and sampler remain unranked; command costs are not additive request
+  costs. No production kernel/default changed and no WAV speedup is claimed.
+- Rebuilt bounded tower upstream replay equals all2,025 prior comparisons and
+  ledgers;675 native sites exact, same3 strict failure sites, unchanged tolerances.
+  Numerical return pointer remains late-layer/MoE39 in the native frontier.
+- Next falsifier: varying-input all-layer down and expert weighted-sum fusion
+  pairs preserving reduction order, then profiler-off complete WAV
+  qualification. Previous blanket SIMD/fusion/packing local wins did not admit
+  defaults. The unknown recurrent/sampler remainder can change priorities.
+- Details `docs/drama3-decode-replay.md`, index
+  `.landmark/evidence/drama3-decode-replay.json`, raw receipts/binaries under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/`. Root execution and
+  correlated mini-Quad review qualify only this diagnostic scope. Refresh on
+  source/compiler/runtime/model/input/reference/tolerance/queue/device/OS or
+  artifact change; timings also decay with host load. Standing authority:
+  serial run_safe,15% floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commit/no push. NVIDIA remains parked.
+
+### 2026-10-18 — Ordered expert down-sum fusion remains opt-in
+
+- Native Q4/Q8 group 64 candidate preserves group and rank fold order on GPU.
+  Twelve GPU examples and four offline driver checks pass; 120 actual captures
+  across all 40 layers/rows 0,29,59 and 243 boundary pairs are bit-exact. Saved MLX
+  metrics are identical; strict row 1/layer 39 failure remains open.
+- All 24 full requests across ABBA and reverse blocks preserve full codes,
+  sampler tape, WAV and 122-command/read/wait ledgers. Candidate saves 3,560
+  allocations/dispatches and 222.5MiB cumulative requested bytes per request.
+  No production synchronization or activation read is added.
+- Local paired command median ratio 1.679x is not isolated/additive shader cost.
+  Generation block medians decrease 6.18%/4.53%, but unchanged DAC moves and one
+  mirrored worker contrast regresses. Default stays 0; select
+  `DRAMA3_EXPERT_DOWN_SUM_FUSION=1` in a new Context for the candidate.
+- Details `docs/drama3-expert-down-sum.md`; source/artifact index
+  `.landmark/evidence/drama3-expert-down-sum.json`. Refresh correctness after
+  source/options/model/reference drift and timing after driver/device/load
+  changes. Root execution plus correlated mini-Quad review supports this scope.
+
+### 2026-10-18 — Prefill memory cause remains open; runtime stays stopped
+
+- The private fixed-coarse MLX probe stopped inside its first 269-row prefill
+  without memory counters or row progress. No generation or WAV result exists.
+  The user requires code investigation before any restart: model and Studio
+  must remain stopped. Preserve the aborted private script/log under
+  `/opt/mldata_ssd/cogni-ml/drama3-voice-diagnosis-20261018/`.
+- Source inspection at native base `60a28599` and MLX-audio
+  `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7` rejects KV growth alone as a
+  multi-GiB cause: capacity 256 to 512 adds 23MiB per arm; predictable complete
+  F32 recurrent/KV backing is about 108.81MiB. No obvious rowwise Python
+  retention or causal native Studio defect was found. Cause is IN_PROGRESS;
+  no model/cache/precision/kernel fix or numerical compatibility claim follows.
+- Header arithmetic for checkpoint `5331ab509359c0e4a7e353a19e255ddf3e8152a8`
+  counts 1,167 core tensors and 31,363,559,936 F32-loader bytes. This is neither
+  observed residency nor peak memory. Allocator scratch, reservations, page
+  residency and conversion transients still need discrimination.
+- `scripts/drama3/mlx_memory.py` provides header-only inventory and opt-in
+  stage/row telemetry on existing upstream eval boundaries, with an explicit
+  budget. It rejects chunk schedules other than one before model entry and
+  restores its process-global hook on exceptions. Ten CPU tests pass; no
+  MLX/Torch/model import, weight tensor load or GPU execution was used. The
+  observer is for an isolated single-threaded probe, not Studio, and cannot
+  prevent an intra-eval peak. See `docs/drama3-prefill-memory.md` for limits.
+- Next falsifier, only after runtime investigation is authorized: one bounded
+  first-prefill probe with stage/row active/cached/peak/RSS and cache metadata,
+  Studio off, fresh external output, normal run_safe 15% floor. Do not repeat
+  the full two-arm voice experiment first. Refresh on source, model, precision,
+  chunk schedule, MLX/driver or device change. Voice-quality work returns to
+  the fixed-coarse experiment after memory causality and a causal fix are
+  established; unchanged upstream tolerances and no-push authority remain.
+
+### 2026-10-18 — One bounded upstream prefill completes with stable row memory
+
+- The user authorized one measured first prefill with one MLX model, Studio
+  off. The exact private reference codes and text rebuilt the 269-row prompt;
+  the pinned F32 loader and upstream revision remained unchanged. The process
+  exited 0 under a 40GiB observed budget, 900s timeout and run_safe 15% floor.
+  Postflight found no probe process or Studio listener; free memory returned
+  to 82%. This completed grant does not restart the earlier voice experiment.
+- Core loading accounts for 29.2096GiB active, rising to 31.2396GiB after the
+  codec hook. Across rows 2..256, active-plus-cached spans only 0.375MiB;
+  sampled RSS drifts 7.375MiB. Row 257 adds the predicted 23MiB of logical
+  cache backing. The diagnostic tail copy adds 82.8125MiB of logical backbone
+  state; its physical increment was not isolated. The largest sampled
+  active-plus-cached value is 31.6531GiB. Sparse free-memory polls reached 27%,
+  which is not a continuously sampled minimum or an instantaneous safety cap.
+- The memory guard now includes cumulative MLX peak-active bytes, preventing
+  released transient peaks from escaping the next budget decision. A CPU
+  falsifier failed before the change; all 11 diagnostic CPU tests now pass.
+  The observer adds no GPU eval, wait or activation read at stage/row boundaries;
+  it still cannot interrupt an allocation inside an existing evaluation.
+- Official prompt assembly matches on GPU. One final-row backbone replay from
+  the copied pre-final cache has maximum absolute difference 0.0 and finite
+  endpoint hidden/cache arrays, with a +1 negative control. There is no matching
+  saved full-prompt golden or new independent native/upstream gate; tower and
+  all intermediate rows are outside this numerical check. Existing strict
+  tolerances and the native layer-39 discrepancy remain unchanged.
+- Root execution and correlated mini-Quad review support ROBUST only for this
+  first-prefill observation and numerical scope. Multi-GiB rowwise growth was
+  not reproduced; duplicate historical Studio instances remain plausible but
+  unproven. Repeated requests, generation retention and native worker lifetimes
+  remain open. Next discriminator is ownership/restart/cleanup inspection before
+  any separately authorized Studio run, not another unbounded two-arm probe.
+- Details `docs/drama3-prefill-memory.md`, index
+  `.landmark/evidence/drama3-prefill-memory.json`; private trace, harness and
+  receipts under `/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/`.
+  Refresh after source, checkpoint contents, precision, chunk schedule,
+  MLX/Metal/driver, device, input or concurrent-process changes. Timings include
+  telemetry and are not performance evidence. Model and Studio remain stopped;
+  unrelated projects were untouched, external scratch/local weights and
+  exact-path local atomic commit/no-push constraints remain in force.
+
+### 2026-10-18 — Studio model lease and bounded repeated-request memory control
+
+- The user authorized checking one-model ownership, several serial requests
+  under a stop budget and 15% floor, and automatic frame sizing. This superseded
+  the earlier no-restart restriction only for the bounded Studio/control batch.
+  The cooperating worker now acquires a per-user canonical-checkpoint lease
+  before Engine construction; different libraries, ports and symlink aliases
+  cannot load the same path concurrently. Other users, copies, older binaries
+  and standalone generators remain outside the lease.
+- Native PID 84823 completed three manual 128-frame HTTP jobs. Its fourth,
+  automatic request rejected with InsufficientBudget and the batch stopped.
+  A separate cold-auto-first pilot completed four requests in PID 99716:
+  automatic128 followed by three manual128. Both contenders failed before ready
+  without loading another model. Each worker reused its 566 converted tensor
+  identities (742818696 bytes); pending graph work and retained graph bytes
+  returned to zero, DAC scratch was released, and no extra GPU synchronization
+  or activation readback was introduced.
+- Post-GC tracked bytes in the first pilot were 26610326412, 26610338704 and
+  26610338704. The second measured 26610271116, 26610271116, 26610404364 and
+  26610420748: +149632 bytes across its manual series, including +16KiB in the
+  final pair. The fixed 32MiB warm-pair regression guard passed. This does not
+  establish zero retention or long-run leak freedom. Source review found no
+  unbounded per-job owner in the successful path; individual residual wrapper
+  identities are not observed. Driver allocation drift is a separate metric.
+- Minimum pre-GC sampled free/reclaimable memory was 20.0339%; maximum sampled
+  Metal allocation was 27029962752 bytes. Guards used a 40GiB observed budget,
+  finite request/series/outer deadlines, and the 15% floor; they are sampled,
+  cannot interrupt a GPU operation, and do not constitute a physical peak cap.
+  Both pilot servers/workers and the sequential MLX control exited. Final
+  process/listener checks passed; unrelated projects were untouched.
+- Auto mode is opt-in, uses the existing conservative advisory planner before
+  KV allocation, requires DAC scratch and no reference, and respects the user's
+  frame cap and 4096 total positions. Cold auto admitted 128 generated frames /
+  156 total positions, then emitted 60 and EOS. Exact duration is EOS-defined;
+  sufficient capacity for arbitrary text and mid-generation cache growth are
+  not implemented. Keep warm cold-inventory rejection: wrapper identity does
+  not prove mapped-page residency, so subtracting mapped weights was rejected.
+- All seven native outputs matched in codes and WAV. A fresh upstream control
+  at e7488935ec2ebfafd38ef2b58e290d79f3d05dc7 and checkpoint
+  5331ab509359c0e4a7e353a19e255ddf3e8152a8 used the same 128-frame cap, text,
+  prompt rows, seed, sampler settings and F32 tape prefix. Full 60-frame codes
+  and EOS matched each native output exactly. No new hidden/logit or waveform
+  numeric parity claim follows; layer-39 strict discrepancy and tolerances
+  remain unchanged. Native build, 41 CPU specs and 17 JS tests passed.
+- Evidence: `.landmark/evidence/drama3-studio-memory.json` and
+  `docs/drama3-studio-frontier.md`; private raw reports, harness, comparisons
+  and WAVs in `/opt/mldata_ssd/cogni-ml/drama3-studio-memory-20261018/`.
+  Next discriminator is allocation identity/lifetime tagging for the small
+  residual, followed by a bounded varied-input series if needed. Refresh on
+  source, checkpoint/config, input/tape/capacity, precision/tolerance,
+  allocator/graph policy, runtime/device/driver or concurrent workload change.
+  This batch is finished; Studio and models remain stopped. No background
+  service or push was authorized by this check.
+
+### 2026-10-18 — DRAMA resident KV growth during generation
+
+- The user parked the 149632-byte post-GC residual and prioritized expanding
+  the window during generation. This supersedes the previous growth exclusion;
+  the residual remains unresolved. Studio's optional automatic mode now plans
+  a final frame/position bound, starts at min(final, max(prompt, 64)), and doubles
+  persistent KV buffers as needed up to the admitted bound (at most 4096 total
+  positions). Manual allocation remains the default; auto still requires
+  DRAMA3_DAC_SCRATCH=1 and no reference. EOS determines duration, not text length.
+- Backbone token-major and tower head-major valid prefixes move directly on
+  the GPU. Attention reduction choice is pinned from the final bound, including
+  crossing 1024/1025. Growth occurs after the existing non-EOS scalar read,
+  without additional submit/wait, activation readback or inference-time GC.
+  Persistent allocations bypass the workspace; command leases retain old
+  buffers through copies. Output storage and sampler inputs stay fixed.
+- Admission reserves the conservative cold inventory, downstream DAC memory
+  and all prior KV generations. Studio rechecks host, Metal, process and
+  per-buffer limits before replacement allocations, with the same 15% floor
+  and 40GiB observed budget. Rejection allocates no replacement; allocation or
+  copy failure aborts the single-use generator. These are sampled guards, not
+  a hard physical reservation. Low-level callers own equivalent budget policy.
+- All 49 CPU examples, 17 JS tests, seven generator and five cache Metal
+  examples, native build and formatting/syntax checks passed. Multiple small
+  expansions, EOS/final-frame bounds, head-major strides and synthetic-prefix
+  wide attention at 1024/1025 were checked at graph depths 0 and 2. The three-row
+  pinned diagnostic compared 243 backbone boundaries per arm / 729 comparisons:
+  dynamic 1 -> 2 -> 4 is bit-identical to fixed8, with identical upstream metrics.
+  Strict upstream parity remains red at row1 backbone.layers.39.hidden; no
+  precision or tolerance change was made.
+- Full HTTP pilots completed auto64 -> 128 plus three fixed540 requests at
+  each graph depth, one worker per serial pilot. All eight had identical native
+  codes/WAV/tape, 60 frames and EOS. A fresh same-cap512 pinned MLX F32 core
+  control matched every code frame and EOS. Reads stayed control496/terminal494160;
+  submitted/completed/waits were 182 at depth0 and 122 at depth2, equal within
+  each pair, with pending0. Minimum sampled free memory 20.3375% / 20.2565%,
+  maximum sampled Metal 27052982272 / 27066695680 bytes. Contending model workers
+  rejected before loading; both pilots cleaned up normally, no owned children
+  or listeners left. No speed, general voice-quality or zero-retention claim.
+- Earlier depth2 cap512 and cap128 attempts rejected before growth allocation
+  and before generation respectively. Failure receipts omit numeric admission
+  values, so the exact causes remain open; the final same-binary cap512 recheck
+  passed without weakening guards. Correlated review: ROBUST for the tested
+  guarded no-reference Studio path. Full4096 model generation and automatic
+  reference windows remain unverified.
+- Evidence: .landmark/evidence/drama3-window-growth.json and
+  docs/drama3-studio-frontier.md. Private receipts/harness/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/. Refresh after source,
+  checkpoint/config, precision/tolerance, input/tape/capacity, allocator/graph,
+  runtime/device/driver changes; host workload invalidates admission headroom.
+  The bounded batch is finished; no model or Studio remains running. Serial
+  run_safe, 15% floor, external scratch/local weights, unrelated projects
+  untouched and exact-path local atomic commit/no-push boundaries still apply.
+
+### 2026-10-18 — DRAMA long multi-growth control at graph depths 0 and 2
+
+- Source 811f3c96 / the existing native binary completed serial cold-auto and
+  fixed-capacity pairs at both graph depths: 96 prompt rows, cap512, actual
+  growth 96 -> 192 -> 384 -> 607 at backbone/tower positions 96/95, 192/191,
+  384/383. All four native outputs match in complete codes, WAV bytes and
+  sampler inputs; all 512 code rows match pinned MLX. All runs cap without
+  EOS (23.77723356s); complete text delivery and upstream WAV parity are not
+  established. An independent CPU native Prompt.build matches all 96 MLX IDs.
+- Submit/complete/wait counts match auto/fixed within each depth: 1152 at
+  depth0, 641 at depth2, pending/retained0. Reads remain control4104 and
+  terminal4216832 bytes per job. Production sources and synchronization did
+  not change. Both private servers/workers exited normally, no owned children
+  or listeners remain; second owners reject before loading.
+- Entire-pair minimum sampled free/reclaimable memory is 20.990014% / 22.856045%
+  at depth0/2; automatic-only minima are 23.096251% / 23.554206%. Maximum sampled
+  Metal bytes are 27681030144 / 27680833536. The 15% floor, 40960MiB observed
+  budget and finite deadlines stayed unchanged. An initial MLX run was stopped
+  by the same 15% guard; retry used more headroom. These are sampled observations,
+  not a hard peak bound, physical residency proof or leak-freedom result.
+- Separate fixed608 common-prefix replays captured 1718 stages; four boundary
+  checkpoints and local require-path adjustments were added privately, with
+  arithmetic/cadence/tolerances unchanged.
+  Strict atol6e-5/rtol3e-4 comparison FAILS on 38/6443151 values, confined to 29
+  late tower-logit stages. First captured excess is step385; cause is unlocalized.
+  Captured backbone hidden/main logits/tower hidden pass. Counterfactual step512
+  has zero excess and is excluded. This is not a direct automatic-state trace;
+  old internal layer39 discrepancy remains open. Do not infer that exact sampled
+  codes close numeric parity or that growth caused the strict-logit mismatch.
+- Correlated review: ROBUST for the bounded native growth/output/counter claim;
+  strict numeric common-prefix parity is BROKEN for this captured set. Evidence:
+  .landmark/evidence/drama3-window-long.json and docs/drama3-studio-frontier.md;
+  private receipts/traces/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/. One cold/warm pair per
+  depth is not a speed or retention trend. Full-model 1024/4096, automatic voice
+  reference windows, and the parked 149632-byte residual remain outside scope.
+  Refresh on source/checkpoint/config/input/tape/capacity/precision/tolerance,
+  graph/allocator/runtime/device/driver changes; host workload changes admission.
+  Next numeric discriminator: trace the first excessive tower-logit coordinate
+  on the same prefix against MLX, without weakening the gate. Owned model and
+  Studio processes are stopped; no background service or push was started.
+
+### 2026-10-19 — DRAMA step-385 tower operator localization
+
+- The private fixed608 teacher-forced replay retains the exact 96 prompt IDs
+  and all 512 code rows from the long-window control, at graph depth2. This
+  equalizes the discrete prefix, not floating-point hidden or historical KV.
+  Native detailed snapshots and the passive MLX internal replay both preserve
+  all 1718 original captures / 6449296 values bitwise. MLX also preserves all
+  52 earlier boundaries; 312 unique internal stages per selected step are
+  compared at unchanged atol6e-5/rtol3e-4. Production source is unchanged.
+- At step385, shared-layer-0 embedding/enorm are bit-exact; incoming backbone
+  hidden and hnorm differ within tolerance. The first selected internal excess
+  is eh_proj at coordinates394/636. All 26 normalized layer outputs across
+  steps384/385 pass. Step384 already has internal excesses with passing logits;
+  this does not identify the earliest generation-wide drift or a growth cause.
+- Four-way GPU crossovers reproduce all 36 head and four EH original diagonals
+  bitwise, with independently matching raw BF16 payloads across loaders. Same-
+  input comparisons have zero excesses in 147456 head and 8192 EH values. Input
+  substitution alone reproduces both step385 head failures (head6/644,
+  head8/887) and both EH failures in each stack. For head6/644, total error
+  -7.66515732e-5 decomposes into MLX input effect -7.67111778e-5 and same-input
+  operator effect +5.96046448e-8. This is local attribution, not sole causation
+  through all later tower operations and differing historical KV states.
+- Graph cadence remains 608 submit/complete/waits, pending/retained0; all reads
+  are zero before drain. The 674 extra terminal snapshots explain 2696 extra
+  finite-status bytes (9568 vs6872), with no graph-counter change during reads.
+  GPU work stayed serial with finite deadlines, the 15% floor and 40960MiB
+  observed tree-RSS guard. No Studio was started. These are sampled guards,
+  not physical residency or peak-memory proofs.
+- Correlated mini-Quadrumvirate verdict: ROBUST for captured operator
+  localization. The strict prior38-value late-logit gate and old backbone39
+  discrepancy remain open. Next discriminator: same-input shared-layer-0 hnorm
+  crossover on the captured step385 backbone hidden vectors, before tracing
+  their producer. No precision/tolerance, speed or audio-quality claim changed.
+- Evidence: .landmark/evidence/drama3-tower385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned probes/reports under
+  /opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/. Source and binary hashes
+  are separately observed, not a complete reproducible-build attestation;
+  config/index pins do not establish full five-shard payload integrity.
+  Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
+  prefix/cache/graph/capture-policy/precision/tolerance changes. Missing or
+  changed private artifacts reopen dependent claims. No service or push.
+
+### 2026-10-19 — DRAMA step-385 hnorm contribution isolated
+
+- GPU hnorm crossovers at captured steps 384/385 reproduce eight fixture joins
+  and four original diagonals bitwise. Same original BF16 norm payload,
+  epsilon 1e-6 and F32 arithmetic; all 8192 same-input scalar comparisons pass
+  unchanged atol=6e-5/rtol=3e-4. At 385, norm-operator RMS on native hidden is
+  4.63713349e-7 versus 3.24896306e-6 for hidden input through MLX norm. This
+  local RMS comparison does not make norm arithmetic irrelevant.
+- Fixed-embedding hnorm-to-EH GPU composition at 385 reconstructs two original
+  diagonals and four earlier EH crosses bitwise; 8192 same-input EH values pass.
+  At coordinate 636, incoming hidden through MLX norm/EH alone differs by
+  -8.85725021e-5 against allowed 6.79394102e-5. At 394, the norm effect
+  -4.76837158e-6 contributes to crossing the bound. Replacing only native
+  hnorm at the same captured native hidden, keeping native EH and original
+  MLX reference fixed, resolves 394 but leaves 636 excessive (-9.22679901e-5).
+  Hnorm replacement alone is insufficient for this captured failure.
+- A fixture guard rejected the assumed bit-equal embedding halves at 384
+  before composition GPU execution. Source/log retained; restrict composition
+  to 385 and retain 384 as a standalone norm control. Do not count EXIT1 as pass.
+- Production source is unchanged. Each private native crossover drains once:
+  submit/complete/waits 1 at depth 2, pending/retained 0, no reads before drain,
+  terminal 32768 bytes. Each MLX probe evaluates four GPU outputs once; only
+  drained diagnostic analysis runs on CPU. Serial run_safe, configured 15%
+  memory guard, finite deadlines and tree-RSS guards remain; Studio stays
+  stopped. Graph retained bytes are accounting, not physical-memory readings;
+  run logs retain preflight values, not each run's minimum free percentage.
+- Correlated mini-Quadrumvirate: ROBUST for captured local attribution;
+  prior 38-value late-logit gate still FAIL, old backbone39 remains open.
+  Next discriminator: trace incoming backbone hidden from terminal norm and
+  preceding layer output on captured common inputs; keep historical KV
+  separate. No generation-wide origin, growth causality, speed or quality claim.
+- Evidence: .landmark/evidence/drama3-hnorm385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-hnorm385-20261019/. Selected payload/source/
+  binary pins do not attest full checkpoint or transitive build integrity.
+  Three source supplement hashes are post-run checks only. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/
+  graph/capture-policy/precision/tolerance changes, or missing/changed private
+  artifacts. No service or push.
+
+### 2026-10-19 — DRAMA terminal backbone norm isolated at step 385
+
+- Passive GPU captures at 384/385 preserve both backends' 1718 ordinary traces
+  bitwise, plus native674/MLX702 earlier details; 86 exact joins. Mixed inputs
+  are bit-equal, historical KV/SSM is not. All40 selected layer outputs at385
+  pass unchanged atol6e-5/rtol3e-4. At384, only layer39 output coordinate755
+  exceeds among selected layer outputs. Both terminal norm outputs pass;
+  these boundaries describe drift and do not establish a causal layer.
+- Terminal backbone RMSNorm is ordinary, eps1e-6; its converted BF16 weight
+  already includes the shift. Four GPU crossover diagonals reconstruct
+  bitwise, 8192 same-input values pass. Loaded Qwen/RMSNorm source paths and
+  hashes match passive replay. At385, norm-operator RMS3.16184852e-7 versus
+  incoming-input effect through MLX1.16726309e-6; both telescopes are exact.
+- Substituting only M(H_N) for N(H_N), with captured native pre-norm input,
+  fixed embedding and unchanged native tower HNorm/EH, retains both excessive
+  EH coordinates394/636. Replacement errors -7.46250153e-5/-9.36985016e-5
+  exceed allowed7.14400148e-5/6.79394102e-5. Original native HNorm/EH diagonals
+  reconstruct bitwise. This does not substitute the MLX diagonal M(H_M).
+- Production source is unchanged. Passive cadence remains608 submit/complete/
+  waits at depth2, no pre-drain reads;164 added GPU snapshots are diagnostic
+  work, not performance-neutral. Each standalone native probe drains once,
+  terminal32768/control0/diagnostic0 bytes. Serial run_safe retains configured
+  15% admission/stop threshold, finite deadlines and tree-RSS guards; logs do
+  not establish observed minima, graph retained bytes are accounting.
+- Correlated mini-Quadrumvirate: ROBUST within captured local attribution;
+  recomputed strict late-logit gate remains FAIL38 values in29 stages385–505.
+  Two analyzer schema EXIT1 attempts are retained, not passes. No Studio,
+  speed or quality claim. Next: layer39 attention/residual and stateless
+  norm/router/MoE crosses on identical captured inputs, keeping history separate.
+- Evidence: .landmark/evidence/drama3-backbone385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/. Eighteen source hashes
+  checked before/after runs match production811f3c96. Selected payload/binary
+  pins do not attest full checkpoint or transitive build integrity. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/graph/
+  capture-policy/precision/tolerance changes or missing/changed artifacts.
+  No service or push.
+
+## 2026-10-24 — Qwen2.5-VL pretrained 26-block prefix continuation
+
+- Active goal: connect the pinned pretrained Qwen2.5-VL-7B-Instruct text
+  prefix for Hy-Nomas and compare embedding plus all 26 decoder outputs with
+  official Transformers MPS BF16. The bounded S4/S32 pretrained prefix passes:
+  embedding plus all 26 decoder outputs have zero differing BF16 words in
+  both fresh raw-word runs. The full text encoder remains IN_PROGRESS.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`,
+  active pretrained slice. Hy-Nomas prompt/cropping and DiT integration remain
+  subsequent frontiers; no full generation is authorized by this probe slice.
+- Four downloaded checkpoint shards at revision
+  `eb6ba55b40ada64977147b52e50a4145ee89ac4f` cover 313 selected tensors.
+  Blocks 0--25 contain 12,119,005,184 BF16 bytes. The embedding source table
+  stays on disk; verified unique rows feed an exact-bit GPU gather. A shared
+  ordered stage/scratch workspace retains all hidden outputs. At 1280 tokens
+  its static byte count is 549,852,160, not a measured full-prefix footprint.
+  Seven BF16 scratch bindings and one F32 RMS-statistics binding are shared;
+  the latter adds four bytes per token across the entire prefix.
+- `Qwen25VLWeights`, `Qwen25VLEmbeddingPlan`, `Qwen25VLPrefixPlan`,
+  `examples/support/qwen25_pretrained_reference.py` and
+  `examples/qwen25_pretrained_prefix.cr` implement the opt-in slice. The
+  native consumer binds a caller-trusted oracle manifest digest to the exact
+  parsed bytes, retains the authenticated reference sidecar snapshot and
+  hashes source chunks actually uploaded. The runner has one terminal wait,
+  zero tracked encode allocations and no pre-terminal activation readback;
+  27 post-terminal diagnostic readbacks are explicitly reported.
+- Guarded `make spec_qwen25` passes 42 examples without skips, with
+  all 102 standalone and 70 shared constructor-weight stage comparisons at
+  zero absolute error. First/last tensor digest failures restore live buffer counts/bytes.
+  The final pinned-interpreter CPU suite passes 92 tests (22 constructor
+  oracle, 13 pretrained-prefix, 13 block/RMS and 44 memory-guard tests).
+  Release probe build, formatting and strict native syntax checks pass.
+  External evidence root:
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
+  `logs/prefix-continuation-receipt-v3.json`. The v2 index is historical.
+  Current native tests and refreshed release probes are
+  `logs/native-rms-regression-v3.*`, production native build is
+  `logs/build-rms-production-v1.*`, and CPU tests are
+  `logs/cpu-qwen-rms-final-v2.out`.
+- User authorization changes the bounded run floor: `11191f3e` adds
+  `--runtime-floor-pct` with default 15% and minimum 7.5%; current pretrained
+  probes explicitly select 10%. Exact decimal arithmetic governs startup
+  and runtime checks. Cache accounting, process cap, 64 MiB swap-growth stop,
+  deadline and fail-closed telemetry remain. `logs/guard-floor-final-v1.*`
+  passes all 44 CPU guard tests. At 64 GiB, a 12.5 GiB process budget with
+  10% reserve requires 18.9 GiB startup headroom. Sampled guards neither
+  reserve memory nor bound instantaneous peaks.
+- `logs/oracle-s4-v9.*` and `logs/native-prefix-s4-raw-v1.*` pass: all 27 states
+  have zero differing BF16 words, one native terminal wait, zero tracked
+  encode allocations,
+  zero pre-terminal activation reads and 27 post-terminal diagnostic reads.
+  Trusted `fixtures/prefix-s4.json` SHA256 is
+  `c399cc50ef8a2435998fbd8c5dfc4121b4c414d538e33a023e4cd51225ca2398`.
+- `logs/oracle-s32-v1.*` produces the right-padded 32-token prefix at position
+  offset 7; trusted `fixtures/prefix-s32.json` SHA256 is
+  `40c665e0ce5903f43411d39a46379e8dda64ddbe41bd058f15552c877ccba96e`.
+  The historical `logs/native-prefix-s32-v1.*` rejects state 25 (892/114,688
+  failures,
+  max_abs 0.125) and state 26 (1,779 failures, max_abs 0.125); states 0--24
+  have zero absolute error. Wait/allocation/readback contracts still pass. Both successful
+  official runs stay below the sampled 12.5 GiB cap with zero observed swap
+  growth; S32 peaks at 13,320,652,576 sampled group bytes, only 101,120,224
+  below the cap. Do not widen the unchanged finite gate.
+- The official layer-24 standalone producer first reproduces captured S32
+  state 25 bit exactly, then captures actual RMS operations through a
+  pass-through TorchDispatch observer. Trusted block fixture SHA256 is
+  `4aaad9f784d86afbea6cd29868869af8889bd3b4b4bf907b0066d192d5b81960`.
+  Native MPSGraph inverse root differs by one F32 ULP in eight rows;
+  19 normalized BF16 words in row 30 cross a rounding boundary, leading to
+  the 892 hidden-output failures. Graph sqrt/division does not change that
+  result. A safe-math Metal `1.0f / precise::sqrt(x)` plus F32 scaling and
+  explicit BF16 rounding eliminates the downstream discrepancy. A remaining
+  one-ULP moments difference is recorded, not claimed exact.
+- `logs/native-block24-rms-production-v1.*` passes all 17 stage gates and
+  output with zero absolute error. Production normalized scratch equals the
+  independent precise trace bit exactly; the old graph trace remains a
+  separately reported negative control. Both production RMS norms use the
+  precise path: 19 prepared graph/Metal steps per block instead of 15, with
+  one shared F32 scalar per token and no extra host wait or encode allocation.
+- `logs/native-prefix-s4-raw-v1.*` and `logs/native-prefix-s32-raw-v1.*` both
+  exit zero: all 54 state comparisons across the two runs have zero differing
+  BF16 words, with the same one-wait/zero-allocation/no-preterminal-readback
+  contract. The signed-zero adversarial control prevents treating numerical
+  equality alone as bitwise identity; raw counts remain distinct from the
+  unchanged tolerance gate. Native peaks are 12,468,626,792 and 12,527,560,256
+  sampled group bytes, minimum cache-aware headroom 20,975,714,304 and
+  20,342,177,792 bytes, pressure-free >=63%, and no observed swap growth.
+- Next falsifier: declare a bounded longer-prefix memory plan before checking
+  the 1280-token Hy-Nomas prompt against official hidden states.
+  S1280, tokenizer/cropping, full-model APIs and video remain unqualified.
+  Historical startup failures v1--v5/v7 and harness failures v6/v8 are retained;
+  they establish no numerical parity. Model/Studio/video remain stopped.
+  The bounded S4/S32 pretrained-prefix DoD passes; correctness-probe timings
+  establish no model-wide speedup. Refresh on source,
+  runtime/compiler, checkpoint, geometry, attention/mask, numerical policy or
+  buffer-lifecycle changes.
+
+## 2026-10-24 — S1280 pretrained prefix rejection and RMS continuation
+
+- Active goal: compare all selected pretrained Qwen2.5-VL blocks 0--25 at
+  S1280 against official Transformers MPS BF16 for Hy-Nomas. Both complete;
+  all 27 states are compared, but S1280 parity remains IN_PROGRESS. The
+  deterministic case repeats the S32 fixture's 20 visible IDs 63 times,
+  then adds 20 right-padding IDs: 1,280 query rows, 1,260 active keys, offset
+  seven and 18 unique embedding rows. This is not tokenizer or natural-prompt
+  qualification. Return pointer: `docs/qwen25-hy-nomas-frontier.md`, S1280
+  check; DiT remains `docs/hy-nomas-native-frontier.md`.
+- Sequential guarded oracle/native full-prefix runs use the authorized 10%
+  floor, file-cache accounting, 15 GiB sampled process cap, 64 MiB swap-growth
+  stop and 600-second deadline. Named native admission is 12,681,448,704
+  bytes. Observed oracle/native peaks are 14,736,099,344 / 13,606,266,912
+  bytes, minimum estimated cache-aware headroom 17,976,426,496 /
+  19,213,680,640 bytes, with no observed swap growth or guard violation.
+  Sampled limits are not instantaneous reservations. Native encoding has
+  one terminal wait, zero tracked allocations and no pre-terminal reads.
+- Official `oracle-s1280-v1` exits zero; trusted manifest SHA256 is
+  `b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a`.
+  Native `native-prefix-s1280-v1` exits one numerically: embedding is exact,
+  state 1 has 596/4,587,520 failures (max_abs 0.00390625), and accumulated
+  state 26 has 3,965,336 failures (max_abs 28). Do not widen the finite
+  `atol=rtol=2e-5` gate or treat the small initial discrepancy as parity.
+- The one-block diagnostic now accepts layers 0--25 and input/post-attention
+  RMS sites. It preserves authenticated fixture/weight links and bounds,
+  dynamic stage names, raw BF16 diagnostics and the one-wait contract.
+  Official block-0 fixtures reproduce full-prefix state 1 raw-bit exactly.
+  Native stages through attention residual are exact; post-attention norm
+  first differs in 28 raw words (27 finite failures), reproducing the final
+  596-word hidden discrepancy. The new default-input runner passes the
+  old layer-24 S32 fixture with all 17 stages raw-BF16 exact. Focused CPU
+  producer tests pass 29 cases; release build and Crystal formatting pass.
+- The actual official post-attention RMS capture has manifest SHA256
+  `d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9`.
+  On the authenticated identical residual, the native precise trace differs
+  in 670 variance rows (max_abs 2.2351741790771484e-8), 371 inverse-root rows
+  and 50 pre-gain BF16 words. Actual production inverse-root scratch and
+  normalized BF16 scratch are raw-bit exact to that trace after the sole
+  terminal wait. Pre-root production variance has not been exposed; an exact
+  reduction-order cause remains a hypothesis, not a verified conclusion.
+- SSD-only `power(x,2)` and separate materialized-F32-square controls both
+  produce identical variance/root/normalized hashes and all stage discrepancy
+  counts. Reject both as repairs for this case; production math is unchanged.
+  Records, runtime/source pins, reports, command/guard logs and limitations:
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-s1280-receipt-v1.json`.
+  Prior S4/S32 receipts remain historical evidence for their unchanged scope.
+- Correlated MiniQuad review is ROBUST for authenticated layer/site binding,
+  lifecycle reporting and bounded post-RMS localization. It does not establish
+  S1280 parity, an exact reduction-order cause or performance improvement.
+- Next falsifier: isolate same-input F32 square values and mean reduction
+  against the actual production statistics graph, then recheck block 0
+  before repeating all 26 blocks. Outstanding questions are which reduction
+  boundary changes the BF16 rounding and whether later blocks need another
+  localization after that repair. Standing authority covers bounded native
+  and official GPU correctness probes, sequential model residency, unchanged
+  tolerances, a 10% floor and no added host synchronization. No full generation
+  is admitted. Refresh on source, checkpoint/fixture, geometry, precision,
+  compiler/SDK/OS/device or lifecycle changes. No speedup is claimed.
+
+## 2026-10-24 — Post-attention RMS square/mean localization
+
+- Active goal: isolate block-0 post-attention RMS statistics on the exact
+  authenticated S1280 attention residual, without full generation. Return
+  pointer: `docs/qwen25-hy-nomas-frontier.md`, isolated RMS section. S4/S32
+  remain qualified; the full S1280 prefix remains rejected. Production math
+  is unchanged by this diagnostic slice.
+- The standalone official RMS capture consumes only that residual and the
+  pinned 7,168-byte gain. All five old RMS intermediates and gained output
+  reproduce the old block trace raw-bit exactly. Its fresh manifest SHA256
+  is `c068b70a4a2c0020eb2b42cb639cc82e33c457758c43a237b474eaf18b0b3ca7`.
+  Source stage manifest remains d29c8a6b...31b9. A first harness launch rejects
+  optional-epsilon metadata before GPU setup; it is not numerical evidence.
+- Native F32 cast is raw-bit exact. Native square differs in 4,465,460 of
+  4,587,520 words, max_abs 3.814697265625e-6. Mean and +epsilon differ in
+  670 of 1,280 rows, max_abs 2.2351741790771484e-8. All F32 values pass the
+  unchanged `atol=rtol=2e-5` gate; raw equality is separately false.
+- Feed the authenticated upstream F32 squares through the same native
+  materialized mean/+epsilon graph: both outputs match all 1,280 upstream
+  rows raw-bit exactly. Direct production +epsilon equals the native-square
+  materialized result, and an explicit compile-optimization-level-0 control
+  equals direct production. Thus no standalone mean discrepancy is observed
+  on identical squares for this input. The upstream-square control is a
+  separately compiled materialized graph, not an injection into the fused
+  production helper. Do not promote it into that untested counterfactual.
+- The separate official MPS expression control reproduces the two arms:
+  `x.pow(2)` squares/mean match the official RMS, while `x*x` squares/mean
+  match native hashes. Unequal squares are 1--2 ULP above power; unequal
+  means are at most four ULP above. Pinned Torch runtime BinaryOps routes
+  scalar power through generic MPSGraph power. Its closed internal math is
+  unknown. The old native constant-exponent power negative remains valid
+  for that formulation; it did not reproduce Torch's scalar-feed graph.
+- Sequential isolated guards preserve the file-cache-aware 10% floor,
+  2 GiB sampled process cap, 64 MiB swap-growth stop and 180-second deadline.
+  Oracle/native-v1/native-v2/expression-control peaks are 1,520,306,120 /
+  121,537,352 / 252,838,872 / 1,456,620,936 bytes, with no observed swap growth
+  or guard violations. Native v2 uses 64,256,000 named bytes, one terminal
+  wait, eight post-wait readbacks, zero tracked encode allocations and no
+  pre-terminal activation reads. Sampling is not a peak reservation.
+- Thirty-two Python tests and seven focused Crystal examples pass. Native
+  normal/cpu-only no-codegen, strict Clang warnings, release link and format
+  checks pass. Correlated MiniQuad is ROBUST for authenticated fixed-input
+  localization and lifecycle, not a production fix, full-prefix parity or
+  speedup. Source/fixture/runtime/compiler/SDK/binary/object pins, exact
+  commands, guards and limitations are indexed at
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-reduction-receipt-v1.json`.
+  Reused companion object source ancestry remains opaque and is disclosed.
+- Next falsifier: match Torch's GPU-fed exponent power path, then test a
+  bounded native repair against the saved RMS and block 0 before rerunning
+  all 26 blocks. Existing standing authority permits isolated native and
+  upstream GPU correctness probes with the unchanged tolerances, no extra
+  host synchronization and 10% reserve. Full-prefix/block admissions and
+  full generation do not follow from this small probe's budget. Refresh on
+  scoped source, checkpoint/fixture/input, geometry/precision, compiler/SDK/
+  OS/device, execution route or buffer-lifecycle changes, or artifact loss.
+
+## 2026-10-25 — GPU-fed RMS power matches the saved upstream input
+
+- Active goal: reproduce upstream block-0 post-attention RMS square values
+  on the authenticated S1280 residual, without a model load or full generation.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, GPU-fed exponent section.
+  S4/S32 qualification is retained; production math is unchanged and S1280
+  full-prefix qualification remains rejected.
+- The matched native F32 `[1]` constant/buffer pair uses the same primary
+  input, power operator, materialized mean/epsilon targets and precompiled
+  executable route. Constant 2 reproduces 4,465,460 differing square words
+  and 670 differing mean/epsilon rows. Prepared GPU-buffer 2 reproduces
+  all 4,587,520 official squares and all 1,280 means/epsilon values raw-bit
+  exactly. A third Int64 `[1]` feed, explicitly cast to F32 like the pinned
+  Torch source, is also exact. The Int64 cast is not needed for this fixture's
+  observed parity. All eight earlier baseline output hashes are unchanged.
+- This falsifies the need for a different graph-encode API to reproduce these
+  materialized stages on this saved input. It does not establish closed
+  MPSGraph constant-folding internals, all-input parity, a fused production
+  RMS replacement, full-prefix repair or a speedup. The scalar allocator
+  branch used by the earlier Torch run was not observed. Aggregate raw
+  parity remains false because baseline/constant negative controls remain.
+- `native-rms-gpu-exponent-block0-post-v1` exits zero with 119,336,972 named
+  bytes, 12 prepared executable steps, one terminal wait, 17 post-wait reads,
+  zero tracked encode allocations and no pre-terminal activation reads.
+  Unchanged `atol=rtol=2e-5` passes throughout. The file-cache-aware 10% floor,
+  2 GiB sampled process cap, 64 MiB swap-growth stop and 180-second deadline
+  hold: sampled peak 369,050,704 bytes, minimum headroom 19,853,262,848 bytes,
+  no observed swap growth or limit violation. Sampling is not a reservation.
+- Eight focused Crystal tests, normal/cpu-only no-codegen, strict Clang,
+  release link, format and diff checks pass. MiniQuad review is ROBUST only
+  for the authenticated fixed-input discriminator and lifecycle. Reviewers
+  share lineage; reused companion object bytes are pinned, with opaque
+  source ancestry. Fresh source/build/input/run pins and claim limits are
+  indexed in `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-gpu-exponent-receipt-v1.json`.
+- Next falsifier: use a prepared immutable GPU exponent in the fused
+  production-statistics target, then check full RMS/gain on the same saved
+  residual. Block 0 and all 26 blocks require separate memory admission;
+  neither is authorized by this isolated probe's budget. Refresh on scoped
+  source, fixture/input, geometry/precision, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.
+
+## 2026-10-25 — Connected GPU-fed RMS/gain matches the saved S1280 input
+
+- Active goal: continue the authenticated block-0 post-attention RMS repair.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, connected RMS section.
+  The new opt-in diagnostic keeps the statistics graph's sole epsilon target,
+  feeds a retained immutable F32 `[1]` exponent 2.0, then runs existing precise
+  Metal root/normalize and BF16 gain. Production defaults remain unchanged;
+  the earlier S1280 full-prefix rejection remains open.
+- `native-connected-rms-block0-post-v1` reproduces upstream epsilon/root F32,
+  normalized F32/BF16 and BF16 gained output raw-bit exactly. Its second fed
+  arm also matches root/normalized BF16/gain using production-style in-place
+  scalar scratch and the non-trace normalize kernel. Their three common
+  outputs match exactly. Legacy control retains 670 epsilon and 371 root
+  differences, 1,276,635 normalized F32 differences, 50 normalized BF16 words
+  and 28 gained BF16 words (27 gain tolerance failures). The fed arms pass
+  unchanged `atol=rtol=2e-5`; tolerances are not used as raw parity.
+- The bounded selective reader authenticates and uploads only the selected
+  7,168-byte BF16 gain vector, never maps or uploads the shard. The 12-step
+  native plan uses 100,958,212 named bytes, one terminal wait, 13 post-wait
+  reads, zero tracked encode allocations and no pre-terminal activation reads.
+  File-cache-aware guard: 10% floor, 2 GiB sampled process cap, 64 MiB swap
+  stop, 180 seconds; observed peak 393,217,104 bytes, minimum headroom
+  19,062,308,864 bytes, zero observed swap growth and no violation. Sampling
+  is not a reservation or instantaneous peak proof.
+- Fourteen focused Crystal tests, normal/cpu-only no-codegen, strict Clang,
+  release link, format/diff checks pass. Correlated MiniQuad is ROBUST within
+  this fixed-input diagnostic/lifecycle scope. The F32 feed reproduces the
+  effective post-cast power operand, not Torch's Int64 feed/cast topology.
+  Preserve the exact caller-supplied RMS manifest digest in the launch pins.
+  No all-input, full-block/prefix or speedup claim follows. Companion objects
+  retain pinned bytes but opaque source ancestry; the build is not hermetic.
+  Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-connected-rms.json`.
+- Next falsifier: wire the prepared shared exponent into both RMS sites in an
+  opt-in block plan and account for its lifetime/footprint, then separately
+  admit block 0 before all 26 blocks. The small diagnostic budget admits no
+  full block or prefix run and no full generation. Refresh on scoped source,
+  fixture/input, precision/geometry, toolchain/SDK/OS/device, execution or
+  lifecycle changes, evidence loss or hash mismatch.
+
+## 2026-10-25 — Both GPU-fed RMS sites close saved S1280 block-0 parity
+
+- Active goal: qualify the prepared exponent in both RMS sites of block 0.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, block-0 GPU-fed RMS section.
+  An opt-in additive native ABI retains one private immutable shared F32[1]
+  exponent 2.0 for both statistics steps; the old constructor/default and
+  PrefixPlan are unchanged. The extra four named bytes are admitted before
+  allocation. The existing 19-step block encode implementation is unchanged.
+- A fresh same-binary legacy/fed pair on the authenticated saved S1280 fixture
+  confirms all 17 candidate stages raw-bit exact: 116,326,400 BF16 words.
+  Final hidden output also matches independently retained prefix state 1
+  (4,587,520 words). Post-attention normalized scratch and 1,280 F32 inverse
+  roots are exact. Input RMS after gain is covered by the stage gate; its
+  inverse root is overwritten by scalar scratch reuse and not retained here.
+  Legacy reproduces 27 tolerance failures/28 raw differences at post RMS
+  and 596 final-output failures/differences. `atol=rtol=2e-5` is unchanged.
+  Older standalone square-statistics traces remain reported negative controls;
+  direct official scratch/root comparisons gate the fed candidate.
+- Both runs have one terminal wait, 29 post-wait reads, no pre-wait activation
+  reads and zero tracked encode-time MetalBuffer allocations. In-flight release
+  and null/wrong-size/wrong-value exponent feeds are rejected. Candidate named
+  bytes: 854,129,924. Guard: file-cache-aware 10% reserve, 5 GiB sampled process
+  cap, 64 MiB swap-growth stop, 180 seconds. Candidate sampled peak 2,076,641,416
+  bytes, minimum headroom 27,374,583,808 bytes, pressure-free minimum 74%, zero
+  observed swap growth and no guard abort. Sampling is not a hard peak bound.
+- Thirty-five focused Crystal examples and normal/cpu-only no-codegen, strict
+  Clang, release link, format/diff checks pass. Correlated MiniQuad is ROBUST
+  for this saved-input block/lifecycle scope. Oracle captures were retained and
+  authenticated, not recaptured. Companion objects have pinned bytes but opaque
+  source ancestry. No all-input, speedup, full-prefix or generation claim.
+  Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/block0-fed-rms-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json`.
+- Next falsifier: separately admit the option in all 26 prefix blocks, including
+  exponent accounting and shared-workspace lifecycle, then compare all retained
+  S1280 hidden states. The earlier full-prefix rejection remains open; defaults
+  remain legacy. No full generation. Rollback: disable the block option. Refresh
+  on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.
+
+## 2026-10-25 — GPU-fed RMS closes saved S1280 26-block prefix parity
+
+- Active goal: connect the qualified prepared exponent to both RMS sites in
+  every prefix block and compare S1280 hidden states. Return pointer:
+  `docs/qwen25-hy-nomas-frontier.md`, S1280 prefix GPU-fed RMS section.
+  PrefixPlan exposes an opt-in `rms_power_fed` flag, forwards it to all plans,
+  and admits 26 private four-byte feeds before workspace allocation. Legacy
+  defaults and native block arithmetic/encode are unchanged. Rollback: disable
+  the option. Shared scratch remains serial; hidden outputs remain retained.
+- Fresh guarded candidate exits zero against the authenticated retained official
+  MPS BF16 oracle: embedding plus outputs of blocks 0--25, all 123,863,040 BF16
+  words raw exact, zero tolerance failures, unchanged `atol=rtol=2e-5`.
+  All 26 plans bind the fed path (52 configured RMS sites); only 27 hidden
+  boundaries are retained and compared, not 52 RMS intermediates. The earlier
+  prefix negative uses an older binary and is historical, not a new same-binary
+  pair. No new upstream capture or all-input/causal/speedup claim follows.
+- Named bytes are 12,681,448,808, including 104 exponent bytes. Shared stage/
+  scratch is 311,301,120 bytes and 26 retained outputs total 238,551,040 bytes;
+  their existing aggregate workspace budget is 549,852,160 bytes. Exact-fit and
+  one-byte-short admission checks pass for one/26 blocks. One terminal wait,
+  zero pre-terminal activation reads, zero tracked encode-time allocations,
+  27 post-wait reads, and premature release rejection are observed. Single-run
+  GPU interval: 2.650 seconds; guarded whole-process time: 30.203 seconds.
+- File-cache-aware guard preserves 10% reserve, 15 GiB sampled process cap,
+  64 MiB swap-growth stop and 600-second deadline. Sampled peak is
+  13,596,551,152 bytes, minimum headroom 17,448,779,776 bytes, minimum pressure-
+  free percentage 58, no observed swap growth and no violation. Sampling is
+  not a reservation or instantaneous peak bound. Thirty-six focused Crystal
+  examples and normal/cpu-only no-codegen, strict Clang, release link and
+  format/diff checks pass. Correlated MiniQuad is ROBUST for this saved-input
+  scope. Reused companion objects have pinned bytes but opaque source ancestry.
+- Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-fed-rms-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-prefix-fed-rms.json`.
+  Next falsifier: a distinct natural text-only prompt with authenticated upstream
+  tokenization, mask/positions and cropping semantics before connecting the
+  Hy-Nomas text-conditioning pipeline. Keep opt-in; no full generation. Refresh
+  on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.
+
+
+## 2026-10-25 — Full saved-input Hy-Nomas DiT and authenticated Q4 loader
+
+- Active task: complete the DiT checkpoint/cache and one GPU forward before
+  diffusion generation. The complete 34,213,991,280-byte F32 checkpoint at HF
+  `bac719a80c8d02f91c485fca804bb8221e149b70` was downloaded and its whole LFS
+  digest verified. All 54 blocks plus 48 global bindings are authenticated.
+  Return pointer: `docs/hy-nomas-q4-dit-frontier.md` and
+  `.landmark/evidence/2026-10-25-hy-nomas-q4-dit.json`.
+- Q4 block/vector payloads total 4,593,162,240 bytes versus 16,314,144,768 BF16
+  payload bytes. Native keeps compact blocks resident and reconstructs one
+  reused BF16 block on GPU, sharing F32 MPS staging and block scratch. This is
+  not full-model expansion. Full-stack APIs remain opt-in; existing 2--8 block
+  defaults are unchanged. Rollback: omit/revert the new full-stack path.
+- Frozen-source upstream BF16 and Q4 forwards each execute all 54 blocks at
+  B1/V5280/T1280/J6560, valid attention prefix 5303, timestep 500. Corresponding
+  native runs each pass 14 selected captures raw exact twice, including blocks
+  0/7/53, conditioning and final latent. Repeat poisons 214 exposed mutable
+  buffers; in-flight release is rejected. Each native request has zero tracked
+  encode allocations/preterminal reads, 1,244 command segments and one terminal
+  wait. This uses a saved Qwen26 crop, not live Qwen-to-full-DiT generation.
+- Native BF16 named storage 22,616,779,332 bytes, Q4 storage 10,895,796,804.
+  Observed v3 encode-through-terminal times are 6.42 s BF16 and 6.55--6.56 s Q4;
+  earlier 13 s Q4 latency did not reproduce. These are not interleaved speedup
+  measurements or seconds-of-video claims. All four v3 guards pass with 10%
+  file-cache-aware reserve, bounded footprints/deadlines and 64 MiB swap-growth
+  stop; zero observed swap growth. Periodic samples are not peak guarantees.
+- Same-weight execution correctness does not establish compressed quality:
+  Q4-vs-original-BF16 final latent relative-L2=1.184475, cosine=.638643,
+  RMSE=.323331. All captures are finite, but the unchanged 2e-5 threshold fails
+  for 10/14 captures. Keep Q4 opt-in; no quality promotion or tolerance widening.
+- Direct Qwen Q4 projection discriminator runs on GPU without a decoded weight
+  buffer in its direct branch. F32-input and preconverted-F16-input paths match
+  bitwise. Qwen uses F16 operands/F32 accumulation, unlike the qualified BF16-
+  decoded/F32-MPS path. Even a both-operands-F16 MPS control leaves 17/47,104
+  failures at 2e-5. Decode arithmetic and reduction have not been isolated;
+  direct kernel is not promoted. Combined six-branch timing is not its speed.
+- Original mapped-source BF16 upstream runs hit the unchanged swap stop.
+  Stable driver allocation refuted accumulation of 54 GPU weight sets. Short
+  transfer-only mapped/clone probes did not reproduce host growth; source review
+  refuted whole-checkpoint registration per tensor. An explicit owned-raw-F32
+  source alternative passes 54 blocks, but does not diagnose/fix the mapped
+  route. Its math/rounding remain on MPS. Upstream uploads can block internally;
+  only the native chain is qualified for the declared terminal-wait discipline.
+- Verification: 25 CPU tests, 7 new Crystal/Metal examples, 11 existing-path
+  regression examples, release builds, scoped format/diff checks; correlated
+  Mini-Quad ROBUST for the declared saved-input scope. Oracle 59-file source
+  snapshot is preserved/hash-checked. Native binary/object/source hashes are a
+  post-run identity capture, not a hermetic build attestation.
+- Next falsifier: localize Q4 sensitivity on identical-input projections and
+  test higher precision/sparse corrections; independently match direct-GEMM
+  decoded weights/reductions before full-block timing. No full generation.
+  Standing authority: GPU compute/handoffs, no new intermediate waits, finite
+  2e-5 gates, 10% reserve, process/swap/deadline guards. Refresh after scoped
+  source/cache/fixture loss or change, quantizer/dtype/geometry/mask, ownership,
+  execution, compiler/SDK/OS/device or MPS runtime changes.
+
+### 2026-10-25: direct Hy-Nomas Q4 mismatch localized to long-K numerical path
+
+- Return pointer: `docs/hy-nomas-q4-reduction-frontier.md` and
+  `.landmark/evidence/2026-10-25-hy-nomas-q4-reduction.json`.
+- The block-0 text FF down projection (M23/K8192/N2048) reproduces the same
+  17/47,104 failures against identical-F16-operand MPS at finite 2e-5. GPU
+  comparison finds zero bit differences across all 16,777,216 canonical/Qwen
+  decoded F16 weights. Same-kernel self/one-bit-injection controls pass. Dense
+  SIMD clone and actual direct Q4 outputs are bitwise equal before/after bias;
+  both MPS decoder branches are also bitwise equal. Decode mismatch is refuted
+  for this projection/input; direct Q4 is still unqualified.
+- Tested K32/256/2048/4096 prefixes match MPS bitwise; K6144 has 5 tolerance
+  failures and K8192 has 17. Raw and biased full-K failures are the same indices.
+  Numerical accumulation is isolated, but internal MPS order, precision, fusion
+  and kernel choice remain unknown. Prefix geometry changes are not captures
+  inside the full-K dispatch. No production arithmetic/default changes.
+- Two guarded runs reproduce all common bank hashes. One command segment,
+  one terminal wait/readback, zero tracked encode allocations/early reads;
+  10% cache-aware reserve and 64 MiB swap stop retained, zero sampled swap
+  growth. v2 named bytes 229,455,088; short-run telemetry does not establish a
+  reliable Metal/MPS peak. The terminal sidecar independently reproduces all
+  15 comparison summaries. Mini-Quad ROBUST within this diagnostic scope.
+- Next falsifier: alternative partial-sum grouping on identical full-K operands,
+  followed by upstream gates before promotion. This does not fix Q4-versus-BF16
+  quality or establish full-block/generation performance. Refresh on source,
+  fixture/cache, geometry, precision, ownership, toolchain/OS/device/MPS changes.
+
+### 2026-10-26: two contiguous full-K partial sums reproduce MPS
+
+- Return pointer: `docs/hy-nomas-q4-reduction-frontier.md` and
+  `.landmark/evidence/2026-10-26-hy-nomas-q4-grouping.json`.
+- At M23/K8192/N2048, splitting the dense decoded-F16 SIMD diagnostic into two
+  contiguous K4096 partials and adding them on GPU reproduces full-K MPS bitwise
+  across all 47,104 raw and biased outputs. One-group controls retain the same
+  17 tolerance failures. All other tested 2/4/8/16/32 contiguous/strided groupings
+  with fold/tree merges fail the unchanged finite 2e-5 gate.
+- Two runs reproduce all 68 bank hashes; the previous 20 baselines stay exact.
+  One segment and terminal wait/readback, zero tracked encode allocations/early
+  reads. All 12 coverage slices count each K32 tile once; partition ownership
+  additionally relies on reviewed address arithmetic. Reused partials are
+  poisoned before dispatch. Named GPU bytes 253,596,912. Both guards pass at 10%
+  cache-aware reserve, 2 GiB process budget, 64 MiB swap stop, 120-second deadline;
+  zero observed swap growth. Samples are not a peak bound.
+- Separate checker recomputes saved outputs and original-BF16 comparisons;
+  correlated Mini-Quad ROBUST within this input/shape. The G2 BF16 lossy gate
+  still fails (47,098 entries, RMSE 0.617303). This result neither identifies MPS
+  internals nor qualifies Q4 quality/performance. Direct packed-Q4 is unchanged.
+- Next falsifier: apply two contiguous partials to direct Q4 without global
+  weight expansion; repeat same-operand/upstream gates before timing/promotion.
+  No full generation. Refresh on source/cache/fixture loss or change, geometry,
+  precision, ownership, compiler/SDK/OS/device or MPS runtime changes.
+
+
+### 2026-10-26: direct packed-Q4 G2 matches identical-operand MPS
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-q4-direct-split.json.
+- On authenticated M23/K8192/N2048 inputs, the opt-in packed Q4 kernel computes
+  contiguous K4096 F32 partials and merges them on GPU. All 47,104 raw and biased
+  outputs match dense G2 and MPS bitwise in two guarded runs. Full packed row
+  pitch and the original decoder are retained; no global expansion is consumed
+  by the new branch. Dense/MPS controls still allocate expanded weight buffers.
+- Packed G1 reproduces the old direct kernel and its 17 MPS failures. All 72
+  bank hashes repeat and all 68 previous hashes remain fixed. Reused partials
+  are NaN-poisoned; GPU K32 visits and owner masks pass for G1/G2. Counters track
+  computed offsets; reviewed pointer arithmetic and outputs support actual loads.
+- One segment and terminal wait/readback; zero tracked encode allocations/early
+  reads. Named GPU bytes 255,112,432. Both 10% file-cache-aware guards pass with
+  2 GiB cap, 64 MiB swap stop and 120-second deadline; no observed swap growth.
+  Samples do not bound peak memory. Separate checker recomputes 122 summaries
+  per run; captured-data and admission negatives pass. Correlated Mini-Quad
+  Adversary ROBUST only within this diagnostic scope.
+- Original-BF16 lossy gate still fails: 47,098 values, RMSE 0.6173029922, relative
+  L2 0.0470375793. No speed, quality, production/default or full-block claim.
+  Next: isolated paired Q4 G1/G2 versus MPS timings, then larger-token numerical
+  gates before integration. Refresh on changed source/cache/fixture, geometry,
+  precision, ownership, compiler/SDK/OS/device or MPS runtime; artifacts must remain
+  available. No full generation.
+
+
+### 2026-10-26: paired Q4 timings expose a shape-dependent reduction boundary
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-q4-paired.json.
+- Five guarded projection runs compare packed G1/G2 (tile decode, F32 merge,
+  bias), resident F32 MPS, and Q4 expansion plus MPS on K8192/N2048. Timed roots
+  exclude counters, copies and correctness controls; each contains 16 complete
+  calls. Balanced directions give six measured samples per arm per run.
+- M23 G2 is 0.239-0.240 ms versus resident MPS 0.320-0.339 ms and expansion+MPS
+  0.532-0.547 ms; every one of 12 paired rounds favors G2. M32 G2 is 0.238 ms
+  versus MPS 0.336 ms. G2 is bitwise MPS at both shapes.
+- At M1280 G2 is 4.999-5.302 ms versus resident MPS 3.999-4.151 ms; every one of
+  12 pairs favors MPS. G2 equals dense G2 but fails 949 elements against MPS;
+  G1 now matches MPS bitwise and is also slower. Reject all-M G2 promotion.
+- Cyclic byte checks show every direct/dense/packed bank unchanged across M.
+  Only MPS raw/biased banks change at M1280, where they equal cyclic M23 G1. This supports
+  shape-dependent accumulation, not a claim about MPS's private implementation.
+  Larger M repeats 23 saved real rows; full-prefix distributions are untested.
+- All runs have 65 async roots/64 continuations, zero timed-root overlap, one
+  final wait/readback, no preterminal reads or tracked encode buffer allocation.
+  Named control storage is 192,699,488/195,132,512/532,511,840 bytes. Packed
+  projection weights use 9 MiB versus a 64 MiB resident F32 MPS matrix.
+- The 10% file-cache-aware reserve, 2 GiB run cap, 64 MiB swap stop and 120-second
+  deadline hold; sampled swap is flat, minimum headroom 31,811,829,760 bytes.
+  Sampling is not a peak bound; counters exclude private MPS allocations.
+- Postterminal byte checker, 13 CPU tests, seven captured-report falsifiers
+  and five pre-Metal admission negatives pass. Correlated Mini-Quad ROBUST
+  within projection scope. Original-BF16 saved-output quality gate still fails.
+  No production/default, full-block, full-prefix or generation claim.
+- Next: reduce repeated Q4 decode across M tiles while preserving full-K G1
+  accumulation at M1280. No M32-to-M1280 dispatch threshold is qualified.
+  Refresh on changed source/cache/fixture, geometry, repetition/order schedule,
+  precision, ownership, compiler/SDK/OS/device/MPS or missing external artifacts.
+
+
+### 2026-10-26: full-K Q4 tile reuse preserves bits but does not close the MPS gap
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "Full-K weight-tile
+  reuse frontier", and .landmark/evidence/2026-10-26-hy-nomas-q4-tile-reuse.json.
+- An opt-in M1280/K8192/N2048 probe reuses existing Qwen B64/B128 kernels with
+  unchanged full-K G1 order, one-group F32 merge and bias. No production kernel
+  or dispatch change. Larger M still repeats the same 23 real rows on GPU.
+- Two opposite-initial-order runs give M32 G1 5.039-5.042 ms, B64 4.706-4.709 ms,
+  B128 4.697-4.704 ms, resident F32 MPS 4.001-4.003 ms, expansion+MPS 4.183-4.206 ms.
+  All 12 paired rounds favor both candidates over G1, and both MPS controls over
+  either candidate. Median G1/candidate ratios: 1.070912 B64, 1.073027 B128.
+- Both candidates equal G1/MPS bitwise for every raw/biased output; row-band
+  checks verify the 23 authentic rows and all cyclic rows separately. All 16
+  bank hashes repeat between orders and the 12 prior control hashes are fixed.
+  Finite F32 atol=rtol=2e-5 is unchanged. G2's 949 failures and the separate
+  original-BF16 quantization-quality failure remain; neither is waived.
+- Each run: 81 command roots/80 async continuations, no timed-root overlap, one final
+  wait/readback, zero tracked encode buffer allocations/preterminal reads.
+  Named bytes 616,398,176 include MPS/dense controls and terminal output banks;
+  packed weights remain 9 MiB versus MPS's 64 MiB matrix. Sampled native process
+  footprint at most 955.18 MiB, cache-aware headroom at least 28.5765 GiB, swap
+  flat. The guard retains a 10% floor, 2 GiB cap, 64 MiB swap stop and 120 s limit;
+  sampling does not bound true peaks, and counters exclude MPS private storage.
+- Both postterminal byte/row-band/timing/guard replays, 13 checker tests, nine
+  captured-data falsifiers and six pre-Metal admission negatives pass.
+  Correlated Mini-Quad ROBUST within this diagnostic. No original-BF16 quality,
+  real full-prefix, full-block or generation speed claim and no promotion.
+- Rejected inference: 4x fewer nominal tile decodes implies a comparable wall
+  speedup. B128 barely changes B64 timing; launch occupancy/register pressure
+  and staging remain unresolved. Next: same-geometry dense F16 controls plus
+  GPU profile, accounting for changed weight traffic before decoder attribution.
+  Refresh on changed source/cache/fixture, geometry/schedule, precision/ownership,
+  compiler/SDK/OS/device/MPS or missing external artifacts. Selected 23 source
+  files, binary and ten linked objects rechecked; not a hermetic attestation.
+
+
+### 2026-10-26: same-geometry dense controls narrow the Q4 GEMM frontier
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "Same-geometry Q4/F16
+  tile frontier", and .landmark/evidence/2026-10-26-hy-nomas-q4-tile-dense.json.
+- The opt-in B64/B128 dense F16 clones change only two weight-load sites and
+  symbols, retaining full-K MMA order, staging/barriers, stores, merge and bias.
+  Both initial-order runs preserve all 20 output-bank hashes; all four candidate
+  branches equal G1/MPS bitwise under unchanged finite F32 atol=rtol=2e-5.
+  M1280/K8192/N2048 still repeats 23 saved real rows on GPU.
+- Complete-projection medians: Q4 B64 4.683-4.693 ms, dense B64 4.277-4.279 ms,
+  Q4 B128 4.699-4.701 ms, dense B128 4.469 ms, resident F32 MPS 3.999-4.005 ms.
+  All 12 paired rounds favor dense at each geometry; B64 reduction 8.65-8.81%.
+  Dense B128 is still 4.44-4.47% slower than dense B64; dense B64 remains
+  6.84-6.95% slower than MPS. Representation also changes traffic/cache/register
+  allocation, so this is not isolated decoder cost or a bandwidth diagnosis.
+- Two full schedules: 56 samples/113 roots each, one terminal wait/readback,
+  zero preterminal reads or tracked encode buffer allocations. Named bytes
+  700,284,768 include controls. Both 10% cache-aware guards pass with 2 GiB cap,
+  64 MiB swap stop and 120 s deadline; sampled peak 1,315.77 MiB, swap flat.
+  Sampling does not bound true peaks; counters exclude MPS private allocations.
+- CPU byte/comparator/row-band/root/guard replay, 20 checker tests, six current
+  pre-Metal negatives and three attach-gate admission cases pass. Current-build
+  smoke and separate compact profile have identical 20 banks/shader hashes.
+  Primary timings bind to binary v1/native-v2; CPU attach-gate companion is
+  binary v3/native-v4; the gate adds no GPU work or wait.
+- Instruments compact attach qualifies target PID/pipeline presence: 29 matching
+  command-buffer IDs, packed/dense B64/B128 and MPS labels. No observed launch
+  dimensions or per-instruction counters; overlapping shader samples cannot
+  separate decode/loads/staging/MMA or resident/expand MPS instances. Profiling
+  timings are excluded. Reducing only capture repetitions fits the unchanged
+  guard (sampled recorder/target peak 2,036.34 MiB); raw traces removed after
+  owned processes reaped. Correlated Mini-Quad ROBUST within this scope.
+- Separate G2 still fails 949 entries; original-BF16 G1 quality still fails
+  (RMSE 0.617325, relative L2 0.0470342). No production/default, new full-prefix,
+  full-block/model or video performance claim. No generation was launched.
+- Next falsifier: change B64 shared-panel staging/MMA scheduling first in dense
+  control, then Q4, preserving full-K order and bits; require balanced complete
+  projection gain against MPS. These measured tile/load variants do not close
+  the native gap. Refresh on source/cache/fixture, geometry/schedule, precision,
+  ownership, compiler/SDK/OS/device/MPS changes or lost external evidence.
+
+
+### 2026-10-26: B64 uniform SIMD schedule gains modestly; eager panel fill rejected
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "B64 next-panel
+  scheduling experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-b64-schedule.json.
+- Opt-in clones preserve M1280/K8192/N2048, full-K K8 MMA order, 64x64 tiles,
+  256 threads, 16,384 shared bytes and all threadgroup barriers. Uniform removes
+  only three SIMD mem_none barriers; Apple's uniform matrix examples support
+  this sequence, not general barrier removal. Production kernels stay unchanged.
+- Two opposite-initial-order eight-arm schedules give dense uniform
+  4.1707/4.1719 ms versus B64 4.2822/4.2821 ms (2.57-2.60% less time), direct
+  Q4 uniform 4.6288/4.6565 versus 4.6820/4.6902 ms (0.72-1.14% less). Paired wins:
+  12/12 dense, 11/12 Q4. Resident MPS remains 4.0047-4.0052 ms and wins every
+  pair. No full-block, original-BF16 quality or video throughput claim.
+- Moving next-panel fill before MMA is slower in both earlier six-arm and
+  final eight-arm schedules; keep the explicit refutation. Do not equate
+  absolute times across those different run contexts or infer decoder-only cost.
+- All four new candidates are bitwise equal to B64/MPS raw and biased outputs
+  at unchanged finite atol=rtol=2e-5. All 28 final banks match both orders/smoke;
+  all earlier 24 schedule banks and 20 dense-control banks remain fixed. G2's
+  949 failures and original-BF16 G1 relative L2 0.0470342 remain unwaived.
+- Final runs: 64 samples, 129 roots, 128 async continuations, zero overlap,
+  one final wait/readback, zero preterminal reads or tracked encode allocations.
+  Named bytes 868,057,184 include controls. Guards pass unchanged (10% cache-aware
+  reserve, 2 GiB cap, 64 MiB swap stop, 120 s); sampled peak 1,442.08 MiB,
+  headroom at least 23.7423 GiB, swap flat. Sampling is not a peak bound and
+  counters exclude private MPS allocations.
+- Both final byte/comparator/row-band/root/guard replays, 29 final CPU checker
+  tests and eleven pre-Metal admission negatives pass. Earlier eager byte
+  replays and 25 tests pass; a partial checker error is excluded. Correlated
+  Mini-Quad ROBUST within the diagnostic. No generation or capture launched.
+- Next falsifier: K32/K64 panel width with exact K8 MMA order, dense first then
+  Q4. Fewer handoffs may be offset by shared-storage/occupancy cost. Refresh on
+  source/cache/fixture, geometry/schedule, precision/ownership, compiler/SDK/OS/
+  device/MPS changes or missing external evidence; selected snapshots/receipts
+  are not a hermetic build or driver attestation.
+
+
+### 2026-10-26: K64 panels preserve bits but lose to K32 in dense F16 and Q4
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K32 versus K64 panel
+  experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-kpanel.json.
+- Dense qualification precedes Q4. Opt-in K32/K64 clones keep M1280/K8192/N2048,
+  64x64 tiles, 256 threads and the same 1,024 ascending K8 MMAs per output.
+  K64 halves panel iterations but doubles shared bytes from 16,384 to 32,768;
+  all threadgroup barriers remain. The 23 saved real rows repeat on GPU.
+- Both opposite-initial-order schedules reject K64: dense duration +7.40-8.71%,
+  Q4 +3.33-5.03%; K64 loses all 12 same-round pairs per representation, six
+  candidate-first/six control-first. Median paired ratios 1.08657/1.05118.
+  Run-median ranges are not confidence intervals; shared-memory/occupancy
+  causality remains a hypothesis. Keep K32 for this geometry.
+- All four candidates equal B64 and identical-operand MPS raw/biased outputs
+  bitwise; all 28 final banks repeat both orders, all 24 dense-stage banks and
+  20 prior controls remain fixed. Unchanged atol=rtol=2e-5. G2's 949 failures
+  and original-BF16 Q4 relative L2 0.0470342 remain unwaived.
+- Each final schedule: 48 samples/97 roots/96 async continuations, one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled peak 1,715.13 MiB, headroom >=24.5558 GiB,
+  swap flat. The 10% cache-aware reserve, 2 GiB/120 s cap and 64 MiB swap stop
+  pass. Samples are not peak bounds; counters exclude private MPS allocations.
+- Three real byte replays, 25/28 lineage-specific checker tests and eleven
+  pre-Metal admission negatives pass. Correlated Mini-Quad ROBUST within this
+  diagnostic; no production change, full block, model, capture or generation.
+- Next falsifier: K32 with unused shared reservation padded to 32 KiB versus
+  16 KiB, retaining geometry/order. Refresh on source/cache/fixture, geometry,
+  precision/ownership, toolchain/device/OS/MPS changes or lost external evidence.
+
+
+### 2026-10-26: K32 reservation-only controls reject unused 32 KiB storage
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K32 shared-reservation
+  experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-shared-reserve.json.
+- Opt-in controls keep the exact generated K32 source and one pipeline per
+  precision, M1280/K8192/N2048, M64/N64, 256 threads and 1,024 ascending K8 MMAs.
+  Only reservation changes (16/32 KiB); the addressed range remains 16 KiB.
+  Dense qualification passes first; 23 saved real rows repeat on GPU.
+- Two opposite-initial-order schedules: median paired 32/16 KiB ratios 1.16433
+  dense F16 (+16.43%) and 1.17983 Q4 (+17.98%); 32 KiB loses all 12 pairs per
+  representation, six candidate-first/six control-first. Keep 16 KiB K32.
+  Reservation timing cost is isolated; occupancy causality and subtraction of
+  prior K64 timings are not admitted. MPS resident drift is -1.90% between runs.
+- All four candidates equal B64/MPS raw/biased results bitwise. All 28 final
+  banks repeat both orders, all 24 dense-stage/20 prior banks stay fixed.
+  Finite atol=rtol=2e-5; G2's 949 failures and original-BF16 Q4 relative L2
+  0.0470342 remain unwaived. Saved upstream revision 911cea6458a89c2663513ff7099561ec190dd491.
+- Each final run: 48 samples/97 roots/96 async continuations; one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled peak 1,714.20 MiB, headroom >=33.3707 GiB,
+  swap flat. Unchanged 10% cache-aware floor, 2 GiB/120 s, 64 MiB swap stop.
+  Samples are not peak bounds; named counters exclude private MPS allocations.
+- Three real byte replays, 56 frozen checker tests, 11 admission negatives and
+  selected-source/fixture/Q4-payload integrity replay PASS. Both native lineages
+  pin 31 sources and ten linked objects. An obsolete admission-helper error
+  label was corrected with no native behavior change; both attempts retained.
+  Correlated Mini-Quad ROBUST within this scope; no production change, full
+  block, model, capture or generation. Receipts are not hermetic attestation.
+- Next unmeasured falsifier: K16 panels/8 KiB, same ascending K8 order. Refresh
+  on source/cache/fixture, geometry/schedule, precision/ownership, toolchain/
+  device/OS/MPS changes or lost external evidence.
+
+### 2026-10-26: K16 halves panel storage but loses to K32 in dense F16 and Q4
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K16 panel experiment",
+  and .landmark/evidence/2026-10-26-hy-nomas-q4-k16.json.
+- Dense-only qualification precedes Q4. Opt-in clones keep M1280/K8192/N2048,
+  M64/N64, 256 threads, F16 operands/F32 accumulation, common merge/bias and
+  1,024 ascending K8 MMAs. K16 uses 8 KiB shared/512 panels; K32 16 KiB/256.
+  Both loader maps cover panels exactly; the fixed-shape guard excludes the
+  16 KiB edge scratch path. The 23 saved real rows repeat on GPU to M1280.
+- K16 loses all 12 paired rounds per representation across opposite initial
+  orders, including six candidate-first/six control-first. Median K16/K32
+  duration ratios 1.13572 dense (+13.57%) and 1.19665 Q4 (+19.66%). Keep K32.
+  Twice as many handoffs and lower per-panel loader concurrency are hypotheses,
+  not measured causal attribution. Resident MPS run drift is -2.90%.
+- All four candidates equal B64/MPS raw/biased outputs bitwise; all 28 final
+  banks repeat both orders, all 24 dense-stage and 20 prior banks remain fixed.
+  Finite atol=rtol=2e-5; G2's 949 failures and original-BF16 Q4 relative L2
+  0.0470342 remain unwaived. Saved upstream revision 911cea6458a89c2663513ff7099561ec190dd491.
+- Each final run has 48 samples/97 roots/96 async continuations, one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled footprint <=1,420.53 MiB, cache-aware
+  headroom >=30.9962 GiB, swap flat. Unchanged 10% floor, 2 GiB/120 s cap and
+  64 MiB swap stop. Samples are not peaks; MPS private allocations uncounted.
+- Three full byte replays, 60 frozen CPU checker tests, 11 pre-Metal negatives
+  and selected-source/fixture/Q4-payload integrity replay PASS. Both lineages
+  pin 31 sources, binaries and ten linked objects. Correlated Mini-Quad source/
+  math/API review ROBUST; K16 speedup hypothesis refuted within this scope.
+  No production/default, full block/model/capture/generation change or run.
+- Next discriminator: resource/stall evidence separating handoff cost from
+  loader concurrency. No new kernel variant admitted. Refresh on source/cache/
+  fixture, geometry/schedule, precision/ownership, toolchain/device/OS/MPS
+  changes or missing external evidence. Receipts are not hermetic attestation.
+
+### 2026-10-26: K16/K32 hardware profiling finds higher buffer-load pressure
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K16/K32 hardware-counter
+  profile", and .landmark/evidence/2026-10-26-hy-nomas-q4-panel-profile.json.
+- Actual v6/v7 Performance Limiters captures succeed after a lean external
+  harness reduces named GPU storage to 381,515,040 bytes. Four earlier captures
+  exceed the unchanged 2 GiB cap and remain rejected. The 10% cache-aware floor,
+  120 s deadline, 64 MiB swap stop, one terminal wait/read and zero early
+  reads/waits or tracked encode allocations remain unchanged. No generation.
+- v7 has 54 shader intervals/eight GEMMs and 31 device-wide counter types/four
+  ring indexes. Sampled buffer-load pressure is higher in K16 windows while
+  occupancy is similar. Device-wide samples, irregular spacing, unknown ring
+  weights and startup perturbation prohibit exclusive-workload utilization or
+  barrier-cost claims. No barrier/stall/PC counter is available; exact panel
+  handoff versus loading time stays open. Never subtract the captured timings
+  or interpret exported bandwidth zeros as absent physical traffic.
+- Fresh profiler-off K16/K32 paired ratios: 1.155866 dense, 1.229616 Q4, zero
+  wins in 12 pairs per representation across both orders. Keep K32/16 KiB at
+  M1280/K8192/N2048, M64/N64, 256 threads and ascending K8 MMA. Inputs are GPU
+  cyclic repeats of 23 saved real rows. Same-operand bits stay exact; saved
+  upstream replay only, original-BF16 Q4 quality remains failed at 2e-5.
+- Next falsifier: loader-map-only K16 ablation with unchanged panel/barrier
+  counts, shared bytes and MMA order. Proposed only; no production change or
+  full-block/generation throughput claim. Refresh on source/cache/fixture,
+  geometry/schedule, precision/lifetime, toolchain/device/OS/capture changes or
+  missing external evidence. Correlated Mini-Quad is not independent replication.
+
+### 2026-10-26: deep Hy-Nomas audit pivots from panel tuning to pipeline value
+
+- Return pointer: docs/hy-nomas-performance-introspection.md. Source/evidence
+  inspection and arithmetic only; no model/build/GPU/full-generation run.
+- Park K16 loader tuning as the primary speed branch. M1280 repeats 23 text
+  rows, K16 loses all pairs, and B128 weight reuse was already tested. Preserve
+  compact residency: full54 named bytes drop 22.617 -> 10.896 GB; no speed or
+  quality promotion follows. Q4/BF16 final latent relL2 1.184/cosine 0.639.
+- Newly inspected upstream 37372925fd4bbb7977a89ce3248584926fc9e953 PixelUMM
+  defaults use 36 D4096/F12288 layers and 21,120 tokens for the saved short
+  latent. Its repeated linears count 293.389 TFLOP versus 285.272 TFLOP for
+  eight DiT passes' token-wise linears, excluding QK/PV attention in both.
+  This is a structural workload warning, not a decoder timing. The port pin
+  stays 911cea6458a89c2663513ff7099561ec190dd491; checkpoint match remains open.
+  The estimate is for six latents/one window, not a five-second cost share.
+  On the default non-CUDA/non-compiled path, upstream flex attention uses an
+  eager implementation documented to materialize dense scores; one
+  hypothetical F32 score is 53.174 GiB here.
+  This was not allocated. Inventory checkpoint/geometry/residency before a
+  decoder probe; implement physical locality, not just a dense attention mask.
+- Next exact falsifier: remove 1,257 unused text rows after the unchanged
+  refiner; compare image/valid-text outputs and final latent at unchanged
+  finite 2e-5. Potential 14.206% of a simple block FLOP model, not latency.
+  Padded output hashes are outside the proposed consumer contract. Start with
+  this cheap implementation probe; selected-boundary checks do not prove all
+  intermediate outputs. Bound a decoder block only after its inventory passes.
+- Current upstream advertises distilled 4/6/8 steps; default remains eight.
+  6.42s*8=51.36s is DiT-only conditional arithmetic, not video RTF. Preserve
+  10% cache-aware reserve, no new preterminal waits, separate same-operand and
+  model-quality gates, and no full generation. Refresh on source/checkpoint,
+  mask/segment/history, precision, hardware/toolchain or missing evidence.
+
+### 2026-10-26: DiT M64 text compaction preserves upstream bits and saves 797 MiB
+
+- Return pointer: docs/hy-nomas-text-compaction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-text-compaction.json. Opt-in only;
+  the padded path remains the default. No diffusion generation or decode ran.
+- The full Qwen producer/refiner stays at T1280. Only DiT text storage shrinks
+  to M64; attention still uses exactly 23 valid text tokens with 5,280 image
+  tokens. Serial text input, scratch and output banks are allocated once and
+  handed off on GPU. Original text Q/K RMS mean geometry/scratch remains
+  T1280 while native square/normalize dispatch only active M64 rows.
+- Refuted exact-prefix route: original M23 full-forward gate fails. Isolated
+  real text FFN-down M23/M32 has 15 failures vs M1280 (max abs 0.000205994),
+  M64 and larger tested sizes are bitwise exact. M64 alone still has one FFN
+  failure; preserving full RMS mean geometry makes all 40 selected block-0
+  checkpoints bitwise exact. Other storage shapes are not full-model qualified.
+- Current full54 clean/reuse and timing-bracketing requests match all 14
+  selected frozen same-Q4 upstream outputs, including latent, bitwise at
+  unchanged finite 2e-5. Excluded refiner suffix and scratch NaN poison do not
+  change valid outputs; in-flight release is rejected. Selected checkpoints
+  are not a streaming comparison of every layer boundary.
+- Six adjacent pairs in one process with both warm orders favor compact:
+  median padded/compact wall ratio 1.119019 (10.64% less compact time), GPU
+  ratio 1.120324. Absolute epoch medians drift +44.35%/+45.93%; this is a
+  fixed saved-input forward observation, not stable latency or video speed.
+- Named bytes 10,895,796,804 -> 10,060,081,732, saving 835,715,072 (797 MiB).
+  Every forward retains 1,244 segments/one terminal wait, zero tracked encode
+  Metal allocations and zero early activation reads. Both-session guard:
+  10% cache-aware floor, 22 GiB cap/900 s/64 MiB swap stop; sampled footprint
+  <=20.09684 GiB, headroom >=15.25545 GiB, swap flat. Sampling is not a peak bound.
+- 22 Crystal examples and 12 CPU receipt tests pass. Correlated Mini-Quad
+  ROBUST within this source/fixture/timing scope, not independent replication.
+  Exact argv/reports/source/binaries live under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-text-compaction-20261026/.
+- Rollback: leave compaction disabled. Refresh on source/backend/device,
+  fixture/weights, text/mask/segment/history, precision/lifetime or missing
+  evidence. Original-BF16 Q4 quality failure remains open. Resume decoder
+  checkpoint/geometry/residency inventory before any bounded decoder probe;
+  neither full generation nor another text tile sweep is the next frontier.
+
+### 2026-10-26: PixelUMM layer zero is exact at full local-attention geometry
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-pixelumm-block.json. A standalone native
+  probe only; no complete decoder, diffusion, video generation or default route.
+- Pinned source 911cea6458a89c2663513ff7099561ec190dd491 matches the HF header at
+  c67f2c52b3fbe0193cbc202769bbe5cb7264807b. All 645 stored tensors are F32.
+  Decoder BF16 weights need 13,943,586,816 bytes (12.99 GiB); one layer needs
+  385,892,864 bytes (368.016 MiB). Only layer-zero ranges were downloaded;
+  the complete 31,553,868,864-byte checkpoint and its advertised hash remain
+  unverified. The selected subset and range receipt are hashed separately.
+- Saved latent geometry implies T6/H44/W80, J21,120, 60 local spatial tiles.
+  Preserve inward-shifted 3x3 border neighborhoods and all-time visibility.
+  Physically gathered Q/K extents are 384/3456, 384/2880 or 192/2880. Never
+  allocate the hypothetical 53.17 GiB global F32 score matrix. The largest
+  actual local score panel is 162 MiB; large global fallback is rejected.
+- Refuted routes: unmaterialized BF16 RMS gain; safe-math-only and precise
+  sqrt/division fixes; four-head attention grouping (74 eager/525 fused strict
+  violations on identical feeds). Selected path materializes BF16 RMS gain
+  boundaries, preserves MPS statistics/legacy inverse-root geometry and uses
+  32-head rank3 QK/PV with rank4 softmax and actual unpadded tile extents.
+  Immutable index tables cannot alias mutable RMS statistics.
+- Current-source small v13 compares all 26 stages; full v1 compares attention
+  and output, first/last requests. Both are bitwise exact and finite at the
+  unchanged atol=rtol=2e-5. Actual pretrained layer-zero weights, controlled
+  synthetic BF16 input, adapted upstream-semantics MPS oracle; not full-decoder
+  hidden states or compiled upstream CUDA Flex parity. Small v12 is historical.
+- Full-J resident request median 1.569623 s, three samples 1.568477-1.570300 s
+  after one warmup. Preparation 0.393273 s excludes fixture parsing/hashing.
+  Each request has 122 segments, one terminal wait, zero named encode Metal
+  allocations and zero early activation reads. Encode overlaps GPU work.
+- Named buffers total 3,223,313,892 bytes; sampled footprint <=4,808,345,760,
+  cache-aware headroom >=28,193,882,112; swap flat. Guard: 10% reserve,
+  8 GiB/900 s process cap, 64 MiB swap stop. Opaque MPS allocations are outside
+  named counters; sampling is not a peak bound. Only one block was resident.
+- 18 Python tests and seven native CPU admission examples pass. Correlated
+  Mini-Quad ROBUST within this bounded scope; final report/guard bytes are
+  pinned in evidence to close a mutable-result provenance gap. Receipts are
+  not hermetic attestation or independent replication.
+- Qwen S1280 + compact DiT named bytes + all decoder BF16 weights already
+  total 34.17 GiB, excluding decoder workspace/pixels/opaque allocations.
+  Simultaneous pipeline residency is not admitted by the observed snapshot.
+  Next frontier: phase-separated decoder assembly, shared workspace and
+  sequential block comparisons before complete generation. Rollback: omit
+  the standalone probe. Refresh on source/checkpoint/fixture, backend/device/
+  toolchain/OS, geometry/precision/neighborhood, lifetime/guard changes or
+  missing external artifacts.
+
+### 2026-10-27: PixelUMM two-block shared workspace and authenticated BF16 cache
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-two-block.json. Only actual
+  layers zero/one are downloaded and resident; no complete decoder or video.
+- Shared transient core/RMS/attention storage, separate persistent outputs and
+  captures. Block zero's GPU output is block one's exact input binding. Both
+  submit to one chain; every full request has 243 segments, one terminal wait,
+  zero named encode Metal allocations and zero early activation reads.
+  Submission validation/native encode/state publication share one host mutex;
+  all slots must be prepared. Failed submission, wrong order, cross-chain and
+  in-flight reuse/release/read attempts are fenced without another GPU wait.
+- Final small pair compares all 52 stages; full T6/H44/W80, J21,120 compares
+  both attention/output boundaries on the first/last requests and an alternate
+  input replay with NaN-poisoned mutable scratch. All compared words are exact
+  and finite at unchanged atol=rtol=2e-5. Retained output/capture/index/weight
+  storage is excluded from poisoning. Old standalone API passes its 26-stage
+  regression fixture on the rebuilt binary. Inputs remain synthetic BF16,
+  seeds 20261026/20261027; the oracle is adapted upstream-semantics MPS, not
+  compiled CUDA Flex or complete decoder hidden states.
+- Pair resident median 3.169756624 s, three timed samples after one warmup.
+  Preparation 3.112975 s includes payload authentication/upload, so it is not
+  comparable to the old one-block preparation field. No speedup or full-video
+  throughput claim. Shared owned bytes 2,988,809,188 versus 5,285,558,216 for
+  two independent workspaces with equivalent captures: saves 2,296,749,028
+  bytes (2.14 GiB). Total unique named bytes 3,955,236,836 (3.68 GiB).
+- Both source F32 subsets produce a 771,785,728-byte BF16 cache (half the F32
+  payload), all 26 tensor bytes equal upstream's own MPS BF16 conversion and
+  independently generated pair fixtures. Native load reads BF16 directly to
+  allocated GPU buffers. Receipt/chunk/subset/header/source/tensor hashes are
+  bound and validated. Full checkpoint hash remains unverified. Complete
+  decoder BF16 payload would be 12.99 GiB; only the two-block cache exists.
+  A paired cache-controlled startup timing remains unmeasured.
+- Final checks: 30 Python tests, 10 native CPU admission examples and seven
+  fixture/cache examples pass, plus guarded small/full/standalone GPU runs and
+  final cache validation. Full native sampled footprint <=5,443,013,176 bytes,
+  cache-aware headroom >=24,304,386,048 bytes, swap flat; 10% floor, 8 GiB cap,
+  900-second timeout and 64 MiB swap stop retained. Sampling is not a peak bound;
+  opaque MPS allocations are outside named counters. Exact argv and artifacts
+  remain on the external SSD, pinned by the evidence index.
+- Correlated Mini-Quad final review is ROBUST for this bounded two-block
+  contract; source/report/argv/guard/binary bindings and the poisoned replay
+  were checked. This is not independent replication or full-generation proof.
+- Rollback: omit pair probe and use the standalone API. Refresh on source,
+  checkpoint/fixture, backend/device/toolchain/OS, geometry/precision/lifetime,
+  guard or missing evidence. Next gate: larger sequential decoder prefix with
+  a shared workspace and real decoder inputs, under a fresh memory admission.
+
+### 2026-10-27: PixelUMM four-block shared workspace qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json. Real pretrained
+  layers 0-3, one transient GPU workspace, four retained outputs, direct
+  predecessor-output bindings. Native GPU math/bridge/API remain unchanged.
+- Small J2048 compares 104 stages; full T6/H44/W80, J21,120 compares all eight
+  attention/output boundaries on first/last requests and different-input replay
+  after NaN poisoning of mutable scratch. All compared words are finite and
+  bitwise exact at unchanged atol=rtol=2e-5. Synthetic BF16 input; adapted
+  upstream-semantics MPS oracle, not full-decoder inputs or CUDA Flex parity.
+- Six full requests each use 485 segments, one terminal wait, zero named
+  encode allocations and zero early activation reads. Order and in-flight
+  release/read/reuse guards pass; five preflight negatives reject incorrect
+  later edges, missing/altered fourth-owner weights and a one-byte-low budget.
+- Resident median 6.420842958 s for all four blocks, three timed samples after
+  one warmup. Unique named buffers 5,419,082,724 bytes (5.05 GiB); shared owned
+  3,680,869,348 versus 10,571,116,432 for four independent workspaces with
+  equivalent captures. Saving 6,890,247,084 bytes is accounting, not a speedup.
+- New BF16 cache: 52 tensors, 1,543,571,456 bytes (1.44 GiB), exact raw words
+  versus MPS conversion and independently exported fixtures. Only layers 0-3
+  downloaded; no full checkpoint/hash or complete-decoder cache. Startup
+  speedup remains unmeasured. Exact argv and heavy artifacts stay on SSD.
+- 34 Python tests, 11 admission plus 11 fixture/cache examples, both cache
+  validators and old pair/standalone GPU regressions pass. Full native sampled
+  footprint 7,119,492,232 bytes; headroom >=24,283,217,920; swap flat. Guard
+  retains 10% floor, 8 GiB native / 11 GiB oracle caps and 64 MiB swap stop.
+  Opaque MPS allocations are outside named counters; polling is not a peak bound.
+- Correlated Mini-Quad final verdict is ROBUST within this bounded fixture
+  contract, not independent replication or full-generation quality/latency.
+  Broader caller buffer aliases and incomplete-prefix cancellation recovery
+  are unqualified.
+  Rollback: retain pair/standalone entry points. Refresh on source, weights,
+  fixture, backend/device/toolchain/OS, geometry/precision/lifetime/guard changes
+  or lost artifacts. Next gate: larger prefix and real decoder hidden inputs.
+
+### 2026-10-27: PixelUMM eight-block shared scratch qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-eight-block.json. Actual
+  pretrained decoder layers 0-7, one shared transient GPU workspace, eight
+  distinct retained outputs and attention captures. Native math/bridge/API
+  unchanged; output N is the direct GPU input of N+1.
+- Small J2048 compares all 208 stages on two requests. Full T6/H44/W80,
+  J21,120 compares all 16 attention/output boundaries on initial, last timed
+  and different-input NaN-poisoned-scratch requests. All 464 comparisons are
+  finite and bitwise exact at unchanged atol=rtol=2e-5. Synthetic BF16 inputs,
+  seeds 20261026/20261027; adapted upstream-semantics MPS, not compiled CUDA
+  Flex parity or actual complete-decoder hidden states.
+- Six full requests each use 969 command segments, one terminal wait, zero
+  named encode allocations and zero early activation reads. Order and
+  in-flight release/read/reuse checks pass. Eight compiled-CLI metadata/budget
+  negatives reject before deliberately invalid payload authentication, with
+  no Metal-init marker and empty fresh reports. Failed-preflight allocation
+  counts are not exported. Exact 208/16 capture inventories and contiguous
+  coverage prevent weakened fixtures from silently reducing the gate.
+- Eight-specific fixtures have an 8 GiB payload bound; old pair/four fixtures
+  and caches retain 4 GiB. BF16 cache: 104 tensors, 3,087,142,912 bytes
+  (2.875 GiB), raw-word exact against upstream MPS cast and all three separate
+  fixtures. Only source layers 0-7 downloaded; complete checkpoint/hash and
+  complete-decoder cache remain unqualified. Heavy artifacts stay on SSD.
+- Resident eight-block median 13.597054874 s; three samples after one warmup
+  are 12.660567374/13.597054874/14.520376250 s. Preserve this observed drift;
+  no stable speedup or video latency claim. Unique named bytes 8,346,774,500
+  (7.77 GiB), shared owned 5,064,989,668. Accounting versus eight independent
+  workspaces saves 16,077,243,196 bytes (14.97 GiB), not a timed speedup.
+- 37 Python tests, 12 admission plus 15 fixture/cache examples, all three cache
+  validators and rebuilt old pair/four GPU regressions pass. Full native
+  sampled footprint 10,129,972,472 bytes (9.43 GiB), minimum cache-aware
+  headroom 21,021,835,264 bytes; swap flat. Guard retains 10% physical floor,
+  11 GiB native/17 GiB full-oracle caps, 900-second timeout and 64 MiB swap stop.
+  The 8 GiB named ceiling is separate from the system reserve; opaque MPS
+  allocations and between-sample peaks are outside named/sampled guarantees.
+- Correlated Mini-Quad native/oracle/adversary verdicts are ROBUST within this
+  eight-block fixture scope, including final artifact/argv/guard bindings. The
+  external evidence index checked 134 payload/source files and exited zero;
+  its run receipts are linked separately without a recursive packet self-hash.
+  This is not independent replication or full-generation quality/latency proof.
+- Rollback: retain four/pair/standalone entry points. Refresh on source,
+  weights/fixtures, backend/device/toolchain/OS, geometry/precision/lifetime,
+  guard changes or lost evidence. Next gate: a newly memory-admitted larger
+  decoder prefix with real decoder inputs, before complete decoding. Broader
+  caller-supplied buffer aliases and partial-prefix cancellation stay unqualified.
+
+### 2026-10-27: PixelUMM full-J phase profiling
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-profile.json. Opt-in CPU
+  phase markers, existing Metal/MPS API/continuation collectors and Instruments
+  profile pretrained block0 at T6/H44/W80, J21120. Arithmetic, BF16 boundaries
+  and existing command-submit/wait sites are unchanged. No complete generation.
+- Six reports cover 48 requests and 288 comparisons, all finite and bitwise
+  exact at unchanged atol=rtol=2e-5. Small J2048 checks all 26 stages; full J
+  checks both attention/output boundaries on every arm. Saved adapted-upstream
+  MPS fixtures, not a fresh oracle run, CUDA Flex or real decoder latent input.
+  Full requests retain 122 roots, 195 Graph calls, one terminal wait, zero named
+  encode allocations and zero preterminal activation reads. Root-count parity
+  does not prove exact off/on continuation placement.
+- Without-Instruments off medians are 1.590/1.642/1.684 s per captured block.
+  Same-binary controls preserve observed drift; API-only pair deltas span
+  -2.29% to +1.79%.
+  The patched disabled Graph hook remains, so no prepatch/zero-overhead claim.
+- Instruments resolves 488 submissions; 244 profiled roots match native timing
+  with about 42 ns maximum duration error/offset spread. Broad-channel join was
+  rejected; Compute-only join retains two excluded Fragment rows and rejects
+  foreign-PID rows. Shader rows lack CBIDs: attribution uses PID/time clipping.
+- NDArrayMatrixMultiply-labelled sampled timeline unions in FFN-candidate
+  roots 118-120 are 0.946/0.949 s, 59.9%/59.4% of target Compute unions. This makes
+  FFN dense matrix work the next optimization candidate. Shared boundary roots
+  and non-exclusive samples prevent exact gate/up/down or kernel-cycle claims.
+- Across eight traced timed arms, attention continuation wall spans 0.319-0.340 s
+  versus 0.00070-0.00109 s owner-thread CPU; 98.1-98.5% overlaps older submitted
+  GPU roots. Consistent with queue/backpressure, not proof of driver wait cause.
+- Final release build plus 28 profile/API/trace, 12 admission and 15 fixture/cache
+  examples pass; latest binary repeats small all-stage off/on parity. Full-J
+  core sources match pinned run receipts. Historical generic binaries were
+  overwritten; latest checked executable is preserved externally. Pins are
+  not hermetic attestation. Instruments binary hash equals the later API-only
+  run's source-pinned binary; no separate pre-capture source receipt exists.
+  Heavy reports/XML/trace/scripts stay on SSD.
+- Serial guards retain 10% physical floor, 8 GiB standalone/12 GiB profiler caps,
+  64 MiB swap-growth stop and deadlines. Sampled footprint <=7,135,402,368 bytes,
+  headroom >=26,855,391,232 bytes including file cache once; swap growth zero.
+  Polling is not a peak guarantee; opaque MPS resources are outside named counts.
+- Correlated Mini-Quad verdict ROBUST for bounded parity/counts and the qualified
+  FFN candidate. Next gate: real-geometry FFN dense projections against MPS,
+  preserving BF16 reduction/rounding, then paired block speed before promotion.
+  Rollback: leave profiling off; old FFI retained. Refresh on scoped source,
+  fixtures/weights, device/OS/toolchain/backend, geometry, precision, lifetime,
+  captures, guards or lost evidence. No complete-decoder/video-latency claim.
+
+### 2026-10-27: PixelUMM opt-in F32 FFN graph qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-f32.json. Gate/up/down
+  accept opt-in BF16-to-F32 graph operand casts with existing BF16 outputs.
+  Weights/handoffs stay BF16; graph types do not certify physical arithmetic.
+  Default false, old C ABI mode-zero wrapper retained; invalid modes fail early.
+- Serial full-J block0 order BF16/F32/F32/BF16, one warmup and three timed
+  requests per process: medians 1.709523/1.207000/1.194168/1.592808 s.
+  Balanced pair latency reductions are 29.40% and 25.03%, including encoding,
+  terminal wait and GPU diagnostic captures, excluding preparation and CPU
+  comparison. Preserve BF16 drift; no exclusive-kernel/decoder/video claim.
+- Matrix attention/output comparisons are finite and bitwise exact. Final
+  preserved binary passes all 26 J2048 stages twice plus two full-J attention/
+  output pairs. Saved seeded adapted upstream-semantics MPS oracle; not fresh
+  upstream, CUDA Flex or real decoder latents. Unchanged atol=rtol=2e-5.
+- One terminal wait, zero named encode allocations and no preterminal activation
+  reads remain. Backend segments change 122->128 at full J, 13->16 at small J;
+  submit/wait sites are unchanged but topology is not identical. Named full-J
+  bytes remain 3,223,313,892; sampled process footprint rises from 4.80-4.90 to
+  6.44 GiB. Keep this opaque-backend cost in multi-block admission. Serial guards
+  retain 10% physical floor, process caps, 64 MiB swap-growth stop and deadlines;
+  swap is flat in the paired runs. Sampling is not a peak guarantee.
+- Three small-J projection probes qualify all MPS arms exactly and reject native
+  F16 K8 MMA: gate149/up108/down288 tolerance failures. GPU seeded-NaN and F16
+  under/overflow controls pass; independent postterminal CPU metrics agree.
+  Repeated-row M21120 BF16/F32 root timings overlap diagnostic work and cannot
+  support exclusive speed rankings. The real connected block supplies the gain.
+- Release builds and 62 regression examples pass. External hash/numeric/guard
+  validator and source/binary receipts index curated evidence on SSD; they are
+  not hermetic attestation. One projection receipt's unrelated decoder CLI pin
+  predates precision-metadata wording; projection sources and preserved/final
+  binary identity bind that result. Final decoder reruns bind current sources.
+- Rollback: omit ffn_f32/--ffn-f32. Next falsifier: sequential shared-workspace
+  blocks with upstream output parity and admitted process memory, before default
+  promotion. Prior eight-block BF16 parity does not qualify the new mode. Refresh
+  on source, fixtures/weights, backend/device/toolchain/OS, geometry/precision,
+  ownership, capture, guard changes or lost artifacts. No full generation ran.
+
+### 2026-10-27: PixelUMM F32 FFN across shared-workspace prefixes
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-serial.json. Serial Session
+  forwards the default-off F32 FFN graph option to every Plan, checks uniform
+  slot modes and reports actual selection. Native kernels, workspace ownership,
+  direct GPU handoffs and encode/submit/wait sites are unchanged.
+- Two/four/eight blocks pass all 52/104/208 small-J stages and 4/8/16 full-J
+  attention/output boundaries at unchanged atol=rtol=2e-5. Across 19 processes,
+  54 of 105 connected requests run CPU comparisons: 1160 capture comparisons
+  are finite and bitwise exact. Other requests retain GPU captures. Every full
+  process passes distinct alternate-input replay after NaN-poisoning shared
+  scratch. Saved seeded adapted-upstream MPS fixtures; no fresh upstream,
+  compiled CUDA Flex or real decoder latent qualification.
+- Every request has one terminal wait, zero named encode allocations and no
+  early activation reads. Every process rejects wrong order, in-flight release,
+  early compare and reuse. Full-J BF16/F32 segments are 243/255, 485/509 and
+  969/1017; execution topology is not identical. Preserve varying small-J counts
+  without inferring their cause; the first validator's fixed-count assumption
+  was rejected and corrected, with numerical/wait/read/allocation checks intact.
+- Full-J ABBA paired latency reductions: two blocks 25.14%/25.12%; four blocks
+  23.77%/24.23%; eight blocks 19.97%/19.18%. Eight-block BF16 medians are
+  12.579933/12.930832 s versus F32 10.067220/10.451315 s. Four-block baseline
+  ABBA drifts 6.282318->8.974073 s; retain it. Additional BAAB reductions are
+  16.77%/24.63%, supporting direction without establishing a stable percentage
+  or drift cause. Timings include encoding, terminal wait and GPU capture
+  copies; preparation and postterminal CPU comparison are excluded.
+- Eight-block named storage stays 8,346,774,500 bytes (7.77 GiB), but sampled
+  process footprint rises 9.43->11.07 GiB. Opaque backend cost matters before
+  retaining more plans; do not extrapolate linearly to 36 blocks. All serial
+  guards pass the cache-aware 10% floor, process caps, 64 MiB swap-growth stop
+  and 900-second deadlines. Sampled headroom >=13.85 GiB; swap growth zero.
+  Polling is not a between-sample peak guarantee.
+- Guarded release builds and 30 regression examples pass. Executed external
+  validator checks complete captures, report/receipt/guard bindings, intended
+  budgets, non-overlapping matrix order, source/binary pins and fixture/cache
+  payload hashes; 134 external artifacts are indexed on SSD. Correlated
+  Mini-Quad verdict ROBUST within the declared prefix scope, not independent
+  replication or hermetic attestation. Existing user pycache remains untracked.
+- Rollback omits ffn_f32/--ffn-f32; default false. This discharges the earlier
+  sequential gate only for two/four/eight prefixes. Next falsifier: memory-admit
+  a larger prefix and verify real decoder inputs before wider/default use.
+  Only layers 0-7 downloaded; complete checkpoint/hash, all 36 blocks and global
+  projections remain unqualified. No full decoder, diffusion, Studio or
+  generation ran. Refresh on scoped source, fixtures/weights, device/backend/
+  toolchain/OS, geometry/precision, capture/ownership/guard changes or lost evidence.
+
+### 2026-10-27: PixelUMM sixteen-block real-input prefix and pipeline budget
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-sixteen-block.json. Blocks 0-15
+  share GPU scratch and authenticated BF16 weights with default-off F32 FFN
+  graph operands. Actual pinned DCAE encoder, PixelUMM noise and stem produce
+  the input from a repeated real image: static diagnostic clip, not a denoised
+  DiT sample or a generated-video quality test. Native timing has no PyTorch.
+- J2048 compares 416 stages twice; J21120 compares 32 attention/output boundaries
+  across both seeds and poisoned shared-scratch replay: 1,024 finite bitwise-exact
+  comparisons at unchanged atol=rtol=2e-5. Earlier 2/4/8-depth regressions add 728.
+  Every native request has one terminal wait, zero early activation reads and
+  zero named encode allocations; fifteen block edges remain on GPU. All 16 slots
+  use F32 FFN graph operands, which do not certify physical accumulation types.
+- Full-J medians are 20.753748/19.138901 s, including encoding, GPU captures and
+  terminal wait, excluding loading/preparation and postterminal CPU comparisons.
+  These epochs are not controlled A/A drift or input-speed comparisons. Named
+  bytes 14,202,158,052; sampled process-tree footprint <=18.623 GiB under 23 GiB
+  caps, cache-aware 10% reserve, 64 MiB swap-growth stop and deadlines. Swap flat;
+  polling does not bound between-sample peaks or opaque resources at larger depth.
+- Release builds pass 38 Crystal examples and 55 Python checks. Extending to
+  block 10 exposed fixed-width capture slicing and lexical/numeric cache-key
+  assumptions; both have regression coverage. Earlier depth caps remain intact.
+  No production arithmetic or synchronization sources changed. The upstream
+  oracle adapts semantics on MPS; compiled CUDA Flex remains unqualified.
+- Pipeline planning for 24 frames at 704x1280, CFG1, eight DiT calls, no history/camera:
+  all-resident component named subtotal 42.340 GiB; upstream SP1 dense BF16 KV
+  plus bool masks conditionally add 5.406 GiB. With 10% reserve that is 54.146 GiB
+  before opaque/loading/output/OS/background costs. Proposed stage release gives
+  PixelUMM 21.107 GiB with KV released or 26.513 GiB with KV retained, before
+  reserve/extras. Lifetime policy is unimplemented. A two-output-bank ring could
+  save 5.479 GiB but needs alias/lifetime falsifiers; diagnostic plans retain all
+  outputs. CPU offload alone does not free unified physical memory.
+- Component timing projection 100.53-130.55 s for the first video second assumes
+  qualified M64 compaction with 23 valid text tokens and 36/16 scaling of decoder
+  cost; it excludes Qwen/global stem/head/scheduler/loading/output, uses unmatched
+  epochs, and is not measured pipeline latency. Plain-text seg_ar does not need
+  the diagnostic DCAE encode. Other text lengths/history/longer decode windows
+  require fresh timing and storage qualification.
+- Only decoder layers 0-15, DCAE encoder and input stem are downloaded here;
+  remaining 20 layers/global head/full checkpoint hash/complete generation remain
+  unqualified. Rollback omits the 16-block probe and --ffn-f32. Next falsifier:
+  output-ring ownership, wider prefix and global projections, then connected
+  phase lifetimes before any full-pipeline peak/latency or quality claim. Refresh
+  on scoped source/artifacts/toolchain/backend/device/OS, geometry/precision,
+  capture/ownership/lifetimes/guards or loss of external evidence.
+
+
+### 2026-10-27: PixelUMM two-bank output ring, opt-in
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-output-ring.json. Layers 0-15
+  share two alternating BF16 output banks. Default retains distinct outputs;
+  --reuse-output-banks is opt-in. No arithmetic/bridge/synchronization source
+  changed. Plan.output is ephemeral and overwritten by slot N+2, not a stable
+  diagnostic capture. Stale output/interior-x captures fail before allocation;
+  global external aliases, wrong predecessor/order and in-flight reuse fail.
+- 43 Crystal examples pass. Small J2048 compares 402/416 stages twice, explicitly
+  omitting 14 overwritten early outputs. Full J21120 retains all16 attention
+  boundaries and last2 outputs (18 versus retained32). Across small and serial
+  full retained/ring/ring/retained runs: 26 requests, 1,104 finite bitwise-exact
+  comparisons at unchanged atol=rtol=2e-5, including alternate input after NaN
+  poisoning shared scratch and output banks. One terminal wait/request, zero
+  preterminal activation reads or named encode allocations; full2033 segments.
+- Named full bytes fall 14,202,158,052 -> 11,779,947,492: exactly 2,422,210,560 B
+  (2.256 GiB). Both ring sampled process peaks are higher: retained16.683/16.844
+  GiB, ring19.112/18.950 GiB. Timed total medians in ABBA order27.143/35.181/
+  25.180/24.136 s drift substantially. No causal speedup or process-memory
+  reduction established; keep default off. Do not update historical pipeline
+  timing from this epoch. A 36-bank-to-two projection saves5.479 GiB named only;
+  the complete 36-block decoder/global head is unqualified.
+- Cache-aware10% floor, caps18GiB small/23GiB full, swap-growth64MiB and900s
+  deadline preserved; successful runs show zero swap growth and do not overlap.
+  Historical small14GiB cap stopped safely, excluded from numeric qualification.
+  External audit verifies all32 source/build pins and cache/fixture payloads;
+  negative controls reject missing comparisons/wrong banks. Byte bindings are
+  not hermetic provenance; Mini-Quad review is correlated, not independent.
+- Next falsifier: separate loading/opaque MPS phase peaks from named memory,
+  then wider decoder/head and connected lifetimes. No full generation ran.
+  Refresh on scoped source/artifact/backend/device/toolchain/OS, geometry,
+  precision, ownership/capture/lifetime or guard changes or evidence loss.
+
+
+### 2026-10-27: Offline Hy-Nomas director timeline and terminal MP4
+
+- Return pointer: docs/video-director-timeline.md and
+  .landmark/evidence/2026-10-27-hy-nomas-offline-director.json. The JSON project
+  compiler holds a prompt until the next timestamp, rounds changes/end upward
+  to four-pixel-frame boundaries at24fps, and reports requested/effective times.
+  Explicit event boundaries, num_frames, prompt fields/count and [height,width]
+  overrides avoid implicit timestamp rescaling. This is compile-only, with no
+  connected native timeline executor, camera track, resume or generation claim.
+- 11 timeline and6 terminal-export tests pass, including tiny FFmpeg/ffprobe
+  roundtrip, no-clobber writes, exact geometry/latent counts and malformed files.
+  AST-extracted original pinned _load_from_json/pure helpers preserve two sample
+  prompts and one nondefault640x1024 single prompt. Hydra/pipeline and latent
+  boundary conversion remain source-traced only. Reserved ||| is rejected.
+- Hy export accepts completed display-range B1C3THW F32_LE bytes, not raw decoder
+  pixels; it uses zero-to-one conversion. Existing Wan default and operation
+  order remain minus-one-to-one. File encoding is terminal CPU handling, not
+  neural inference or an added inference wait. Existing files are never replaced.
+- Upstream rev911cea6458a89c2663513ff7099561ec190dd491. External artifacts are
+  under hy-nomas-pixelumm-ring-20261027 on /opt/mldata_ssd. Correlated review is
+  ROBUST only for compile/export scope. Next signal is connected segment
+  execution/display postprocessing and measured prompt adherence, memory and
+  video latency. Refresh on scoped source/upstream temporal ratio/parser/range,
+  geometry, Python/NumPy/FFmpeg or evidence changes.
+
+### 2026-10-27: PixelUMM loading versus execution memory phases
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-memory-phases.json. Default-off
+  --memory-phases samples process footprint/RSS, Metal allocation, named-buffer
+  and Crystal GC counters around upload, plan construction, request execution,
+  postterminal diagnostics and teardown. Categories overlap; no sum, residual
+  MPS estimate or unknown-as-zero interpretation. --compare-common-ring-captures
+  matches CPU comparison coverage without changing actual workspace allocation.
+- Fresh short retained/ring/ring/retained controls and a reverse six-request
+  cadence pair put retained peaks at16.845GiB and ring at14.426-14.427GiB:
+  approximately2.418GiB lower for ring. Exact named saving remains2.256GiB.
+  Both modes finish input/weight upload at5.953GiB process footprint and plan
+  construction at6.26GiB. Largest observed phase points occur after encode.
+  The old ring-higher19GiB peak is not reproduced; its historical cause remains
+  open because coverage, instrumentation, build epoch and runtime state differ.
+  This establishes no causal speedup or default promotion; ring stays opt-in.
+- Source inspection finds direct authenticated BF16 file-to-shared-GPU upload
+  and MPSGraph feeds wrapping those buffers. F32 FFN casts are graph nodes;
+  framework-private transformed/cache representations remain unaccounted.
+  Metal resource-counter uplift during execution is similar across modes.
+  After named releases, named live bytes reach0 and process footprint falls
+  below1GiB while Metal's counter remains high; that counter alone is no leak
+  proof. CPU expected/actual diagnostic buffers are postterminal and separately
+  marked; allocation-ready does not mean GPU readback has populated them.
+- Seven guarded processes run26 requests;20 requests compare1,128 selected
+  captures, finite and bitwise exact at unchanged atol=rtol=2e-5. One terminal
+  wait/request, zero named encode allocations or preterminal activation reads;
+  full requests2033 segments. Poisoned different-input replay passes. Saved
+  pinned MPS-adapted upstream-semantics fixtures, not fresh upstream or compiled
+  CUDA Flex equivalence. No full decoder, diffusion, Studio or generation ran.
+- A supplemental six-request ring control removes only --memory-phases and
+  still peaks at14.426GiB;54 selected comparisons are finite and bitwise exact.
+  It does not restore the historical high peak. Combined coverage is32 requests,
+  23 compared requests and1,182 captures; no general observer-noninterference
+  or uninstrumented retained/ring speedup claim follows from this one control.
+- Release build and51 Crystal examples pass; external analysis passes15
+  synthetic controls, observer-off validation passes 12 checks, and both check
+  exact captures, matching source pins, clocks,
+  build freshness and serial guard intervals. Full sampled headroom>=18.285GiB,
+  swap growth0; cache-aware10% reserve,18/23GiB caps,64MiB swap stop and900s
+  deadlines retained. Polling cannot bound between-sample spikes. Observer
+  failures attempt sibling cleanup; injected helper tests are not every native
+  release fault. Correlated Mini-Quad review is not independent replication.
+- Native CLOCK_MONOTONIC differs from Python mach_absolute_time on this host.
+  Join guard logs only on guard_monotonic_ns with receipt-pinned Python clock,
+  not a constant epoch offset. Exploratory stale-binary runs were excluded and
+  rerun after a fresh release build. Byte receipts are not hermetic attestation.
+- Rollback omits both new options; arithmetic and output-reuse defaults stay
+  unchanged. Next falsifier if the old peak recurs: original asymmetric capture
+  workload with phase traces before altering MPS ownership or purging caches.
+  Wider decoder/global head and connected stage lifetimes remain the pipeline
+  frontier. Refresh on scoped source/artifacts/backend/device/OS/toolchain,
+  geometry/precision/capture/lifetime/guard/clock changes or lost evidence.
+
+### 2026-10-27: PixelUMM decoder timing variance and prior GPU work
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-variance.json. Opt-in
+  --profile-variance reuses existing CPU markers and API trace, admitting all
+  4,578 continuations with an 8,192-event host capacity. Metadata is read only
+  after the existing terminal wait; arithmetic, GPU command geometry and
+  synchronization remain unchanged. The Make dependency includes the header.
+- One resident full36+head session at J21120 runs A-off/A-on/B-clean-on/
+  B-poison-on/A-on/A-off in 43.206/46.496/81.439/59.860/51.381/52.809 s.
+  A drifts with profiling off; the on/off contrast reverses. Clean B is slow
+  before poison, but one ordered pair assigns no causal input/poison effect.
+  Neither a constant observer overhead nor stable throughput is established.
+- Attention host markers contain 94.1-94.7% of request wall, with only 1.0-1.5%
+  owner-thread CPU. Long continuation spans nearly coincide with prior
+  submitted GPU-root intervals. This is consistent with queue backpressure,
+  not proof of driver wait or attention-kernel cost. Enclosing Graph and
+  nested continuation clocks are non-additive.
+- A disjoint temporal partition keeps cross-group root candidates ambiguous.
+  FFN/final-residual intervals occupy 49-53% of whole GPU interval union. A-on
+  early to clean B: elapsed+34.942s, union+34.923s; FFN group+19.939s and
+  attention+4.789s. Same-input A-on drift: elapsed+4.885s, union+4.884s,
+  FFN+2.481s. These are command-buffer residency correlations, not exclusive
+  kernel service or causal delay. Head encode 18-24ms and terminal wait 0.9-1.6s
+  are too small to explain the observed span. Next falsifier: FFN projection/
+  cast reuse against the exact native control before selecting an optimization.
+- All 258 captures across 6 requests/two inputs are finite and bitwise exact at
+  unchanged 2e-5; reused authenticated upstream MPS controls, no fresh connected
+  upstream or independent backend. Each request retains 4,579 roots/one wait,
+  zero named encode allocations/preterminal activation reads. No generation.
+- Release build, 80 CPU examples, native collector self-test and receipt audit
+  pass; 11 report/guard mutations reject and 2 overlap controls pass. Failed
+  external harness/analysis epochs are retained. Sampled peak 27.436GiB under
+  28.5GiB cap, minimum cache-aware headroom 14.516GiB, swap growth 0; 10% floor,
+  64MiB swap stop and 900s deadline unchanged. Samples do not bound spikes.
+  Named live bytes/count reach 0 after release, not zero Metal residency.
+- Correlated Mini-Quad verdict is ROBUST for parity/lifecycle, sampled guards
+  and interval arithmetic; physical drift cause remains open. Rollback omits
+  the opt-in flag. Refresh on scoped source/artifacts/backend/device/OS/
+  toolchain/geometry/precision/capture/lifetime/clock/guard changes or evidence
+  loss; launch admission always needs a fresh memory check.
+
+### 2026-10-27: PixelUMM shared-input F32 gate/up, default off
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-gate-up.json. Opt-in
+  --compare-shared-gate-up prepares one two-output graph with a shared BF16
+  activation/F32 cast. Separate weight casts, F32 matmuls, BF16 outputs and
+  capture order remain unchanged. No extra named buffer/wait/readback; baseline
+  defaults remain. In-flight mode changes and unqualified shared profiling
+  reject, including Session preflight before recording/submitting a chain.
+- One resident full36+head at J21120 runs shared/baseline warmups, A baseline/
+  shared/shared/baseline and separately poisoned B modes. Timed A pairs are
+  43.925612 vs54.646036 s and47.495678 vs50.970565 s: candidate +24.4059% and
+  +7.3162%. B46.138127 vs45.200234 s has opposite sign and is only a numerical
+  control. No speedup/default promotion, stable regression or causal backend
+  mechanism follows. Observed roots4579->4543; source Graph calls7025->6989
+  are not measured physical cast/kernel counts. Preparation excluded36.515s.
+- All500 comparisons are finite and bitwise exact at unchanged2e-5:156 small
+  all26-stage captures and344 full43-stage captures. Full coverage retains all36
+  attention boundaries, last2 outputs and5 head stages; early outputs are
+  overwritten GPU handoffs. Both inputs match across modes, all36 flags agree,
+  and head input aliases block35 GPU output. One terminal wait/request, zero
+  named encode allocations/preterminal reads;43 postterminal diagnostics.
+- Release build,83 CPU examples, one-byte-below-budget rejection and audited
+  receipts pass;18 seeded mutations reject. Reused authenticated upstream MPS
+  controls, not fresh upstream or independent backend. Large payloads stat-
+  checked, not rehashed; whole checkpoint digest unverified. Mini-Quad review
+  is correlated. Earlier full pilot was stopped for profile-preflight hardening;
+  excluded. Failed auditor v2-v4 retained; failed v1 JSON was overwritten.
+- Cache-aware10% floor,28.5GiB cap,64MiB swap stop and900s deadline retained.
+  In1441 samples: peak28.128GiB, min headroom13.677GiB, system swap growth
+  1.870MiB without process attribution. Named bytes24,108,145,128; release reaches
+  zero named live bytes/count, not zero Metal residency. Sampling misses spikes.
+  Native process exits0; no diffusion or full generation ran.
+- Next falsifier: qualify shared-graph phase profiling and isolate FFN kernel/
+  temporary-resource behavior before promotion. Rollback leaves capability off
+  or reverts the atomic commit. Refresh on scoped source/artifacts/backend/
+  device/OS/toolchain/geometry/precision/capture/lifetime/clock/guard changes or
+  evidence loss; launch admission always expires.
+
+### 2026-10-27: PixelUMM isolated full-J FFN and order-sensitive resources
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-isolated.json. New diagnostic
+  reuses production separate/shared F32-operand MPSGraph builders at actual
+  J2048/J21120, with identical bindings. Down consumes one saved upstream product
+  through one unchanged compiled graph. Activation/product execution is excluded;
+  no repeated small-grid rows, full decoder, diffusion, Studio or generation.
+- Final exact-source epoch: two small and six full processes, 48 requests.
+  Each chain has two warmups plus B/S/S/B or S/B/B/S, one terminal wait,
+  zero named encode allocations/preterminal activation reads; only 400 scalar
+  diagnostic bytes read afterward. All 144 upstream projection comparisons and 48
+  GPU down-canonical comparisons are finite and bitwise exact at unchanged 2e-5;
+  eight NaN positives detected. Source-method MPS replay, not independent backend.
+- Full measured roots are isolated from outside roots; first warmup can overlap
+  and is excluded. Aggregate separate/shared gate/up medians 373.667/372.128 ms,
+  down 202.622/201.637 ms. Large previous shared penalty does not reproduce here;
+  tiny contrasts are comparable to unchanged-down/order variation. No stable
+  speedup or default promotion; root residency is not shader service or causality.
+- Identical named buffers 3,589,276,048 bytes. Device peaks 5927.516 MiB or 5789.516 MiB
+  with gate/up first, versus 5267.516 MiB with down first in both tested warmup
+  orders. Increase appears during first encodes, then plateaus; GC heap 1.672 MiB
+  during encoding. The 522/660 MiB gap matches possible F32 tensor sizes, but no
+  allocator mechanism is proven. Down-first cannot reorder the dependent FFN.
+  All named handles/plans/chain release; device counter remains 5.144-5.789 GiB,
+  unattributed. Named/device/process/GC counters overlap and are not additive.
+- Fresh build/Make check, 50 Crystal examples, 7 Python tests, format/diff checks,
+  one-byte-short budget refusal and 8 auditor mutation negatives pass. Full guard
+  sampled peak 5.843830 GiB, phase peak 5.837497 GiB, minimum cache-aware headroom
+  36.424103 GiB, swap growth 0 in 84 samples. 10% floor, 12 GiB cap, 64 MiB swap stop,
+  240 s deadline; sampling cannot bound spikes. Mini-Quad verdict ROBUST for
+  bounded diagnostic, correlated rather than independent replication.
+- External final reports and isolated-audit-v2.json under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027. Earlier passing
+  epochs are historical; a two-indent format correction triggered fresh build
+  and complete final matrix. Next falsifier: connected-block resource/lifetime
+  interference against this same-input isolated baseline before GEMM replacement
+  or shared-mode promotion. Rollback removes diagnostics; defaults unchanged.
+  Refresh on scoped source/artifacts/backend/device/OS/toolchain/geometry/
+  precision/command/lifetime/guard/clock changes or lost evidence; every launch
+  needs fresh memory admission.
+
+### 2026-10-27: Connected PixelUMM Graph-scope lifetime probe
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md, connected one-block
+  resource section, and .landmark/evidence/2026-10-27-hy-nomas-pixelumm-connected-resources.json.
+  Six exact-source native processes at true J2048/J21120 execute one production
+  block, both FFN topologies prepared, encoded topology fixed per process.
+  Diagnostic-only macro wraps unchanged Graph encode body; defaults unchanged.
+- Per-Graph nested pool tests Graph API/result temporaries only, not all outer
+  block temporaries. Three equal-cadence native samples per Graph, no heap event
+  arrays during encode; sequential/non-atomic readings can observe prior GPU
+  progress. Pool-off third sample is after-scope, not a drain. Missing/unknown/
+  overflowed events reject the report; exact RMS `_pre_gain` names are required.
+- Six requests/process: two warmups plus four balanced pool-mode requests;
+  full matrix separate/shared with normal/reversed warmup and starting orders.
+  One existing terminal wait/request, zero named encode allocations/preterminal
+  reads; 128 scalar metric bytes read afterward. All 252 seven-stage comparisons
+  are finite/bitwise exact at unchanged 2e-5; 36 NaN positives detected. Parity
+  is against authenticated saved upstream-source-method MPS fixture composition,
+  not an independent backend or fresh complete upstream block execution.
+- Full-J measured root-union medians outer/nested, ms: separate normal
+  1234.110/1233.892, separate reverse 1234.617/1235.345, shared normal
+  1233.123/1233.462, shared reverse 1233.360/1232.438. Contrast switches sign,
+  below 0.93 ms/0.08%; no repeatable scope effect observed at this resolution.
+  Two measured samples/mode/cell cannot establish equivalence. Observer-enabled
+  completed command-buffer GPU intervals and ambiguous phase sums are not
+  exclusive shader costs.
+- Named buffers 7,375,674,980 bytes full J. Device peaks 9539.000 MiB separate /
+  9538.969 MiB shared, about 2.446 GiB above preencode. All 2,334 full-J nested
+  drains have zero observed device delta. After named live count/bytes reach 0,
+  device counter falls only 0.33-0.36 MiB to 9538.641 MiB. Retained near-plateau
+  does not establish MPS ownership, cache mechanism or leak; counters overlap.
+- DoD: release diagnostic/macro-off bridge builds, Make freshness, 56 Crystal
+  examples, 7 Python tests, format/diff checks, one-byte-short pre-Metal budget
+  refusal and 16 rejected auditor mutations. Full guard 88 samples: max footprint
+  9.829181 GiB, min cache-aware headroom 31.509201 GiB, swap growth 0. Retained 10%
+  floor, 14 GiB process cap (8 small), 64 MiB swap stop, 240 s deadline. Polling cannot
+  bound transient peaks. No full decoder/head/diffusion/Studio/generation.
+- External reports/connected-audit-v2.json under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027.
+  Early small runs rejected unmatched Graph labels before accepted matrix;
+  failed runs are excluded. Correlated Mini-Quad verdict ROBUST only within
+  diagnostic scope. Block-wide lifetime and earlier full36 drift remain open.
+  Next falsifier: fixed-weight identical-input connected requests through one
+  versus two resident Plans sharing scratch, before extrapolating bank reuse
+  to 36 blocks. First check a reduced bank budget and serialized scratch
+  ownership; duplicating today's Plan exceeds the named cap. Not implemented
+  here. Rollback removes diagnostic and inactive
+  hook. Refresh on scoped source/artifact/backend/device/OS/toolchain/geometry/
+  precision/command/capture/lifetime/guard/clock changes or lost evidence;
+  every launch needs fresh memory admission.
+
+### 2026-10-28: One versus two PixelUMM Plans sharing one Workspace
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md, one/two native Plan
+  section, and .landmark/evidence/2026-10-28-hy-nomas-pixelumm-plan-reuse.json.
+  Diagnostic owner independently prepares 1/2 native Plans through unchanged
+  production factory with identical input/weight/core/capture/scratch bindings.
+  One unattached one-slot Workspace replaces a second buffer bank; production
+  connected-prefix guards remain unchanged. Fixed encoded separate gate/up;
+  both topologies prepared in each Plan. No production promotion or generation.
+- Pre-Metal named budgets identical for 1/2 Plans: 1,098,228,484 bytes J2048,
+  7,375,674,980 bytes J21120 (6.869133 GiB), below 8 GiB named cap. Opaque MPS
+  memory unknown, not zero. Partial enqueue marks resources in flight; only
+  the sole successful terminal wait permits reuse/release. Failed wait quarantines,
+  is not retried, and blocks release. Plans release before common buffers.
+- Accepted v3 matrix: 2 small/4 full fresh processes, 2 warmups+4 measured each;
+  full order one/two/two/one, reversed Plan selection in second two-Plan cell.
+  All 252 seven-stage captures finite/bitwise exact at unchanged 2e-5; all36
+  NaN positives detected. Same authenticated saved upstream-source-method MPS
+  fixture composition, compact payloads fully rehashed, not independent backend
+  or fresh complete upstream execution. Zero named encode allocations or
+  preterminal reads; one wait/request, 128 metric bytes read afterward.
+- Full root-union medians 1235.704/1235.213/1234.719/1236.097 ms. Two-minus-one
+  mean-of-cell-medians -0.934ms/-0.0756%, versus one-Plan A/A drift +0.392ms/
+  +0.0317%. Advantage below0.1%; sparse samples do not establish a repeatable
+  production gain or equivalence. Do not claim contrast below this A/A drift.
+  Completed command-buffer intervals include stalls/diagnostics, not exclusive
+  shader or uninstrumented production latency. Full requests:128roots/195Graphs.
+- Device peaks 9539.016 MiB one Plan, 9539.359 MiB two (+352 KiB, not total Plan
+  memory). Second Plan preparation adds about20 MiB sampled footprint with zero
+  device delta. After named release to zero, device reports5,456,936,960bytes;
+  ownership/cache/leak unknown, overlapping counters nonadditive. Full guard88
+  samples:peak footprint9.415301GiB,min cache-aware headroom25.004135GiB,swap0.
+  10%floor,14GiB processcap(8small),64MiBswapstop,240s deadline retained; sampled
+  checks cannot bound transients. Named cap alone is not the system floor.
+- Early full-two-a failed strict creating-thread guard after preparation/before
+  first request. Cleanup may have masked original exception; root cause open.
+  Original-exception/thread-ID logging added, guard unchanged, v2 matrix passes.
+  Final v3 reruns all cells after report-only opaque-ownership label correction.
+  Failed/historical/diagnostic cells excluded, no claim failure fixed. Offline
+  descriptive-v3 corrects a copied stale contrast/drift interpretation, no native
+  change. Named/aggregate memory is measured; opaque ownership stays unknown.
+  DoD:release/freshMake,45Crystal examples,format/diff,budget-1 refusal and12
+  auditor mutations. Correlated Mini-Quad ROBUST only for accepted bounded matrix.
+- External namespace /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028;
+  plan-reuse-audit-v4.json and descriptive-v3.json join identities and arithmetic.
+  Next falsifier: reduce60tiles*3 local-attention Graph transitions while preserving
+  BF16/reduction, measure full-block gain. Host attention~318ms includes~313ms
+  nested commitAndContinue; waits may simply move, not disappear. No optimization
+  implemented; full36 changing-weight/connected-input effects remain open.
+  Rollback removes diagnostics. Refresh on scoped source/artifact/backend/device/
+  OS/toolchain/geometry/precision/command/capture/lifetime/guard/clock changes or
+  evidence loss; fresh admission each launch, any owner failure reopens diagnosis.
+
+### 2026-10-28: First native five-second Hy-Nomas preview
+
+- Return pointer: docs/hy-nomas-generation-frontier.md. Opt-in entry point
+  examples/hy_nomas_generate.cr composes authenticated saved Qwen state26,
+  BF16 DiT control weights, eight GPU Euler forwards, and five PixelUMM
+  windows through 36 blocks plus head. Output is 120 frames, 512x288, 24 fps,
+  seed42/shift5/CFG1, tram prompt; no live text encoder, camera/action or audio.
+  Same-decoded-Q4 checks do not establish BF16 quality; Q4 is excluded here.
+- One explicit terminal wait separates weight phases. The latent retains its
+  GPU allocation; no per-block/step/window wait or activation readback. New
+  bounded repeat cursors keep default single-pass behavior and reject order,
+  chain, limit and poisoned-use errors. Decoder uses common scratch/two banks.
+- Newly composed boundaries match pinned source bit-exactly at unchanged
+  2e-5: initial BF16 rounding, eight Euler steps/timesteps, real-weight Pixel
+  stem and synthetic full five-window assembly/display conversion. NaN negative
+  detected. Pixel oracle initially failed because large MPS int64 remainder
+  corrupted synthetic inputs; exact period-before-repeat fixes the oracle,
+  not tolerance. Full generated-video upstream parity remains untested.
+- Accepted generation-v3: DiT35.768s, PixelUMM67.547s, setup22.877+22.221s;
+  guarded process155.672s, MP4 export0.417s. About31.2s per second of video
+  including startup at this resolution; single preview, not warmed benchmark
+  or Wan/480p/720p comparison. ffprobe confirms120frames/5s; decoded contact
+  sheet shows moving tram/street. All frames finite/nonconstant; statistics
+  and sampled images do not certify temporal consistency or upstream quality.
+- Guard300samples: peak group footprint21,340,353,160B (19.874GiB), minimum
+  cache-aware headroom23,171,694,592B (21.580GiB), swap growth0, exit0. Retained
+  10%floor/23GiBprocesscap/64MiBswapstop/900sdeadline; sampled, not transient
+  guarantees. Instrumented MetalBuffer allocations/readbacks0 during encode,
+  excludes opaque MPS resources and terminal pixel-file export. Two terminal
+  waits total. Adversary required this counter-scope clarification.
+- External namespace /opt/mldata_ssd/cogni-ml/hy-nomas-first-video-20261028.
+  Inputs SHA5b162b8bf4b28c6cfacd8a3d8c14a7758b699034b2a46e84c224522eb0a75a7b;
+  pixels SHAf13481b1d5790761df94943b6eac9e768177a240998c859d3ea9f21a633c2f85;
+  MP4 SHA7a323eb0b9e02443eedf45a5576f36a3c738ea41b687d1a476cbbdcfd0ea1cd3.
+  Logs/guard/receipt/export/ffprobe/video-analysis/contact-sheet index the run.
+  Earlier cache geometry refusal and terminal unsupported-wx failure excluded;
+  runtimeV4320 keeps cacheV5280 architecture/bindings, writer uses O_EXCL.
+- DoD: release builds,39Crystal examples,13Python tests, format/diff checks,
+  authenticated numerical probes and guarded actual MP4. Correlated Mini-Quad
+  ROBUST for bounded composition/order/lifetime; no independent full-video
+  equivalence claim. Receipt metric wording added after accepted GPU run.
+- Next frontier: profile current J5760 decoder window, then batch same-sized
+  local-attention tiles with identical contexts/BF16/reduction; measure full
+  window before promotion. Decoder is65.4% of neural time. Five overlapping
+  windows decode200frame positions for120output; overlap indices alone do not
+  permit reusing later hidden states across changed attention contexts. Loading
+  and plan setup45.1s is a separate target; do not bypass authentication.
+  Rollback removes opt-in glue and repeat opt-ins. Refresh on source/weights/
+  inputs/geometry/precision/schedule/backend/device/guard changes or evidence
+  loss; re-admit memory on every launch.
+
+### 2026-10-28: Experimental Q4 Hy-Nomas preview with identical inputs
+
+- Return pointer: docs/hy-nomas-generation-frontier.md, experimental Q4 and
+  duration sections. `--dit-weights q4-k` switches only the existing authenticated
+  54-block loader; BF16 remains default, globals/PixelUMM/Euler boundaries stay
+  BF16. Q4 decodes on GPU into the same one-block stage, eight ordered forwards,
+  no new waits/readbacks. Direct Q4 GEMM is not substituted. Full generated-video
+  upstream parity and Q4 quality remain unqualified; tolerance stays2e-5.
+- Same inputs/prompt/seed42/schedule as first BF16 clip. Q4 produced120frames,
+  512x288/24fps/5s. Contact frames show much more blurred/distorted buildings
+  and tram contours. Keep Q4 opt-in; finite/nonconstant output is not quality.
+- Q4 named DiT9,290,402,436B vs BF1621,011,384,964B; unchanged decoder
+  16,563,852,432B dominates the peak. Guard324samples: peak18,021,842,016B
+  (16.784GiB), min cache-aware headroom23,878,877,184B, swap growth0, exit0;
+  same10%floor/23GiBcap/64MiBswapstop/900s. Encode named allocations/readbacks/
+  preterminal waits0 under existing scoped counters, one terminal wait/phase.
+- Q4 setup7.296+22.313s, DiT48.976s, decoder85.906s, guarded168.534s,
+  export0.311s. Prior BF16guard155.672s; separate unpaired launches, unchanged
+  decoder also slowed, no causal speed claim. Weights reside externally and
+  load during setup; disk speed does not directly reduce resident GPU compute.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-q4-preview-20261028:
+  launch.json source/binary/baseline hashes, two CPU plans, specs21pass,
+  invalid-mode negative, generation/guard/receipt, comparison/export/ffprobe,
+  contact sheet and standalone/side-by-side MP4s. Q4 pixels SHA
+  dc7a80be9c802b134e91ae784f7be0c05a5bae398cdd1fdd7e8cfe2d6cff94ae;
+  Q4 MP4 SHAfb4cfacc8f7a8abd2be264e9a2f083dad2bbe6c6837afa572b62a505f3434074.
+- Continuous native duration is exactly5s: config rejects history/multiple
+  segments. PixelUMM windows decode one latent, not AR continuation. Arithmetic
+  from one BF16launch suggests~1m55s independent output/hour, neural-only~2m54s;
+  neither is sustained throughput or a long-duration forecast. Port/cache/RoPE
+  continuation before admitting longer continuous clips. Next exact-performance
+  frontier remains current-J5760 PixelUMM profiling. Refresh evidence after
+  source/weights/inputs/geometry/precision/schedule/device/backend/guard changes
+  or artifact loss; fresh memory admission per launch. Rollback selector only.
+
+### 2026-10-28: BF16 preview-window oracle and rejected K/V reuse trial
+
+- User rejected the Q4 preview visually; original BF16 is the active quality and
+  performance target. Return pointer: docs/hy-nomas-generation-frontier.md.
+  No complete generation was run in this diagnostic slice.
+- Added exact J5760/T10H18W32 block-probe admission and bounded all-stage oracle
+  capture with real pretrained block0 weights and seeded synthetic inputs.
+  Original production math matches all26 captures bitwise under Torch2.6.0;
+  original head plus poisoned alternate matches all5 captures. Tolerance2e-5,
+  one terminal wait/request, zero instrumented encode allocations/preterminal
+  reads; guarded10%floor/64MiBswapstop, block10GiB/head8GiB caps all passed.
+- Mixed Torch2.8 block oracle initially suggested an RMS error. Experimental
+  inverse-root replacement matched2.8 but failed existing2.6 head controls;
+  all production RMS/KV edits reverted. Preview MPS producer now rejects other
+  runtimes before GPU work and records executable/package paths; native J5760
+  admission also rejects other runtimes/CPU fixtures before payload access.
+  Red constructor falsifier observed; after guard, all26 exact again in
+  results/native-torch26-admission-all.json. This resolves
+  an oracle setup error, not a native numerical defect or full-video parity.
+- KV reuse24->4 gathers had no reliable full-block gain: ABBA profile-off
+  medians0.515/0.531/0.571/0.594s, ~0.6% balanced difference amid GPU drift.
+  These trials used isolated2.8 math and do not qualify production performance.
+  FFN remains a larger target; no grouping/precision/schedule default changed.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-bf16-perf-20261028:
+  reference/block0-j5760-torch26-all.json SHA
+  bf551356434520c0c46643280ff7b5723d7e44f2ba089813990402bb78718307;
+  results/native-torch26-all.json, head-torch26-original.json and guard logs;
+  rejected experiment patch under tmp/torch28-rms-kv-candidate-rejected.patch.
+  CPU DoD:36Crystal examples and26Python tests pass; native block/head builds
+  and the above guarded numerical replays passed. Current geometry tests prove
+  index neighborhoods, not speed. Refresh on source/weights/input/runtime/
+  geometry/precision/backend/device/guard changes or evidence loss.
+- Next falsifier: measure repeated CPU index authentication separately; reuse
+  only an authenticated request-scoped identity with freshness checks. Preserve
+  full BF16 SHA/inventory/direct-copy gates and the existing GPU path. Local
+  SSD mirroring is a separate unmeasured option; do not bypass authentication.
+
+### 2026-10-28: BF16 request startup reuses one authenticated index
+
+- Original BF16 remains the selected quality/performance target. Replaced three
+  full Q4 index/payload admissions with one request-local Admission plus two
+  stat refreshes; Q4 inference keeps its full loader path. All consumed BF16
+  files retain full SHA/inventory/direct-copy checks. No GPU math, dispatch,
+  synchronization, precision or named budget changed; no generation ran.
+- Warm-cache CPU-only native ABBA/BAAB, including each case's first scan:
+  four cases/arm, medians6.136654->2.055800s, ratio2.985x, difference4.080854s
+  for authentication only. Same54 blocks/4,593,162,240 Q4 payload bytes; all
+  identities match and zero tracked Metal allocations. Late paired drift
+  10.050/3.427s remains included. No cold/GPU/full-video acceleration claim.
+- Stat refresh rejects replacement/removal/mtime change across all five file
+  classes. Same-inode/size/restored-mtime Q4 byte mutation can evade refresh;
+  unused Q4 bytes are not a BF16 math input. The matching BF16-control mutation
+  fails fresh SHA before parsing/Metal. Do not promote stat reuse to fresh
+  content authentication or a persistent trust cache.
+- Actual CPU BF16Stack admission verifies54 blocks/16,314,144,768 payload bytes
+  with exact plans and zero Metal allocations. Preview release build and
+  guarded --plan-only pass with unchanged DiT/decoder named budgets. Added
+  preflight_seconds and request_seconds; historical total_seconds retains its
+  narrower scope. Evidence root remains hy-nomas-pixelumm-bf16-perf-20261028:
+  results/authentication-summary.json, authentication-paired.jsonl,
+  authentication-bf16-controls.jsonl, generation-plan-admission.jsonl and guard
+  logs; external tmp/authentication_benchmark.cr is hash-pinned in the summary.
+- CPU23 examples and native BF16-cache18 pass, format/diff pass. The broader
+  CPU-only cache suite's two old nested-pending errors were resolved by running
+  those Metal-required cases in native mode, without changing unrelated tests.
+  Correlated adversary ROBUST for this startup boundary. Benchmark guard:
+  10%floor/2GiBcap/64MiBswapstop,85 samples,8,470,936B peak,zero swap growth.
+- Next falsifier: two real J5760 windows/two blocks, comparing window-major
+  versus block-major FFN weight staging with separate activation banks and
+  staging-inclusive time. Existing fixed graph feeds/output cursor forbid a
+  simple loop swap. Three F32 FFN matrices cost576MiB; five pairs of BF16 state
+  banks450MiB (~315--360MiB extra), opaque MPS peak still unknown. Proposal only.
+  Return pointer docs/hy-nomas-generation-frontier.md. Rollback reverts this
+  startup commit. Refresh on source/weight/input/runtime/geometry/backend/
+  device/guard changes or evidence loss; memory admission expires each launch.
+
+### 2026-10-28: PixelUMM FFN weight staging is exact, no established speedup
+
+- Bounded diagnostic only: two overlapping saved initial-noise preview windows
+  through pretrained blocks0/1 at J5760; actual upstream stem, local RoPE reset.
+  Not final DiT latents or a complete-video quality/throughput requalification.
+  Production BF16 math, defaults and synchronization remain unchanged.
+- Added four fixed native plans with one shared scratch, separate window/block
+  outputs and one576MiB F32 FFN staging set, converted once/block on GPU.
+  Both arms match24/24 upstream Torch2.6.0 captures bitwise at unchanged2e-5;
+  staged checks603,979,776 exact weight words. NaN positive control fires.
+  Each request: one terminal wait/read464B, zero tracked encode MetalBuffer
+  allocations/preterminal reads; this does not prove zero host allocations.
+- Initial schedule-confounded medians1.459559->1.465904s. Same-order controls
+  2.319832->2.312451s and1.700959->1.710128s have mixed signs/drift; corrected
+  run loses3/4 pairs. No reliable speedup, no production promotion. Lower
+  encoding time is offset by waiting and is not pure CPU savings.
+- Native named7,381,500,468B, peakfootprint8,182,353,184B;10%cache-aware reserve,
+  16GiBcap/64MiBswapstop passed, zero swap growth. Upstream12GiBcap passed.
+  Resource categories overlap; diagnostic capture inventory is not a pipeline
+  forecast. Report handle-array alias fixed with snapshot before release;
+  preserved v1 source/binary/reports retain their original lineage.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-staging-20261028;
+  results/summary.json SHA8905d2e45b8ac37f14ff5c2c9b84c9de7ede986dc5b4cb4415d6dfbe80123bec.
+  Release build,8CrystalCPUexamples,9PythonCPUtests,format/diff and guarded GPU
+  replays pass; correlated adversary ROBUST for bounded numerical reuse only.
+- Next proposed falsifier: batch independent windows' FFN rows while keeping
+  attention contexts separate, or fuse SiLU/product retaining BF16 rounding.
+  Qwen scratch leases/handoff already partly reused; decode GEMV/GDN algebra
+  does not transfer directly. Return pointer docs/hy-nomas-generation-frontier.md.
+  Refresh on source/weights/input/runtime/geometry/precision/schedule/backend/
+  device/guard changes or artifact loss; fresh memory admission each launch.
+
+### 2026-10-28: Bounded PixelUMM GC probe does not justify disabling GC
+
+- Standalone diagnostic only: two saved initial-noise preview windows through
+  pretrained blocks0/1 at J5760, ordinary BF16 graphs/window-major order in both
+  arms. GC disabling is process-wide; not admitted for Studio/concurrent
+  inference. Exception-safe scope ends after the existing sole terminal wait,
+  before metrics/release. Every primary has one matched ordinary-GC tail.
+- All140 requests completed;64 timed primaries,32/arm, ABBA/BAAB repeated8.
+  Both correctness primaries match24/24 pinned Torch2.6.0 captures bitwise at
+  unchanged2e-5, NaN control fires. One terminal wait/read464B per request;
+  zero tracked encode MetalBuffer allocations/preterminal reads. No generation,
+  GPU math/synchronization/default or production GC policy change.
+- Primary medians normal3.516415/disabled3.560862s; including normal tails
+  7.019055/7.102461s. Paired median normal-minus-disabled -0.9701%/-0.4741%,
+  disabled13/32 wins. Large shared drift prevents speedup/slowdown/equivalence
+  claims. Ordinary GC remains selected; removing GC/runtime is not justified.
+- Whole observed loop454.663s allocated3,301,280 Boehm bytes; heap7,159,808B
+  unchanged. Exactly one natural collection in trial56's normal tail after a
+  disabled primary: envelope1.104083ms, rendezvous-inclusive pause0.888000ms,
+  fully-stopped0.840875ms, overlapping. Normal timed primaries/tails had no GC.
+  No pause-distribution or causal debt claim; one tail is not full future debt.
+- GPU command-chain spans also drifted early/late: normal1.950924->4.650484s,
+  disabled2.051612->4.618436s. These include queue/gaps, not pure kernel active
+  time. Observed GC cannot explain seconds-scale drift; cause is still open.
+  Next bounded falsifier: localize GPU/MPS/queue-state drift before GC changes.
+- Guard10% cache-aware reserve/16GiBcap/64MiBswapstop/600s passed:474.119s
+  complete run, sampledpeak8,180,682,040B, minheadroom25,697,992,704B, zero
+  positive swap growth,879samples. Named7,381,500,468B includes unused576MiB
+  stage; resource categories overlap, not a pipeline memory forecast.
+- Native observer is allocation-free and refuses occupied/replaced callbacks;
+  CPU real-collection qualification,12Crystalexamples,7Pythonanalyzer tests,
+  release build,format/diff pass. CPU10001-point qualification: zero allocation
+  or GC, mean0.111us, uncontended only. Correlated adversary ROBUST only for the
+  bounded measurement/numerical claims. Boehm bytes exclude native allocations.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gc-20261028;
+  results/summary.json SHA
+  3dff8dbcc9f413ba20206bcb111b08a013e1ceb639839e485c0e0834823790f5.
+  Analyzer v2/raw/guard/source/binary pinned. Inclusive trial endpoints are not
+  serialized; validator recomputes request phases but only bounds trial totals.
+  Post-run Makefile edit adds build prerequisites only, measured binary/code
+  unchanged. Rollback removes the diagnostic and restores old request-count
+  default. Return pointer docs/hy-nomas-generation-frontier.md; refresh on
+  source/input/weights/runtime/geometry/precision/schedule/backend/device/guard
+  changes or evidence loss; fresh memory admission every launch.
+
+### 2026-10-28: PixelUMM mild drift localizes to root intervals and MPS waiting
+
+- Added a standalone J5760 diagnostic on the same two saved initial-noise
+  windows/blocks0/1, four baseline BF16 Plans/shared scratch/window-major order.
+  Uses existing CPU phase/API/continuation collectors, phase_roots=false;
+  no GPU math, geometry, command/wait, readback, conversion or default change.
+  Source/binary/inputs authenticated; not a full decoder or generation run.
+- All102 requests complete:2correctness/4warmup/96timed,48profile-on/off timed
+  each, ABBA/BAAB repeated12. Both24-capture controls match pinned Torch2.6.0
+  upstream bitwise at unchanged2e-5, NaN control fires, all outputs pass.
+  Each request:125roots, one terminal wait/read464B, zero preterminal reads,
+  zero tracked encode MetalBuffer allocations. These counters do not establish
+  zero host/native allocations. Failed terminal waits are not retried; in-flight
+  resources remain rooted rather than released during unsuccessful cleanup.
+- First/last16 timed medians: GPU root-duration sum1.405981->1.862077s,
+  encodewall0.676150->0.877546s, encodeCPU11.095->9.218ms, terminal wait envelope
+  0.751987->1.004449s. GPU sum is not the interval union/envelope or pure kernel
+  active time. Timed profile roots have median74.4us interval gaps and1.63ms
+  overlap; this does not prove GPU utilization or absence of internal stalls.
+- First/last8 profiled timed continuations: FFN273.532->381.803ms,
+  selfprepare158.545->210.163ms, attention226.477->270.613ms. FFN earlier-root
+  overlap medians99.983%->99.988% are weighted by call wall per request;
+  exclude the root currently being submitted. Do not add nested calls to
+  inclusive graph timings or interpret shared candidate roots as exclusive
+  phase kernel costs. Several phases grow; underlying cause remains open.
+- On/off paired median GPU sum+0.0808%, totalwall+0.1036%, encodeCPU+8.425%;
+  observer is not neutral, no equivalence or production speedup claim.
+  Three post-wait/profile-extraction GCs total2.070416ms envelope/1.829666ms
+  rendezvous/1.809873ms stopped, overlapping categories. Thermal advisory0->1
+  at request50 after drift starts; not GPU-clock or causal thermal evidence.
+- Loop167.121s does not reproduce old4.6s severe drift from454.663s GC loop.
+  Correlated adversary ROBUST for bounded descriptive localization; causal
+  attribution/extrapolation remains unverified. Next severe-drift falsifier:
+  longer matched exposure that reproduces it with direct device telemetry,
+  profiling-intrusion control and separation of system/device vs Plan state.
+- Guard10%cache-aware reserve/16GiBcap/64MiBswapstop/600s passes:360samples,
+  peakfootprint8,180,731,168B, minheadroom32,139,329,536B, pressure80%, no swap
+  growth. Named7,381,500,468B still includes unused576MiB stage; overlapping
+  diagnostic resource categories are not a pipeline memory forecast.
+- Release build,36phase/API/trace/schedule CPU examples,8Python accounting and
+  guard falsifier tests, existing GC real-collection qualification/12examples,
+  format/diff checks pass. Analyzer recomputes all29metric slots/request,
+  markers/root candidates, overlap union, nested API/trace and guard counters;
+  per-call overlap medians and wall-weighted ratios are distinct.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-drift-20261028;
+  results/summary.json SHA
+  b7f254bf9b29879963309a68be1241f519088f8a88683e11f363db5d59a46d88
+  pins raw report/guard, source/binary receipt, final analyzer and recomputed
+  compact statistics. Return pointer docs/hy-nomas-generation-frontier.md.
+  Rollback removes diagnostic/optional probe hook; no production promotion.
+  Refresh after source/input/weights/runtime/device/geometry/precision/schedule/
+  guard changes or evidence loss; every launch needs fresh memory admission.
+
+### 2026-10-28: PixelUMM packed gate/up is exact but does not accelerate the request
+
+- Fixed telemetry clock-domain mismatch: API wall timers now use raw uptime
+  like Mach trace ticks, preserving the 2us accounting bound and old two-output
+  CPU-probe ABI. New nested-clock CPU qualification passes; no GPU wait/math
+  change. Guarded repeated baseline:102requests,48timed/arm profile on/off.
+  Off-arm median1.555039s wall vs8.842ms current-thread CPU; encode wall includes
+  MPS backpressure. This does not cover every driver thread or explain the old
+  4.6s severe drift. GC/lock elimination is a weak main lever in this diagnostic.
+- New standalone packed gate/up: one logical F32 matmul after runtime BF16
+  weight concatenation, BF16 rounding before output slices.40requests,32timed,
+  16/arm ABBA/BAAB. Median full request baseline1.425029/packed1.427755s;
+  paired change+0.1228%, packed5/16wins. Encode-15.5643% moves into terminal
+  wait+14.2570%;125->117roots does not establish a gain. Keep default off.
+- All compared finite captures/output words match saved authenticated Torch
+  2.6.0 MPS upstream-source-method oracle bitwise at unchanged2e-5; NaN control
+  fires. Four Plan passes=request: two saved initial-noise windows x blocks0/1;
+  native block0 output feeds block1 within each window. One terminal wait and
+  one464B metrics read/request, zero preterminal reads/tracked encode buffers.
+  Opaque native allocations, full decoder/head/generation are outside scope.
+- Fresh Instruments attribution maps484/484roots/862targetCompute rows; max
+  duration/offset spread~42ns. Shader association is temporal/nonexclusive;
+  capture-mode label changes prevent exclusive per-phase cost claims. Counter
+  export timed out; no bandwidth/occupancy/ALU-saturation or maximum-performance
+  claim. Correlated adversary ROBUST for bounded gates/lifecycle/measurement.
+- Next useful falsifier: fold F32 score scale into softmax, prove actual panel
+  work removal and unchanged scaled-score/probability/attended/block gates.
+  Broader streamed attention remains risky under fixed reduction tolerances.
+  Score/probability cumulative panel volumes are3.185GB each/block pass/window, not
+  resident/DRAM bytes; peak pair675MiB. FFN still~1.739TFLOPs/block. No gain is
+  predicted from graph count alone; compare unprofiled full requests both orders.
+- Guard10%cache-aware/16GiBcap/64MiBswap/600s passes all three native runs;
+  largest sampled group10,329,643,728B, minheadroom28,249,341,952B, zero swap
+  growth.44CPU+2nativeCPU examples,8Python tests, release/format/diff pass.
+  Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-hotspot-20261028/results/
+  hotspot-summary-1.json SHA
+  4a9417ef0948d3605394d751e576dd5ac87480274cb6f2efd8c4d59985a523ee.
+  Receipts pin per-run source/binary. Later diagnostic metadata/ABI restoration
+  qualified by4requesttrace; final formatting/test-target changes built but no
+  repeated final-binary timing claim. Return docs/hy-nomas-generation-frontier.md;
+  refresh on source/input/weights/runtime/device/geometry/precision/schedule/
+  backend/guard changes or evidence loss; fresh memory admission each replay.
+
+### 2026-10-29: Native J5760 connected FFN A/A passes its bounded calibration
+
+- Added standalone diagnostic using production F32-compute/BF16-boundary
+  gate/up/down graphs and native BF16 SiLU/product, fixed saved w0/block0
+  normalized input, one reused plan/buffer owner. Two warmups +16 timed samples;
+  native product feeds down. No production selector or math changes, no Studio
+  or generation. Input remains saved initial-noise conditioning/upstream stem,
+  not generated DiT latents or a quality fixture.
+- All56 normal GPU metric slots have exact expected counts and zero failed,
+  nonfinite or different words against pinned upstream/canonical outputs.
+  Seeded NaN control produces exactly1 failure/nonfinite. Unchanged2e-5.
+  One terminal wait, one912B packed readback, zero preterminal reads/tracked
+  encode MetalBuffer allocations. Named storage1,481,638,800B excludes opaque
+  MPS resources. No CPU tensor diagnostics/hashing/GC/memory sampling between
+  samples; host timestamps/root cursors and external memory guard remain.
+- Independent recomputation validates all18 sample unions from162 completed,
+  error-free roots and zero outside-root overlap. GPU comparison roots are
+  excluded but their cadence may perturb future samples. Median160.083ms,
+  range158.050-175.393ms, p90168.479ms, MAD/median0.828%; first/last4 medians
+  166.610/160.247ms. Adjacent ratios0.97320-1.10973; no stable-latency claim.
+  Counted1.739462TF/sample / median =10.866 projection-equivalentTF/s, not
+  GEMM-only throughput, ALU activity or end-to-end latency. Host encoding rises
+  from~0.5ms early to106-122ms later; MPS backpressure cause remains unassigned.
+- Guard10%cache-aware/8GiBcap/64MiBswapstop/600s completes rc0,43samples.
+  Sampledpeak2,264,811,344B; minheadroom40,592,424,960B; minpressure88%; zero
+  swap growth. File-backed/speculative pages counted once, reclaimability only.
+  Failed launches1/2 produced no GPU result;2 has no terminal guard event and
+  unknown cause. Separate CPU launcher control and complete attempt3 pass.
+- Release build,7Crystal contract examples,53Python fixture/guard tests,
+  format/diff and external verify_aa.py pass. Three correlated mini-Quad audits
+  ROBUST only for this bounded A/A; old J21120 36-block+head drift attribution
+  remains VULNERABLE. No speedup/candidate promotion. Next falsifier preserves
+  that same large chain/resources/spacing and changes only CPU diagnostic policy.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-j5760-20261029; measured
+  source parent762caf4f,171-file snapshot/source-2, build-manifest-2.json.
+  results/aa-3.json SHA
+  f4871703cb9f57f3f3fb869d3f9b3f26f35590fe6bcbfed2da7a347cc2686851;
+  binary SHAf9525148dbb63c0107f49e9175b928de4df3f150db70a179891e8c0e2fe9d082.
+  Return docs/hy-nomas-performance-introspection.md. Rollback removes diagnostic
+  and build targets. Refresh on source/inputs/weights/geometry/precision/runtime/
+  backend/device/schedule/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: J5760 FFN late encoding stalls coincide with a pending-root window
+
+- Diagnostic continuation trace/API export only, four fresh-owner arms in one
+  process OFF/ON/ON/OFF. Same saved w0/block0 input, separate F32-compute gate/up/
+  down with BF16 boundaries, two warmups +16 timed samples and fixed comparator
+  cadence/162 roots. No production math/default, new sync, Studio or generation.
+- All56 normal metric slots/arm match pinned upstream/canonical BF16 words
+  exactly at unchanged2e-5; seeded NaN fires once. One terminal wait/912B read,
+  zero encode readbacks/tracked MetalBuffer allocations. All54 graph encodes,
+  161 continuations (125 nested/36 explicit boundaries) are tagged FFN.
+- GPU-root union medians OFF159.260/ON161.206/ON166.150/OFF159.701ms.
+  Continuation wall1.814-1.942s/arm but owner-thread CPU only1.807-3.466ms;
+  graph-exclusive wall11.138-14.591ms total. Never add inclusive graph/children.
+  Earlier GPU-root interval unions cover99.9881%/99.9914% of traced call wall;
+  current submitted root excluded. Root envelopes are not ALU-active intervals.
+- Both traced arms have33 calls >10ms, all starting with63 earlier roots whose
+  completion callback is still pending; oldest=current_sequence-63. Return
+  follows oldest callback by0.016-0.167ms. Independently recomputed from raw
+  events. Strong evidence of pending-window admission backpressure, not proof
+  of a specific Metal/MPS limit/driver lock or physically active command count.
+  Removing these overlapping host waits is not a predicted latency saving.
+- Four arms do not establish trace neutrality; API profiler stays enabled in
+  all arms. No candidate/speedup promotion. Correlated mini-Quad is ROBUST for
+  bounded numerical/descriptive claims; J21120 whole-chain drift remains open.
+  Next main falsifier retains the large chain/input/resources/captures/spacing
+  and changes only inter-request CPU diagnostics. Queue-pacing experiments, if
+  pursued, need a matched control and cannot count moved waits as a speedup.
+- Guard10%cache-aware/8GiBcap/64MiBswap/600s completes rc0,43samples;
+  sampledpeak3,746,681,824B, minheadroom40,379,039,744B, pressure86%, no swap
+  growth. File-backed/speculative counted once; shorter spikes remain untested.
+- Release build,21Crystal CPU examples +2native-clock qualifications,15Python
+  analyzer tests (11new) and53fixture/guard tests pass. Analyzer rejects forged
+  API wall aggregates, nesting swaps and shifted ranges; root unions/earlier
+  overlap/API totals independently recomputed. No CPU tensor path was timed.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-trace-20261029;172-file
+  snapshot, parent75140810, binary SHA
+  17953d92488002ce3145227c4dcc7ed846c03d833cf2aaa23c3937c831d24027.
+  results/sweep.json SHA
+  c5f28dca525f2e9059ea350b78b228eebe55f6eb19dad078c061ebc07ac20b18;
+  results/trace-analysis-2.json SHA
+  1370609594dc464f866f32bfe069bd9e017fd6945d91b773f8fccef6b33a9b73.
+  analysis-manifest.json pins final offline source/tests/results, SHA
+  9c9ba55fa31e1e73739f262e5b8435c5f328a97fa359ade47d5670c5396dee9b.
+  results/pending-roots.json records the queue-window recomputation; default
+  queue source has no explicit64 setting, so configured capacity is unproven.
+  Return docs/hy-nomas-performance-introspection.md. Rollback removes optional
+  diagnostic flags/export and analyzer. Refresh after source/input/weights/
+  geometry/precision/runtime/backend/device/schedule/profiler/guard/toolchain
+  changes or evidence loss; fresh cache-aware admission before every launch.
+
+### 2026-10-29: PixelUMM CPU diagnostic placement qualifies as a bounded policy probe
+
+- Optional `--compare-cpu-diagnostics` runs baseline J21120, 36 blocks + head,
+  input A, persistent GPU plans/buffers and 50s terminal-to-pre-recorder gaps.
+  Six requests/process: warm, eager/deferred condition + following probe, tail;
+  reverse process swaps condition placement. API profiling stays off. Separate
+  CPU scratch preparation does not prepare candidate attention graphs.
+- Both conditions save the same43 post-wait captures before GPU-buffer reuse,
+  to fresh exclusive6.848GiB disk snapshots using the same330MiB CPU scratch.
+  Eager compares saved bytes immediately; deferred remains pending until all
+  six requests terminate and its saved bytes pass. No vacuous empty-vector
+  pass. Snapshot paths/extent/order and one-eager/one-deferred completion gated.
+- Following eager/deferred probes take63.953500/48.236443s normal and
+  48.303293/43.263825s reverse. Deferred-context time is24.5758%/10.4330% lower
+  in these two contrasts; do not pool or claim stable acceleration. Raw4579
+  completed-root unions/request independently recomputed; difference also
+  appears there, not just terminal-wait bookkeeping. Root envelopes are not
+  active shader time and do not identify a specific driver wait.
+- Completed-chain release and post-request GC follow diagnostics, so transient
+  resource lifetime/cache/reclamation timing moves with the policy. Pure CPU
+  causality remains VULNERABLE even though persistent resources/input/pacing
+  match. Next discriminator releases the completed chain after the common
+  snapshot write and aligns GC before comparison; no shader/math promotion.
+- Both rc0 processes preserve one existing wait,43 post-wait reads,zero early
+  reads/tracked encode allocations/request. All516 retained comparisons finite
+  and bitwise equal at unchanged2e-5;43-stage hashes identical across12 requests.
+  Reused authenticated upstream MPS controls, exact block35/head join; no fresh
+  connected upstream neural run, overwritten-intermediate gate or generation.
+- All2574 guard samples pass10%cache-aware/27.5GiBcap/64MiBswap/900s. Sampled
+  peak26.195773GiB,minheadroom16.343918GiB,positive swapgrowth0; no guarantee of
+  unsampled transients or exclusive-host/thermal equivalence. Both AC throughout.
+  Release build,74CPU examples,format/diff,analyzer mutation controls and4
+  pre-observer CLI negatives pass. Correlated Mini-Quad ROBUST for bounded
+  numerical/lifecycle/lineage observations, not stable timing attribution.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-diagnostics-20261029;
+  source parentcfeb368b,202-file frozen snapshots, binary SHA
+  93f9ede7c8134b33093a3ed8217e27ca33cdb27d3d4eda2d48e4202678873454.
+  results/analysis-paired.json SHA
+  8abe90461b91962d767ceabbcfef099dbfa025e1a6d4302645615b16783ac749.
+  Return docs/pixelumm-cpu-diagnostic-placement.md and generation frontier.
+  Rollback omits new flag; ordinary inference unchanged. Refresh on executable
+  source/input/weights/geometry/precision/runtime/backend/device/toolchain/
+  schedule/diagnostic/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: Aligned PixelUMM chain cleanup does not remove diagnostic-placement variation
+
+- Optional `--align-cpu-diagnostic-lifecycle` saves completed native metadata
+  and condition captures before chain release, then collects GC before either
+  eager comparison or deferred return. Standard requests use the same cleanup
+  point. Session-owned GPU buffers remain live. Ordinary inference ordering,
+  mathematical graphs and tolerances are unchanged; rollback omits the flags.
+- First aligned 50s attempt stops before the following chain is created:
+  condition snapshot/CPU work takes 51.775842s. Both completed requests pass;
+  preserve the failed attempt separately, never pool it into timing contrasts.
+  New opt-in pause accepts only 50/60s in CPU-diagnostic mode, default remains
+  50s; overrun/lateness guards stay intact.
+- Both new 60s normal/reverse schedules complete at J21120, 36 blocks + head,
+  fixed input A, persistent resources, API profiler off. Following eager/deferred
+  probe totals are 44.535279/43.250263s and 58.362926/43.399179s, ratios
+  1.029711/1.344793. Reverse tail is 47.391884s. These are two variable descriptive
+  contrasts conditional on common cleanup, not stable acceleration or isolated
+  release/GC/CPU-comparator causality. No specific driver or active-shader claim.
+- All 516 finite retained comparisons are bitwise equal to saved authenticated
+  upstream MPS controls at unchanged 2e-5. All 12 requests preserve one wait,
+  43 post-wait reads, zero early reads/tracked encode allocations and 4,579
+  completed error-free roots. Deferred checks follow all six cleanups per
+  process. Root unions independently recomputed; no fresh upstream neural run,
+  overwritten-intermediate gate or full generation.
+- All 2,667 guard samples pass 10% cache-aware/27.5 GiB cap/64 MiB swap/900s;
+  sampled peak 26.201907 GiB, minimum headroom 13.673111 GiB, no sampled swap
+  increase over admission baselines. Actual terminal-to-pre-recorder gaps are
+  60.000188..60.008679s, under 250ms lateness.
+  Release 0.020500..0.066542ms and explicit GC 0.809333..1.886042ms are local
+  post-wait intervals, not downstream resource or GPU-cause estimates.
+- Release build, 77 CPU examples, seven matched pre-observer CLI rejections,
+  offline mutation controls and source/receipt/lifecycle checks pass. Snapshot
+  extents and in-run stage hashes are checked, payloads were not hashed at write
+  time or rehashed. A redundant receipt pause key is null; canonical gap, argv
+  and observed pacing agree on 60s.
+  Correlated Mini-Quad is limited to bounded observations; physical cause and
+  stable timing remain open. Next proposed falsifier is independent-window
+  attention B2, preserving Q/K/reduction geometry, about 444 MiB extra shared
+  scratch; raw QK/PV/parity gates precede full-block timing. Not implemented.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029;
+  parent af34cece, 202-file unchanged source snapshots, binary SHA
+  afc72a5d4dab022f40e153a923f816156679b3aa962640d215ac9b76395aa237.
+  results/analysis-paired.json SHA
+  4589940af59d8eb7b179e2de776e6b22488bce79b5c1486d9d468b8d4e4eb0b0;
+  results/final-evidence-index-paired.json SHA
+  d4a5b260969c4ab113c3480963a9fb39ac7596b394d425413973aa778adb8651.
+  Return docs/pixelumm-cpu-diagnostic-placement.md and generation frontier.
+  Refresh after source/input/weights/geometry/precision/backend/toolchain/device/
+  schedule/lifecycle/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: Independent-window PixelUMM B2 is exact on one full-J block, modest gain
+
+- Opt-in standalone `pixelumm_window_batch_probe` pairs two equal-geometry
+  attention windows on the batch axis, preserving each lane's ordered query/key
+  lists, Q/K extents, full-K reduction and scale. It also packs paired K/V in one
+  gather. Production defaults and FFN graphs are unchanged; rollback omits the
+  diagnostic. Query-row concatenation remains a rejected route.
+- Correct the prior estimated A/B memory cost: retaining baseline panels adds
+  888 MiB of candidate panels plus 16 B metrics, not 444 MiB. One-block aggregate
+  unique named buffers are 4,154,449,396 B. Do not infer a production-only net
+  workspace cost or full36 peak from this standalone allocation inventory.
+- Two fresh processes each pass 15 requests at J21120: comparator fault,
+  raw QK, common-P PV, poisoned candidate/baseline connected gates, two warmups,
+  ABBA then BAAB. Each raw-QK gate covers 2,229,534,720 values and PV 86,507,520:
+  zero finite differences, tolerance failures or nonfinites. Positive control
+  detects exactly one injected fault. Eight attention/output comparisons per
+  process are bitwise equal to authenticated saved upstream controls, including
+  the last timed candidate, at unchanged atol=rtol=2e-5. No fresh upstream neural
+  forward, every-F32-softmax-intermediate claim or full generation.
+- Pooled eight requests per path: full block 1.208287 -> 1.182598 s (-2.126%),
+  CPU encode 357.526 -> 227.216 ms (-36.448%), segments 128 -> 78 (-39.063%).
+  Four ABBA/BAAB cells favor B2 by 1.478..2.763%. Warmup order is fixed baseline
+  then candidate. Terminal wait grows as encode ends earlier; do not add these
+  overlapping intervals or promote command-count reduction to a proportional
+  end-to-end speedup. Root intervals are not active-shader utilization.
+- Every request retains one wait, zero tracked encode allocations/early reads,
+  exact post-wait capture/metric inventory and completed error-free roots.
+  Both guards pass 110 samples at 10 GiB cap, cache-aware 10% reserve, 64 MiB
+  swap-growth/600s bounds. Sampled peak 7.337 GiB, min headroom 36.027 GiB, no
+  swap growth. The first attempt stopped before chain creation on a diagnostic
+  recursive Workspace lock. Retain it separately; corrected poison snapshots
+  buffer membership before reacquiring the guarded lock, exercised by both runs.
+- Release build, 24 CPU examples, production non-diagnostic bridge syntax and
+  three pre-observer CLI rejections pass. Correlated Mini-Quad supports only this
+  bounded numerical/descriptive result. B2 stays diagnostic-only; before use on
+  36 plans enforce common Workspace identity, qualify both full36+head inputs,
+  and measure aggregate memory/timing. More command batching alone is not a
+  supported route to a twofold pipeline speedup.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-window-batch-20261029:
+  results/ is the failed setup; results-v2/ and results-v3/ are completed cohorts.
+  Source manifest pins 414 files, SHA
+  f8515623e4a42ac5d239fdac82d8b54d2baa184e8067c2d9fa58ce534c55ca75;
+  binary 01bf186d7c8900fbd3534d31280b41714e19723fdb08d485bc81db1a28820581.
+  postbuild-receipt.json certifies EOF-only source cleanup and a rebuilt binary
+  byte-identical to both measured executables.
+  results-analysis.json SHA
+  77e2c58abbba2e41a9a06211e916bcfec58f4a1adb9e80cd7fd9d9f60f0fd939.
+  Parent 1f19bfa0; return docs/pixelumm-window-batch-attention.md. Refresh after
+  source/input/weights/geometry/precision/backend/device/toolchain/schedule/
+  lifecycle/guard changes or evidence loss; fresh memory admission per run.
+
+### 2026-10-29: PixelUMM B2 passes full36 plus head numerics without a speedup
+
+- New opt-in `pixelumm_window_batch_full_probe` connects all 36 J21120 blocks
+  and the global head, retaining BF16 weights and F32 FFN. Selection admits
+  exactly one plan or 36 ordered slots sharing one Workspace, homogeneous
+  geometry, reused outputs and two output banks; CPU negative cases cover
+  split owners, slot errors, geometry and allocation-policy mismatch.
+- Two frozen normal/reverse processes each complete 15 requests: four poisoned
+  both-input/both-mode gates, two warmups, eight ABBA/BAAB timed requests and
+  one unpoisoned B2 tail. The last timed request and tail are compared. All
+  516 retained comparisons (43 per compared request) are finite and bitwise
+  equal to saved upstream controls at unchanged atol=rtol=2e-5. The direct
+  block35/head GPU alias holds. This is saved-tensor comparison, not a fresh
+  upstream neural forward, all-intermediate claim or full generation.
+- Full-forward wall means baseline/B2: normal 68.694039/71.226950 s (+3.687%),
+  reverse 64.175671/64.888191 s (+1.110%). Four cell deltas are +2.523235,
+  +2.542585, +5.780940 and -4.355899 s; pooled +2.443% is descriptive only.
+  Drift and sign-changing cells leave a stable causal effect unqualified.
+  Segments fall 4579 -> 2779 and active encode-thread CPU falls in both orders;
+  this does not transfer the historical one-block gain to full36.
+- All 30 requests retain one terminal wait, zero tracked encode allocations,
+  early activation reads or stage-metric reads, and completed error-free roots.
+  In-flight mutation/release guards reject. Both guards finish 0 with cache-aware
+  10% reserve, 28.5 GiB process-group cap, 64 MiB swap-growth and 2400s bounds.
+  Shared-resident sampled peaks are 27.077502/27.078784 GiB; minimum headroom
+  11.363052/10.385696 GiB exceeds the 6.4 GiB runtime floor; swap growth is zero.
+- Admission inventory is 24,108,145,128 baseline bytes plus 931,136,064 candidate
+  bytes (888 MiB shared panels + 576 B metrics). Native B2 resources are outside
+  the wrapper named-buffer counter. Process/RSS/Metal/named categories overlap;
+  neither their sum nor a B2-only footprint delta is qualified. Named live bytes
+  return to zero and physical footprint falls below 0.56 GiB after owner release,
+  while Metal allocation remains higher; its cause is unresolved.
+- Release build, 88 CPU examples, four pre-observer CLI rejections and offline
+  source/receipt/schedule/capture/lifetime analysis pass. Correlated Mini-Quad:
+  bounded correctness and sampled containment ROBUST; durable speedup and
+  isolated candidate memory VULNERABLE. Keep diagnostic-only, defaults unchanged.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-full36-20261029:
+  normal/ and reverse/ retain raw reports, guards, receipts and frozen sources.
+  Parent 6ed52b78837bb97d8393e4179ee21583fde090a5, 416-file manifest SHA
+  acf3d17968225670ff039f386f0877e383a368377f5919f0f440947da600c029;
+  binary 7740281a4bd144150882b7d593554247741b065ac2323970f8b879fbb1e934e6;
+  analysis.json f914e3ccb77b08186027ad8735c65410c64252c135bbcfdad58964a27606df80.
+  Sources, executable and fixture pins remain unchanged through both cohorts.
+  Return docs/pixelumm-window-batch-attention.md. Refresh numerics after source,
+  input/weight/geometry/precision/backend/device/toolchain changes; refresh timing
+  additionally after host load, pacing, schedule, diagnostics or lifetime changes.
+  Evidence loss reopens dependent claims; every rerun requires fresh admission.
+
+### 2026-10-30: Echo motion slows near chunk boundaries; first decoder seam matches
+
+- User reports drifting eyes and uneven motion in the 20-second Echo scene.
+  Streaming ROI flow analysis of saved raw display pixels and MP4 supports
+  gradual slowing around frames 120/240/360 (5/10/15 seconds), sometimes starting
+  before the nominal boundary. A farther-right ROI retains the association but
+  has weak near-static motion. This is one-clip screen-space evidence, not eye
+  tracking, physical camera velocity or causal attribution. MP4 PTS remain regular
+  at 24 fps; the decoder uses one global 23-window schedule without a 5s reset.
+- New opt-in `spec/support/hy_nomas_decoder_boundary.py` authenticates the exact
+  Echo continuation receipt, latent bank, input/noise bundle and pinned decoder
+  source/weights before model work. The guarded seam-120 run decodes only latent
+  windows 25/30, re-bases the upstream blender to starts 0/20, and compares global
+  frames [120,140). All 8,847,360 F32 display values match exactly, with 468 exact
+  GPU BF16 source-weight checks. A separate terminal CPU export check also agrees.
+  Display conversion preserves both BF16 multiply/add rounding boundaries.
+- This uses the existing pinned upstream BF16-equation MPS adapter, including
+  gathered spatial-tile F32 QK/softmax/PV. It does not certify the stock full-video
+  pipeline, pre-display raw stages, earlier/later frames, other two seams or
+  perceptual quality. Same-lineage Adversary: ROBUST for selected display parity;
+  causal explanation and a motion-quality fix remain VULNERABLE.
+- Eighteen CPU decoder tests pass, including wrong identity/hash/extent rejection,
+  NCTHW time slicing and a discriminating staged-BF16 rounding case. The model run
+  finishes 0 under a cache-aware 10% reserve, 28.5 GiB cap, 64 MiB swap-growth stop
+  and 1200s bound. Sampled peak footprint 4.463 GiB, min headroom 22.966 GiB, no
+  swap growth. These are sampled categories, not a bound on between-poll spikes.
+  No production source changes or full generation occurred.
+- Source audit finds an open semantic difference: native experimental shared-scene
+  continuation includes/appends text each fixed 5s chunk; optional upstream
+  one-scene `chunk_ar` caches text once. Next falsifier: real common-prefix chunk
+  two with matched conditioning, epsilon and RoPE; compare denoise/history/cache
+  writer and intermediate outputs before changing cache policy. Do not infer
+  that this difference caused slowing, or that parity proves smooth motion.
+- Evidence: `.landmark/evidence/2026-10-30-hy-nomas-temporal-boundary.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030`, decoder results
+  under `results/sequence-echo-20s/diagnostics-decoder`. Parent 99b342696647.
+  Refresh after source/input/weights/geometry/precision/backend/device/toolchain/
+  blend/display policy changes or evidence loss; fresh memory admission per run.
+
+### 2026-10-30: Shared-scene text K/V persists once; motion symptom remains open
+
+- Fixed a source-confirmed semantic difference in experimental Hy-Nomas
+  continuation: fixed 5s chunks of one JSON scene must reuse the first writer's
+  text K/V. Later denoise calls expose current video K/V only; later writers
+  attend current text transiently and append video only. All valid text queries
+  remain active; padding stays excluded. Echo denoise key counts are now
+  4,877 / 9,197 / 13,517 / 17,837, rather than repeating 557 extra text keys
+  per chunk. The shared-scene CLI opts into `OncePerScene`; the generic provider
+  keeps `PerChunk`. `--legacy-text-per-chunk` is the controlled rollback path.
+- Current K/V prefixes are independent of full query/output rows. Distinct
+  writer workspaces are prepared, counted by admission and released with the
+  provider; the first writer reuses its denoise workspace. No precision or
+  tolerance changes and no added encode readbacks or synchronization.
+- Three synthetic chunks exercise 14 forwards across all 54 layer caches on
+  distinct F32 inputs with poisoned padding. All 9,072 attention output and
+  2,160 final cache values match the pinned upstream attention function and its
+  actual dense-cache helper exactly. Native F64-reference error <=7.451e-9;
+  zero tracked encode allocations/readbacks/preterminal waits, one terminal
+  wait. Eighteen Crystal examples and four CPU oracle tests pass. This certifies
+  the exercised F32 cache contract, not stock BF16/Flash/Magi or full DiT parity.
+- A bounded 10s same-prompt/noise BF16 preview preserves the first 30 latent
+  frames exactly against the saved 20s Echo control, changes chunk 2, leaves
+  unused latent frames 60:180 untouched and preserves the first 100 display
+  frames. All 240 frames are finite/nonconstant. It takes 376.07s including
+  setup/raw export, with sampled 24.792 GiB peak, 17.875 GiB minimum cache-aware
+  headroom and no swap growth; guard 10%, 28.5 GiB, 64 MiB, 1200s.
+  No matched speedup claim.
+- The motion symptom survives this correction: top-ROI pixel-flow after/before
+  frame 120 is 0.472 old vs 0.486 fixed; far-right ROI also slows. This is not a
+  physical velocity, perceptual quality score or eye verdict. Same-lineage
+  Adversary: ROBUST for cache semantics/common-prefix preservation; VULNERABLE
+  for a temporal-quality fix. Next falsifier: source-faithful upstream chunk 2
+  on the same real prefix, conditioning, noise and RoPE, including the native
+  F32 vs upstream BF16 history boundary. Do not attribute the symptom to the
+  model until that neural comparison passes.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-scene-text-cache.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030`.
+  Parent b1e3db75919b; frozen 429-source manifest SHA
+  cc4c535f10a64189441f879591ef02cbc27847fc1c5567373fe95f460b771094;
+  probe binary e28f64c4e74d3f6b9572f1cc5f3caf6db025d66e9e0e9c42a3f42e9d77fa20e7.
+  Fresh native/reference launches retain matching source and executable pins
+  before/after. The 10s preview has its own 355-source and binary launch pins.
+  Refresh after source/input/weights/scene/schedule/geometry/precision/backend/
+  device/toolchain changes or evidence loss; fresh memory admission per run.
+
+
+### 2026-10-30: Echo real-input precision and boundary falsifiers narrow the quality search
+
+- The same-scene text-cache fix does not visibly cure drifting eyes or uneven
+  motion. Do not promote numerical parity to a perceptual-quality claim.
+- Native resident BF16 weights with F32 activations reproduce all 54 first-step
+  patch/refiner checkpoints in the pinned original-module F32 MPS control
+  bitwise. Block0's first text projection has 17 values outside unchanged
+  atol=rtol=2e-5, while its final image/text outputs pass. Identical-QKV attention
+  has zero failures over 10,027,008 values. This is one block on real Echo
+  first-step inputs, not later-layer/full-DiT or BF16 boundary parity.
+- Original BF16 activation boundaries differ materially in the prelude: patch
+  max difference 0.001952708 and text-refiner output RMS 0.05182612. Causality
+  for eyes/motion remains a hypothesis. A physical BF16 linear output plus GPU
+  F32 expansion fixes the diagnostic's initially ineffective round-trip cast;
+  both physical-store variants match 12,288 modulation outputs bitwise. On the
+  real, already BF16-aligned latent, native physical BF16 PatchEmbed now matches
+  all 8,847,360 original Torch-MPS outputs bitwise. Arbitrary F32 input casts and
+  complete native physical-BF16 DiT remain unqualified; production precision is unchanged.
+- At the real writer0/reader1 boundary, native F32/MPS Q/K/V match the pinned
+  upstream block exactly on captured block0 inputs. Saved writer history K/V
+  and direct reader history-attention also match the chunked Torch-MPS adapter
+  exactly. The oracle stops at attention dispatch: this excludes history-attached
+  residual/MLP outputs, later blocks, BF16 boundaries, Magi/CUDA and video quality.
+  Same-lineage adversary ROBUST for this narrow claim, VULNERABLE if widened.
+- Native boundary capture uses one chain/terminal wait, zero tracked encode
+  allocations/readbacks. Guard: 8 GiB process cap, 10% cache-aware reserve,
+  64 MiB swap-growth stop, 600 s. Observed native peak 4.359 GiB, oracle peak
+  2.407 GiB, no positive swap growth. These are sampled observations. Crystal
+  release compilation needed raw descriptor IO in this diagnostic to avoid an
+  IO::FileDescriptor compiler downcast ICE; production IO remains unchanged.
+- Evidence roots: `/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030`
+  (`final-controls-v2/full-oracle/report.json` SHA
+  a8f1f5ba58b73ff998fbe1c9a65aecac24bd1c2572792e8514ee87166e9eb9f7;
+  physical patch under `bf16-patch-remap-v3`) and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-real-boundary-20261030`
+  (`oracle/report.json` SHA
+  0bb84bfeb8c40c91c124d9cc15697a0b20effd5e7c3dcdbab5eda37fcc4ea52c).
+  Return `docs/hy-nomas-generation-frontier.md`. Refresh on source/input/weight/
+  geometry/precision/backend/device changes or artifact loss; admit memory afresh.
+- The complete initial-segment F32 source-body control (54 blocks, four steps,
+  exact BF16 checkpoint values expanded to F32, native BF16 Euler boundaries)
+  reproduces all 138,240 final native latent values bitwise. Payload SHA
+  93da45a3fc9c0b64df0285527522b8950f091a6a231e4a8cefc9e24eaa6b8828.
+  One reusable F32 block is fed from 54 resident BF16 blocks by MPS copy casts;
+  no intermediate CPU export, one terminal export. Peak 18.566 GiB, minimum
+  cache-aware headroom 22.583 GiB, no swap growth under 26 GiB/10%/64 MiB guards.
+  This is final-latent parity on the first segment, not every intermediate or
+  original Magi/CUDA execution and not the second-segment boundary.
+- The source-BF16 control and its repeat are terminal-bit-exact to each other
+  (SHA 75488dafd836485afa93d99b2cdfb1aec5fb15a5e6d584eba9b7ff97247cf07c).
+  Its final latent differs from native F32 by RMS 0.500732. Decoding both with
+  identical PixelUMM/noise gives the saved five-second synchronized comparison;
+  selected frames retain unstable pupils in both. Thus changing model precision
+  alone has not established an eye-quality fix. The standalone baseline's first
+  100 display frames reproduce the saved ten-second preview exactly; later
+  frames lack that longer decode's future lookahead.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-precision-and-boundary.json`;
+  media/control root `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030`.
+  Next falsifiers: an opt-in higher-resolution eye-quality preview after exact
+  memory/geometry admission, and a source-faithful full second-segment replay
+  for motion. Quality remains open; the production defaults are unchanged.
+
+### Hy-Nomas opt-in spatial quality candidate (2026-10-30)
+
+- Added authenticated v3 768x416 five-second inputs and runtime geometry;
+  default 512x288 remains unchanged. Shared patch/final token admission now
+  covers 9360 tokens and is also checked before GPU allocation. PixelUMM uses
+  10x26x48 tokens, 24 local tiles, and geometry-derived patch/merge indices.
+- GPU geometry probe is bit-exact against the pinned source for the real
+  BF16 stem (51,118,080 values) and a separate synthetic five-window display
+  assembly (115,015,680 values). Injected NaN is rejected. One terminal wait,
+  zero tracked encode allocation/readback/preterminal wait. This does not
+  qualify all high-resolution DiT or decoder intermediates.
+- Four-step preview: 369.414 s request, 24.069 GiB sampled peak, 11.088 GiB
+  minimum cache-aware headroom, no swap growth; guard 26 GiB/10%/64 MiB/1200 s.
+  The larger sample has different noise shapes/composition, so better-looking
+  selected frames do not establish that resolution fixes the eyes or motion.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-spatial-geometry.json`;
+  media/control root `/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030`.
+  See `docs/hy-nomas-generation-frontier.md`. Refresh on input/source/weight/
+  precision/geometry/backend/device changes or artifact loss; re-admit memory.
+
+### Hy-Nomas two-segment source control (2026-10-30)
+
+- All 276,480 final latent values from two native segments equal the pinned
+  source cache-body replay with compact MPS attention; segment 0 also equals
+  the prior single-segment control. Nine forwards include the writer and all
+  54 blocks. The earlier padded replay already differed before history;
+  removing only 19 false K/V rows restores exact reduction geometry.
+- A separate authenticated 60-latent standalone decode equals all
+  106,168,320 saved native display values. The default remains 30 latents.
+  The compact source run peaks at 23.715 GiB, retains 19.816 GiB minimum
+  cache-aware headroom, and adds no swap or preterminal activation readback.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-two-segment-control.json`.
+  This closes the tested source-MPS final-latent discrepancy, not CUDA/Magi
+  parity or the visible eye/motion defects. Refresh after source, adapter,
+  weights, input, schedule, device/backend changes or artifact loss.
+
+### Hy-Nomas terminal-latent high-resolution decoder mismatch (2026-10-30)
+
+- Historical failing baseline; the Q/K statistics entry below supersedes its
+  open numerical frontier without closing perceptual quality.
+- The full same-latent oracle now admits authenticated 768x416 geometry,
+  compares raw and display pixels, and rejects incompatible runtime/output
+  paths before heavy checkpoint authentication. Twenty-two CPU tests pass.
+- The real five-window stem + 36 blocks + head comparison fails unchanged
+  `atol=rtol=2e-5`: raw max 0.182129, mean 0.00180326. First 20 unblended
+  frames also fail, while all 468 source/cache weight checks pass. The 768x416
+  candidate remains unqualified for full decoder parity or an eye-quality fix.
+- Earlier stem parity used the initial input latent with Torch 2.8, while this
+  oracle uses the terminal latent with Torch 2.6. Next discriminator: compare
+  the terminal-latent stem, then block 0 on identical BF16 inputs. Do not infer
+  a partial-tile or blending bug from final pixels alone.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-decoder-high-resolution-mismatch.json`.
+  Scope is gathered local-tile source-MPS arithmetic, not stock CUDA/Flex.
+  Refresh after input, source, precision, geometry, runtime/backend changes or
+  artifact loss; keep the 10% reserve and finite process/swap limits.
+
+### Hy-Nomas terminal stem, block 0 and gaze controls (2026-10-30)
+
+- Historical localization and prompt experiment; see the Q/K statistics entry
+  below for the completed numerical decoder replay and latest user assessment.
+- The actual terminal-latent stem now has zero numerical error against pinned
+  Torch 2.6 MPS on 51,118,080 BF16 values. All eight first-window block 0
+  captures are bitwise equal to the earlier instrumented reference in the
+  production F32-FFN graph mode in both requests. Boundary-only prefix4
+  independently qualifies actual source block0 attention/output. The earlier standalone gate used BF16 FFN graph tensors.
+  Peak footprint is 5,920,213,512 bytes under an 8 GiB cap; no swap growth,
+  one terminal wait per request, zero tracked encode allocations and
+  preterminal activation readbacks.
+- A four-block first-window shared-workspace replay is bitwise exact through
+  block 1. The first retained divergence is block 2 attention: 17 tolerance
+  failures, 104 differing BF16 words, max error 0.000244141. Block 2 output
+  has 530 failures; block 3 output has 531,082 failures, max error 1.0.
+  Both guarded runs drain without swap growth under 8 GiB caps and the 10%
+  reserve. Isolated replay revealed a reference bug: prepared-Q/K captures
+  substituted a whole-token recomputation for the source chunked Q/K feed.
+  The helper now feeds actual source returns; a shape-sensitive regression
+  rejects the old behavior and all 27 CPU tests pass. Corrected source block2
+  reproduces sequential endpoints exactly. Native input norm/QKV/prepared Q
+  are exact; prepared K has three differing words and two tolerance failures.
+  First failure: token12352/head6/channel61, in the final192-token K chunk.
+  Next discriminator: chunk-shaped K statistics/inverse versus gain/RoPE.
+  The full high-resolution decoder mismatch remains open. Independent
+  retained banks do not qualify production two-bank/repeated-window reuse.
+- A ten-second 512x288 fixed-gaze/head/affect treatment retains all seven
+  non-Qwen tensor identities. The baseline repeat reproduces saved latent
+  and pixel banks exactly; both arms drain without swap growth. Sampled
+  posture is steadier, but this combined prompt change does not establish an
+  eye fix or correct sideways motion. Camera trajectory is still text only.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-terminal-boundaries-and-gaze.json`.
+  The older native/source-BF16 visual pair changed only DiT and used native
+  PixelUMM for both arms; the new same-latent decoder pair is a separate test.
+  Refresh after input/noise, source, weights, dtype/geometry, runtime/backend/
+  device changes or artifact loss; re-admit memory with the 10% reserve.
+
+### Hy-Nomas source-shaped Q/K statistics (2026-10-30)
+
+- The first high-resolution decoder divergence is a shape-sensitive MPS K
+  statistics reduction: 1,085 F32 words differ by one ULP, only in the final
+  192-token chunk. Rounding creates three differing prepared-K BF16 words and
+  two tolerance failures. Replacing only that tail's statistics makes all
+  seven retained K/output stages bitwise equal; inverse/gain/RoPE are unchanged.
+- Native Q/K statistics now match the pinned source's 16 MiB F32 input cap
+  (Q 1,024 tokens, K 4,096). Full chunks share executables; retained immutable
+  packed offset views bind existing GPU buffers before encode. Chunked plans
+  require macOS 15 aliases and reject older runtimes before graph construction;
+  single-chunk plans retain macOS 14 support. No new explicit sync, activation
+  staging buffer or per-encode view/buffer allocation is introduced.
+- Source SHA `d0b1d9e1b870052019dcdf5473026f919f1de2b604f6768030dfc8e7daf044db`:
+  block2's seven stages and prefix4's eight attention/output stages match
+  bitwise in gate + repeat with production F32 FFN graph tensors. All 27 CPU
+  reference tests pass. The complete saved-latent 768x416 decoder also matches
+  raw and finalized display output bitwise: 115,015,680 F32 values each, five
+  windows, all 36 blocks + head, actual two-bank output reuse and shared scratch.
+- A fresh source-chunked default-size J=5,760 synthetic block0 reference also
+  matches all 26 captures bitwise in gate + repeat. Regenerated inputs and all
+  13 weights equal the old authenticated fixture; old captures are excluded.
+  Native sampled peak 4,870,704,152 bytes under 8 GiB/10%/64 MiB guards, no
+  swap growth, one wait and zero tracked encode allocations/preterminal reads.
+  This is single-block synthetic coverage, not default-size real-video parity.
+- Full replay: one terminal wait, zero tracked encode allocations/readbacks/
+  preterminal waits; sampled peak 20.214 GiB, minimum cache-aware headroom
+  17.255 GiB, no swap growth under 26 GiB/10%/64 MiB/1,200 s guards. Opaque MPS
+  allocations are covered by sampled telemetry, not encode counters. The
+  154.806 s decoder time is unpaired and proves no speedup.
+- Final comparison SHA
+  `e54db5e16fb2641d2ad9199497c1019e357ec59ff47504bf1dc44613df61472b`,
+  native receipt SHA
+  `c6aab1a6db092cbf491d455bce7a34332a459b9328e33688ccbd7e2a0a4f4baa`.
+  Evidence `.landmark/evidence/2026-10-30-hy-nomas-qk-chunk-statistics.json`;
+  return `docs/hy-nomas-generation-frontier.md`. Same-lineage static and
+  completed-run adversaries are ROBUST only within the saved-latent adapted
+  source-MPS scope; they are correlated reviews, not independent validation.
+- The latest ten-second gaze pair is native versus native, both four DiT
+  steps per five-second segment and one PixelUMM step. The user reports that
+  eyes look noticeably more natural on the right. The prompt jointly changes
+  gaze, head motion and affect; it does not isolate gaze. Both arms predate
+  this numerical fix, and motion/eye quality remain open.
+- The oracle is pinned Torch 2.6 gathered local-tile MPS, not CUDA/FlexAttention.
+  Full output equality does not qualify every intermediate, input, geometry
+  or device. Refresh on source/adapter, weights, latent/noise, dtype, geometry,
+  runtime/backend/device changes or artifact loss; admit memory afresh. Next
+  discriminator: perceptual review of corrected decoding on identical
+  latent/noise, with real-conditioned default-size replay and motion treated
+  separately.
+
+
+### Hy-Nomas opt-in Cinematic quality probe (2026-10-31)
+
+- Original BF16/default cache is unchanged. `hy_nomas_generate` accepts explicit
+  `--cinematic-cache` lineage + `--cinematic-cache-sha` only for the admitted
+  camera/action-off BF16 route. Existing Admission authenticates the actual
+  derived index, payload inventory and residents before Metal allocation;
+  lineage metadata does not itself establish correct merge math.
+- The offline producer merges 756 active double-block targets from original
+  F32 base and official F32 adapter as `base + (B @ A) * 2`, then casts once to
+  BF16. The 162 action-module targets are explicitly excluded. Its 54 BF16
+  files use 16,314,338,848 bytes; unchanged Q4/global siblings are hardlinks.
+  No merge math, offline fences or serialization enters inference encode.
+- Hardened source-MPS weight reference v2 qualifies all 54 blocks: 8,157,072,384
+  BF16 words, zero mismatches, 972 unchanged block tensors and 109 byte-equal
+  shared assets. Torch 2.8.0/MPS, fallback disabled; 334 authenticated file
+  identities are captured/rechecked through publication. Report SHA
+  `068a0d6c476b4e1164fa44b8462c069d294ba753c36b5cfbd19e4d96a721a3b3`.
+  CPU checks: 22 Crystal examples, 10 packer tests, four identity falsifiers.
+- The four-step, five-second 768x416 candidate uses identical saved input
+  payload/seed/noise and corrected decoder weights. Native request 406.881 s
+  (saved conditioning; excludes live Qwen and MP4 export), sampled peak
+  24.069 GiB, minimum cache-aware headroom 12.468 GiB, zero swap growth under
+  26 GiB/10%/64 MiB/1,200 s guards. Both phases retain zero instrumented encode
+  allocations/readbacks/preterminal waits and their existing terminal wait.
+  Opaque MPS resources are outside those counters; timings are unpaired.
+- Candidate same-latent decoder replay matches raw/display outputs exactly:
+  115,015,680 finite F32 values each; all 468 source/cache weight checks pass.
+  Report SHA `a91ad030b8cd682f4ca6c00ebfad41c4a3ea56a9bcff41155318f6fb12d2ea7e`.
+  This is the pinned Torch 2.6 gathered local-tile MPS oracle, not stock
+  CUDA/FlexAttention or full candidate DiT trajectory equivalence.
+- Two visual pairs are preserved: old/corrected decoder on identical latent,
+  then original BF16/Cinematic with the corrected decoder and four steps.
+  Sparse frames show small decoder changes and stronger Cinematic composition,
+  light and apparent detail changes. Natural eyes, motion, general quality and
+  longer continuation remain open; no new user acceptance is recorded.
+- Evidence `.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json`;
+  return `docs/hy-nomas-generation-frontier.md`. Correlated completed-run/code
+  adversary is ROBUST only for cache admission, tested merge/counter scope and
+  same-latent source-MPS replay. Keep Cinematic opt-in. Requalify after source,
+  weights/adapter/cache, input/noise/geometry/dtype, runtime/backend/device
+  changes or artifact loss; re-admit memory before another run. Next signal:
+  full-motion review, then another seed/prompt and multi-segment continuation
+  before considering a quality default.
+
+### PixelUMM frequency profile and exact FFN fusion rejection (2026-10-31)
+
+- Six reused-resource J21120, 36-block-plus-head requests pass the existing
+  saved-stage/head gate. The two profiled requests are stable near 1393 MHz,
+  but their preceding off control differs by 3.49%; no two-sided qualified
+  observer-overhead or speedup claim follows. Disjoint request2 root buckets:
+  gate/up 12.890 s, down 6.734 s, attention 11.334 s, union 42.311 s. Mixed
+  roots stay separate. API wait location is not the queued GPU cause.
+- Q/K statistics now require geometry-derived profile counts: self-prepare
+  is `7 + ceil(J/1024) + ceil(J/4096)`, 34 at J21120. Full36+head is 7925 Graph
+  calls. Native profiles declare token count; analyzers retain strict legacy
+  handling only for older reports without that field.
+- Whole-FFN and output-only split-front graphs fail unchanged 2e-5 tolerance.
+  Making gate/up/SiLU/product mandatory BF16 outputs and keeping a separate
+  down graph passes all active J5760 w0/block0 comparisons bitwise. Captured
+  parity alone does not qualify an independently compiled output-only graph.
+- Ten reused-buffer samples of 128 FFNs keep one terminal wait, one packed
+  post-wait readback and zero tracked encode allocations/preterminal reads.
+  Three pairs meet the observed 2% frequency-distance rule: +0.437%, +2.225%,
+  -1.110% union contrasts; the +3.008% pair differs by 2.537% in frequency and
+  is excluded. No qualified four-pair median; raw median 1.331% fails 3%.
+  Candidate roots grow 897 to 1153 per sample despite fewer Graph calls.
+- The historical completion omits observer-bundle hashes. CLI now marks those
+  frequency labels descriptive-only and refuses trial admission; partial or
+  mismatched observer digest inventories fail. Do not retrofit that receipt
+  or quote pair labels as affirmative receipt-bound performance evidence.
+  No full-block candidate trial, production promotion or generation occurred.
+- Isolated sampled peak 2.6375 GiB, minimum cache-aware headroom 43.8500 GiB,
+  swap growth zero under 8 GiB/10%/64 MiB/600 s guards. Full profile peak
+  26.386 GiB, headroom 19.854 GiB, zero swap. Opaque MPS allocations and
+  between-sample spikes remain outside instrumented counters/sample guarantees.
+- Evidence `.landmark/evidence/2026-10-31-pixelumm-frequency-ffn.json`; return
+  `docs/hy-nomas-generation-frontier.md`. Correlated mini-Quad review is ROBUST
+  only for tested parity and rejection of this speed candidate. Acceleration
+  remains open. Next signal: measured avoidable GEMM/materialization/kernel
+  work; do not repeat refuted shared/packed gate-up or coalescing unchanged.
+  Standing scope: GPU-only bounded probes, no new explicit waits, unchanged
+  tolerance, 10% cache-aware reserve, no full generation. Refresh parity on
+  source/weights/fixture/geometry/runtime changes, and timing on device, queue
+  policy or host-state changes; missing evidence invalidates its consumption.
+
+### Hy-Nomas performance paradigm audit (2026-10-31)
+
+- Return: `docs/hy-nomas-performance-paradigm-audit.md`; CPU reproduction:
+  `python3 examples/hy_nomas_work_budget.py`. No GPU/model run or production
+  change. Baseline is `987cae68`; original BF16 weights/stage boundaries and
+  current F32-FFN mode remain the active target.
+- J21120 T6/H44/W80 one-pass diagnostic and five J12480 T10/H26/W48 windows
+  contain 335.016 and 1060.015 TFLOP of blocks+head work, respectively; these
+  omit stem. Native CPU-only AttentionLayout queries/keys independently
+  reproduce the helper's geometry sums (69,672,960 and 64,972,800/window).
+  The ratio is not a speedup or a matched backend regression.
+- For the fixed saved-Qwen 512x288/120-frame preset, PixelUMM is 474.917 of
+  604.747 TFLOP at four DiT steps (78.53% of counted major matrix work).
+  Refiner/adapters also scale with steps. Counts are not latency/utilization;
+  logical score/KV panel bytes are not measured DRAM or saved-time bounds.
+- Next strict hypothesis: compact eight-head KV sharing across 32 Q heads,
+  preserving per-query math; first compare one real J12480 block's QK,
+  probabilities, attended F32 and downstream BF16 at unchanged 2e-5, then
+  isolated paired timing before full five-window replay. Online softmax is a
+  separate, harder reduction-order experiment. Exact routes are not exhausted.
+- Cheap-decoder falsifier: official DCAE-V accepts the same latent space,
+  but its conventional dense-convolution budget is 602.487 TFLOP for the
+  same 120x288x512 output, including 542.060 TFLOP of residual convolutions.
+  This is 1.269x PixelUMM's counted matrix work, not a latency bound. Demote
+  the presumed arithmetic advantage; native convolution utilization remains
+  unmeasured and upstream reports repetitive complex textures. Reopen a port
+  only with speed/memory and full-motion quality evidence. A learned smaller
+  PixelUMM student is a separate model project, not a qualified optimization.
+- Audited upstream Hy-Nomas `effb8a49` and MLX `33927952` are primary references,
+  not replacements for the pinned local source-MPS oracle. Correlated reviews
+  qualify count/claim scope, not candidate speed/quality. Refresh after model,
+  layout/windows/token policy, runtime/backend or device/host-state changes;
+  re-admit the unchanged 10% memory guard before any later GPU experiment.
+
+### Hy-Nomas Cinematic drafter comparison (2026-11-01)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json`.
+  The drafter and sequence CLI accept authenticated `--cinematic-cache` and
+  `--cinematic-cache-sha`; original BF16 stays the default. Four model identity
+  fields bind the plan, loader, receipt and gallery. Cinematic sequence
+  checkpoint/capture/restore explicitly rejects base-only contracts.
+- `--reuse-inputs-from` authenticates a completed frozen suite and reuses its
+  exact native prompts, conditioning and three noise banks without Qwen or
+  RNG. Selected payloads and metadata are rechecked before each scene, and
+  native admission authenticates them again. This is incremental execution;
+  mutation of a future scene fails that scene, not earlier valid outputs.
+- All six Cinematic 10-second first takes completed at 512x288/24 fps, two
+  segments and four steps, with unchanged BF16/F32 arithmetic and history.
+  Fresh original portrait pixels and latent bank are byte-exact against the
+  retained base. The other five base clips remain historical, with no explicit
+  model identity in their old receipts; no fresh paired speed claim follows.
+- Maximum sampled process-group peak 24.3214 GiB, minimum cache-aware headroom
+  22.7736 GiB, zero observed stage swap growth, 18 successful guarded stages
+  and no final sampled live children. Keep 10% floor / 30 GiB native cap /
+  64 MiB swap stop. Every inference phase reports zero tracked encode
+  allocations/readbacks/preterminal waits and one existing terminal drain.
+  Opaque MPS resources and between-sample spikes are not bounded by counters.
+- Fresh selected official source-MPS merge qualification: blocks 0/1,
+  302,113,792 BF16 values, zero mismatches. Prior all-block weight and
+  same-latent PixelUMM evidence remains separately authenticated. No fresh
+  complete Cinematic DiT trajectory or ten-second intermediate gate; no
+  unmodified CUDA/FlexAttention claim. Tolerances remain atol=rtol=2e-5.
+- 60 Python tests, 11 CPU-only Crystal examples, formatting and fresh Metal
+  build passed. Mini-Quad verdict ROBUST for tested identity/admission and
+  paired artifact integrity; same-lineage review is correlated. Offline pair
+  builder rejected an incomplete suite and passed eight geometry/publication
+  attacks. Six validated pairs and a 1,440-frame reel are retained under
+  `/opt/mldata_ssd/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/`, base
+  left / Cinematic right. Median observed scene time 28.071 s/output second
+  excludes already-retained conditioning and is descriptive only.
+- Stills at 0/3/6/9 seconds show more surface texture/contrast, changed
+  composition and fewer visible walkers in the doughnut scene, but changing
+  balloon count and left-facing dogs remain. These do not qualify motion,
+  physics or general quality. Keep Cinematic opt-in pending user playback,
+  including the five-second boundary, then other seeds/prompts.
+- VACE remains a proposed separate Wan renderer consuming draft pixels or
+  prepared depth/pose/masks/reference images. Its trained controls and latent
+  space cannot be attached directly to Hy-Nomas as this LoRA; no VACE port or
+  weights were added. Bad draft trajectories need correction before reuse.
+- Refresh identity/parity after source, binary, weights/cache, inputs/noise,
+  geometry/history or runtime changes; repeat timing after host/device-state
+  changes. Missing/mutated local evidence invalidates its use. Roll back by
+  omitting both Cinematic flags; no remote publication was authorized.
+
+### Hy-Nomas reference T0 preblock precision control (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Reference T0 preblock precision
+  control; evidence: `.landmark/evidence/2026-11-02-hy-nomas-preblock-precision.json`.
+  Current reference, 4,320 video rows / 263 valid caption rows / writer
+  timestep 206.897. The older standalone reference fixture is a different
+  input and is excluded. No production inference changes or full generation.
+- Actual source BF16 preprocessing stops before block 0 with no block tensors
+  or cache K/V. Native patch/text/time vectors fail its unchanged 2e-5 mixed
+  gate. Native output rounding repairs the patch exactly, but not text/time
+  vectors; a single final BF16 cast is insufficient.
+- The source F32 precision control widens the same BF16 checkpoint/input
+  values and changes the refiner adapter together. All nine standalone
+  native preblock tensors pass; eight are byte-exact, text max 7.6294e-6,
+  RMS 2.0453e-7, zero failures. This does not isolate one causal operation or
+  qualify full T0/app execution, K/V, T1, motion, or a speedup.
+- 21 CPU tests and GPU A/A/perturbation controls pass. Native instrumentation:
+  zero encode allocations/readbacks/preterminal waits, one terminal drain.
+  Final guarded stages preserve 10% / 6 GiB process cap / 64 MiB swap stop;
+  minimum sampled cache-aware headroom 40.196 GiB, zero swap growth. Sampled
+  footprint does not bound all Metal memory. Mini-Quad review is correlated.
+- Next: source BF16 masked mean, timestep/context and input-projection
+  boundaries, then block-0 K/V on matched inputs. The existing attention-only
+  BF16 switch is not a complete BF16 prelude. Refresh on source/runtime,
+  binary, weights, input/noise, caption/mask, layout or precision changes;
+  mutated/missing artifacts revoke the certificate. Remove optional diagnostic
+  helpers/tests to roll back; production behavior is unchanged.
+
+### Hy-Nomas refiner input precision boundaries (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Reference refiner input precision
+  boundaries; evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-refiner-input-precision.json`.
+  Same authenticated current T0, 4,320 video rows / 263 valid text rows.
+- Actual source BF16 mean rounds numerator, mask count (263 to 264), and
+  quotient. Raw F32 sinusoids match native before the source BF16 cast.
+  The opt-in `--refiner-input-bf16-control` reproduces these input boundaries
+  in existing kernels; corrected mean and both consumed sinusoids are
+  byte-identical to source. This is one tested input, not general reduction
+  equivalence. Default replay preserves all nine preblock plus 16 refiner
+  tensor hashes; all 16 default raw tensors pass the source F32 control.
+- Full BF16 refiner parity remains open. First raw mismatch after the input
+  control is the first timestep linear: 1,799 / 2,048 failures, maximum
+  0.0019437671 at unchanged mixed 2e-5. Its post-BF16 rounding view is exact;
+  post-rounded diagnostics do not repair the connected SiLU/linear chain.
+  Next: add and qualify those boundaries, then matched-input block-0 K/V.
+  The existing block-0 comparator needs GPU metrics before that later probe.
+- Fresh build, 39 Python tests, 13 Crystal examples, GPU A/A/perturbation
+  controls and formatting pass. Measured cache/patch/refiner encoding after
+  `prepared.encode` reports zero tracked allocations/readbacks/preterminal
+  waits and one existing terminal drain. Optional trace reads follow it.
+- Twelve selected stages preserve file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop; minimum sampled headroom 32.832 GiB, zero observed swap
+  growth. Samples/counters do not bound opaque Metal resources or spikes.
+  Same-lineage mini-Quad is ROBUST for input-boundary evidence only. No full
+  generation, K/V, T1, motion-quality fix or speedup was qualified.
+- Keep the control default-false; omit its flag to restore the usual path.
+  Refresh after source, binary/runtime, weights, input/noise, caption/mask,
+  layout or precision changes. Missing/mutated artifacts revoke the result.
+
+### Hy-Nomas connected first-linear and SiLU BF16 boundaries (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected first-linear and SiLU
+  BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-refiner-linear-silu.json`.
+  Current authenticated T0: 4,320 video rows / V263 / stored 1,280, same source.
+- Default-false first-linear and SiLU controls require preceding input/linear
+  controls. Four first-linear outputs round after bias in the existing
+  dispatch; three SiLUs use BF16-declared nodes and explicit same-graph UInt32
+  RNE output expansion. All seven actual consumed outputs, plus the previous
+  three input boundaries, equal source BF16 tensor hashes exactly on this input.
+  No general operation or internal MPS precision equivalence follows.
+- Refuted: a cast-only BF16 SiLU graph kept the linear-only F32 payload. The
+  GPU zero-tolerance representation check rejected it; post-rounded views
+  had looked exact. Preserve that distinction. Compiler behavior causing the
+  wider values is unverified. Both snapshots and reports remain external.
+- Full BF16 raw gate remains false. First remaining second timestep linear:
+  1,809 / 2,048 failures, max 0.0019197464 at unchanged mixed 2e-5.
+  All three second-linear post-rounded views are exact; the context sum's
+  rounded view still fails 524 values. Next: correct those connected outputs
+  and source add sequence, then refiner blocks, before block-0 K/V or motion.
+- Fresh isolated bridge build; 42 Python tests, 17 Crystal examples and four
+  CLI rejection checks pass. Default nine preblock + 16 refiner hashes are
+  unchanged; input-only and linear-only ablations preserve their prior bytes.
+  Thirty guarded stages preserve file-cache-aware 10% / 6 GiB cap / 64 MiB
+  swap stop: peak sampled group 0.964 GiB, minimum headroom 27.528 GiB, no
+  observed swap growth. Final samples have no live children. Counters show no
+  new tracked encode allocations/readbacks/preterminal waits, one terminal
+  wait; opaque MPS activity and between-poll spikes are outside that scope.
+- Same-lineage mini-Quad: ROBUST for these ten boundaries on this input.
+  Representation checks alone establish BF16 expansion; the separate bound
+  source/native tensor hashes establish byte identity.
+- Canonical reports are `compare-final-*` (zero checked boundaries means null,
+  not a vacuous pass), `qualified-boundary-identities.json` (named modes and
+  bound manifest identities), and `measurement-summary-final.json` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-linear-20261102.8mxo6zrk`.
+  No speedup, full generation, T1/KV or motion fix was qualified. Keep controls
+  opt-in; omit new flags to restore the old path. Refresh on source,
+  executable/runtime, weights, input/noise, caption/mask, layout or precision
+  changes. Missing/mutated retained evidence revokes the bounded certificate.
+
+### Hy-Nomas second-linear and conditioning-add BF16 boundaries (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected second-linear and
+  conditioning-add BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-second-add.json`.
+  Same authenticated finite T0: 4,320 video rows / V263 / stored 1,280.
+- Default-false second-linear and add controls extend the cumulative input,
+  first-linear and SiLU controls. Three second outputs round after bias in
+  existing dispatches; add-and-RNE replaces the existing conditioning add.
+  No extra explicit dispatch, named buffer, readback or wait is introduced.
+- GPU ablation: rounding only the sum leaves 524 failures; rounding only
+  operands leaves 2,026 (max .125); rounding both gives zero. Connected native
+  add control makes all 16 captured raw tensors exact against source BF16,
+  with 14 zero-tolerance representation checks and 16 authenticated equal
+  tensor hashes. This is one finite input, not general BF16/refiner parity.
+- Fresh final build, 44 Python tests, 18 Crystal examples, eight CLI rejection
+  cases and GPU sensitivity controls pass. Prior four modes preserve nine
+  preblock + 16 refiner tensors and full payload bytes. All six modes retain
+  944,620,612 named bytes and encode counters [0,0,0,1] for allocations,
+  readbacks, preterminal waits and terminal waits respectively.
+- Forty-four guarded stages: file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop; peak sampled group 1,030,440,208 bytes, minimum sampled
+  headroom 20,904,476,672 bytes, no observed swap growth or final live children.
+  Samples do not bound spikes or opaque Metal/MPS resources.
+- Same-lineage mini-Quad: ROBUST for this captured prelude. Canonical external
+  records use `native-final-*`, `compare-qualified-*`, `build-final/`,
+  `qualified-artifacts-final.json` and `guard-summary-final.json` under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-second-20261103.vjm1xm6u`.
+  Helper source hashes are pinned in the packet; pre-format records remain
+  historical. No generation, speedup, refiner/KV/T1 or motion fix was qualified.
+- Next: trace both refiner blocks on corrected identical inputs. Keep controls
+  opt-in; omit new flags for previous behavior. Refresh on source, binary/
+  runtime, weights, reference/noise, caption/mask, layout or precision changes;
+  missing or mutated bound evidence revokes the result.
+
+### Hy-Nomas two-block refiner trace and first failed BF16 checkpoint (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Two-block refiner trace on
+  corrected BF16 prelude inputs; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-blocks.json`.
+  Same finite T0: 4,320 video rows / V263 / stored 1,280. Oracle remains
+  pinned PyTorch 2.8 with MPS attention adaptation, not stock CUDA/Magi.
+- Opt-in native trace records 37 names / 36 unique ranges over two existing
+  blocks (450,977,792 bytes); block1 input aliases block0 output. Requires
+  execution, linked prelude and all five BF16 prelude controls. No arithmetic
+  change or extra in-chain buffer/dispatch/readback/wait; optional native
+  reads follow the terminal drain. Encode counters remain [0,0,0,1].
+- Full block0 input and c are byte-identical to source. First failed raw
+  checkpoint in canonical dependency order: `block0.adaLN`, 1,752 / 4,096,
+  max 0.00012011826 at unchanged atol=rtol=2e-5. Refuted original prediction:
+  condition SiLU has nonzero error 2.67033e-6 but passes. Its rounded view is
+  exact; adaLN's rounded view still fails three values (max 0.0001220703125).
+  Output-only rounding is therefore not sufficient evidence for an adaLN fix.
+- Independent same-input `block0.norm1` raw branch fails 2,488,674 values,
+  max .015273571; diagnostic BF16 rounding is exact. This is not a connected
+  correction. Block0 output max .61708069; block1 max 1.2043610 / RMS
+  .03397997 may include propagated errors and do not isolate block1.
+  Valid/padding first failures are norm1; adaLN is vector-valued.
+- Source observer records actual attention2/gate4 calls without replay and
+  exports old prelude plus block tensors in one terminal CPU transfer.
+  Rebinding/preflight hook failures were rejected and corrected; BOOL metadata
+  and lifecycle regressions have focused tests. Both qualified source payloads
+  repeat the successful prior capture exactly; old qualified prelude bytes
+  are preserved. Full source BF16 representation37 and GPU sensitivity pass.
+- Fresh build, 25 Crystal examples, 39 Python tests and eight CLI rejection
+  checks pass. Canonical source/comparator verify 67 file pins before/after;
+  native capture embeds 16 matching source pins. Snapshot, executable/objects,
+  commands, artifact links and all retained failures are indexed externally.
+- Seven canonical stages preserve file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop: peak sampled group 4,047,440,680 bytes, minimum headroom
+  25,901,449,216 bytes, zero observed swap growth, no final live children.
+  Samples/counters do not bound spikes or opaque Metal/MPS resources.
+- Same-lineage mini-Quad: ROBUST for the bounded diagnostic and first-failed
+  checkpoint, correlated rather than independent replication. Full refiner
+  numerical gate remains false; no generation, motion fix, K/V/T1, attention
+  internals or speedup qualification. Canonical external records live under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818`:
+  `native-*`, `source-qualified*`, `compare-qualified.json`,
+  `qualified-artifacts.json` and `guard-summary.json`.
+- Next: replay adaLN with exact source-rounded condition SiLU and identical
+  weights/bias; separate operand precision from projection reduction and
+  bias/output boundaries. Then qualify connected norm1 rounding. Omit the
+  trace flag to roll back. Refresh after source, binary/runtime, weights,
+  reference/noise, caption/mask, layout or precision changes; missing/mutated
+  bound evidence revokes this result.
+
+### Hy-Nomas connected refiner condition / adaLN / norm1 BF16 boundaries (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected refiner condition,
+  adaLN and norm1 BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-block-boundaries.json`.
+  Same finite T0 V263 / stored 1,280 input and archived pinned PyTorch 2.8 MPS
+  source trace. Full upstream forward was not rerun in this experiment.
+- GPU replay falsifies output-only adaLN rounding: 13 unequal BF16 values,
+  including three mixed-tolerance failures. BF16-rounded condition plus F32
+  linear/bias and rounded output is source-exact. Raw F32 linear replay is
+  captured-native exact. These finite-case observations do not establish
+  backend internal reduction rules.
+- Default-false cumulative `--refiner-block-boundaries-bf16-control` reuses
+  BF16-typed condition SiLU and existing adaLN/norm1 epilogues in both blocks.
+  No additional explicit dispatch/named buffer/readback/wait; norm2/QKV are
+  unchanged. Requires all five prelude controls and linked block/prelude traces.
+- Nine of ten controlled captured outputs are byte-identical to source:
+  both condition SiLUs, both adaLNs, all four gates and block0 norm1. All ten
+  are BF16-representable. Block1 norm1 differs on already different input;
+  source-equality aggregate remains false. Zero-tolerance representation and
+  source-equality rows have separately enforced complete ordered coverage.
+- First failed raw checkpoint advances to block0.qkv, full/valid/padding;
+  raw max .03124809265, diagnostic rounded view exact. Full refiner gate is
+  still false at unchanged atol=rtol=2e-5. Block0 output max .61703491;
+  block1 output max 1.20420837. No motion/quality/speedup/generation claim.
+- Fresh build, 26 Crystal examples, 48 Python tests, nine compiled rejection
+  checks and GPU sensitivity pass. New-control-off reproduces all 62 prior
+  tensor records and three payloads; both modes preserve all 16 source-exact
+  prelude hashes, 944,620,612 named bytes and encode counters [0,0,0,1].
+  Block/prelude embedded source pins count 16/14; final comparator/replay pins
+  87 files. Only two Python comparator/spec files changed after native capture.
+- Nine canonical guarded stages retain 10% file-cache-aware floor / 6 GiB cap /
+  64 MiB swap stop. Peak sampled group 2,332,182,736 bytes, minimum headroom
+  25,513,803,776 bytes, zero observed stage swap growth or final live children.
+  Samples exclude spikes and opaque MPS resources. Code snapshots, binaries,
+  failed stages, commands and logs remain in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv`;
+  canonical index `qualified-artifacts-final.json`, guard index
+  `guard-summary-final.json`, reports `compare-*-final.json` and
+  `adaln-replay-current-final.json`. Same-lineage reviews are correlated.
+- Next: connected QKV output-boundary discriminator on exact block0 norm1;
+  isolate projection reduction only if needed. Omit the new block control to
+  restore the prior path. Refresh on source, binary/runtime, weights, inputs,
+  masks/captions, layout or precision changes; missing/mutated evidence revokes
+  the result. DiT K/V, T1 and reference-driven motion remain open.
+
+### 2026-11-03 — Connected refiner QKV BF16 output boundary
+
+- Added default-off `--refiner-qkv-bf16-control`, requiring the existing block
+  and five prelude controls plus linked traces. It selects both fused QKV
+  linears' existing post-bias BF16 epilogue before splitting, with no new
+  explicit dispatch, activation buffer, readback or wait (MPS internals excluded).
+- On the same authenticated finite T0 V263 input, block0 norm1, QKV and Q/K/V
+  equal source hashes and direct bytes. QKV contains 7,864,320 values across
+  all 1,280 stored rows. All eight QKV-related outputs are BF16-representable;
+  source equality is four of eight, with block1 input already different.
+- Raw gate remains false at atol=rtol=2e-5. First failures are block0 attention
+  (full/valid) and residual1 (padding). Attention max .29186487; block0 output
+  max .61695862, block1 output max 1.20419312. No motion/quality/speedup claim.
+- Fresh build, 28 Crystal examples, 50 Python tests, 11 compiled rejection
+  cases and GPU sensitivity pass. Both previous modes reproduce 62 tensor
+  records and three payloads each; all three preserve 16 source-exact prelude
+  hashes, 944,620,612 named bytes and encode counters [0,0,0,1]. Strict bools,
+  linked prelude consistency and ordered complete QKV coverage fail closed;
+  old block manifests without the QKV bool require a fresh capture.
+- Nine canonical stages: file-cache-aware 10% floor / 6 GiB process cap /
+  64 MiB swap stop. Sampled peak 2,349,074,640 bytes; minimum headroom
+  27,321,368,576 bytes; zero observed stage swap growth/final children.
+  Sampling does not bound spikes or all opaque MPS resources.
+- Evidence `.landmark/evidence/2026-11-03-hy-nomas-refiner-qkv-boundary.json`;
+  external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231`,
+  canonical `compare-{baseline,qkv}.json`, `qualified-artifacts-final.json`,
+  `guard-summary-final.json`. Qualification retains 91 source snapshots,
+  16/14 embedded block/prelude source pins and byte/hash fallbacks. Pinned
+  oracle is the prior PyTorch 2.8.0 MPS attention adaptation; no source full
+  forward or full generation rerun. Same-lineage reviews are correlated.
+- Next: QK -> softmax -> PV replay on identical block0 Q/K/V; test masks and
+  BF16 boundaries before changing attention. Keep block1 propagation separate.
+  Roll back by omitting the QKV flag. Refresh on source, binary/runtime, weight,
+  input, mask, layout or precision changes; mutated/missing evidence reopens
+  dependent claims. DiT K/V, T1 and reference-driven motion remain open.
+
+### 2026-11-06 — Upstream activation recording with exact video lineage
+
+- Added an opt-in lossless named-boundary recorder for the pinned PyTorch 2.8.0
+  BF16/MPS DiT adaptation at Tencent `911cea6458a89c2663513ff7099561ec190dd491`.
+  One selected A1_high continuation records T0 and T1 at all 54 blocks and four
+  Euler steps: 432 calls, 23,040 tensors, 440 shards, 296,265,981,952 payload
+  bytes. A1_high includes the existing soft attention prior, not vanilla CUDA.
+- Pilot traced/untraced outputs/cache and all four full Euler latents are
+  bit-identical to their controls. Full record/shard hashes passed. Opaque MPS
+  scratch, full QK/probability matrices and Qwen/PixelUMM internals are excluded.
+  Diagnostic GPU-to-CPU/SSD exports add waits; timings are not speed benchmarks.
+- Rejected the previous A1_high DiT-to-video association: the old decoder bank
+  did not contain the identically named final latent. Numerical replay and
+  that old video's own visual observations survive as separate evidence.
+  The new upstream decoder consumes the trace's exact BF16-to-F32 final latent
+  and binds raw/RGB/MP4 hashes: 120 frames, 24 fps, 512x288, five seconds.
+- Actual-file CPU preflight exposed path-alias, decoder-only source inventory
+  and cache-order assumptions; canonical trusted root, separate DCAE pinning
+  and authenticated lexical cache order resolved admission. All 468 decoder
+  BF16 tensor ranges were hashed while streamed; aggregate cache hash is only
+  declared. Generic numeric offset coercion is outside the claim; CLI pins the
+  exact integer-valued manifest before cache admission.
+- Selected frames show Resume glove-to-chest movement but mostly fixed body
+  and head; substantial Alex head turn is not visible. Nonzero residual RMS in
+  both coarse actor ROIs excludes only zero updates, not failed action control.
+  Next: selected-query attention reconstruction with exact K layout/masks,
+  then same-input history/action-text interventions. Affinity is not causality.
+- 72 CPU tests and Ruff for eight new Python files pass. Guarded pilot, full
+  capture and decode exit zero with cache-aware 10% reserve / 64 MiB swap stop,
+  observed zero swap growth and no final children. Sampled peaks: capture
+  3,715,975,760 bytes; decode 5,060,760,976 bytes. No between-sample peak claim.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json`;
+  guide `docs/hy-nomas-activation-tracing.md`; external artifacts
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz`, index
+  `qualified-artifacts-v2.json`. Actual-artifact review ROBUST within named
+  capture-to-video scope; same-lineage review is correlated. No semantic actor
+  control, native full-pipeline parity or full-playback quality certification.
+- Rollback: omit the diagnostic observer/runner/decoder; native defaults are
+  unchanged. Refresh on producer/runtime, weight, input, mask, prior, geometry,
+  precision, schedule or artifact mutation; missing evidence revokes its use.
+
+### 2026-11-06 — Continuation decoder onset context
+
+- User identified initial defects around Alex's head. Blur/ringing exist in
+  raw PixelUMM output before MP4. The exact-linked diagnostic decoded T1 alone;
+  the pinned causal-AR/streaming continuation retains previous latent context.
+- Two-window MPS counterfactual: same saved T1 latents/noise, one resident
+  BF16 block, all 36 blocks and 468 weight-range hashes. Standalone first20
+  equals saved raw bitwise (maxabs 0). Adding T0's last five latents and the
+  upstream overlap blend removes the observed onset pattern in selected crops.
+- CPU BF16 upstream-blender checks prove the two-window onset crop and unchanged
+  tail geometry. The new 120-frame MP4 replaces only frames0:20; remaining RGB
+  is reused without interpolation. This tests context plus blending, not a
+  pure context ablation or full cumulative neural decode. No separate T0 noise
+  survives; authenticated per-index tail noise is reused, T1 noise unchanged.
+  No stock full-clip-noise, semantic motion or native/full-pipeline parity claim.
+- Guard exit0: 10% cache-aware floor / 10 GiB cap / 64 MiB swap stop; sampled
+  peak 3,972,229,632 bytes, minimum headroom 25,320,177,664 bytes, zero swap growth
+  and final children. One terminal diagnostic wait; no production-path change.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-continuation-onset.json`;
+  external `/opt/mldata_ssd/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v`,
+  result `context-v1/display.mp4`. Actual-artifact review ROBUST only for the
+  bounded intervention; stronger stock-cause attribution remains VULNERABLE.
+  Same-lineage review is correlated. Refresh on changed sources, weights,
+  inputs/noise, precision, window/blend geometry or missing/mutated artifacts.
+- Return to selected-query attention/action control with context-complete
+  continuation decoding. Rollback: omit the external context probe/display;
+  native defaults and the frozen standalone decode helper remain unchanged.
+
+### 2026-11-06 — Native previous-window PixelUMM continuation
+
+- Standalone decode now optionally joins the previous five clean latent frames
+  and twenty noise frames on GPU, runs the existing ten-latent/five-overlap
+  windows, and crops twenty context pixel frames on GPU. All four previous-input
+  CLI arguments are required together and source hashes/extents are checked.
+  The existing cumulative sequence and default standalone path are unchanged.
+- Bounded full-J DoD passes: all 36 blocks/six windows; raw 140 frames and
+  displayed 120 frames are bitwise equal to the pinned upstream gathered MPS
+  adapter on Torch 2.6.0. 115,015,680 F32 values, maxabs 0; `atol=rtol=2e-5`
+  unchanged. This fixture declares a T1-noise-tail surrogate for missing T0
+  noise; no stock RNG/CUDA, full-pipeline or independent actor-control claim.
+- Encode allocation/readback/preterminal-wait counters remain 0/0/0; one
+  terminal drain. Named bytes 17,520,565,392; decoder execution 116.95 s in one
+  run. Guard exit 0 with 22 GiB cap, cache-aware 10% floor and 64 MiB swap stop,
+  zero swap growth. Not a paired speedup measurement. CPU suite: 26/26 pass;
+  synthetic GPU geometry/overlap and missing-context counterfactual pass.
+- Torch 2.8 full-output failure is retained separately. Same-input block-0
+  square sums match across 2.6/2.8, but pre-gain BF16 differs at 361 positions;
+  native matches 2.6 bitwise. Never silently substitute oracle runtime lineage.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-native-continuation.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue`,
+  `comparison-upstream26.json` and native/upstream raw/display hashes.
+  Refresh on changed source, runtime, weights, inputs/noise, precision, overlap,
+  dimensions or mutated/missing evidence. Rollback: omit the new opt-in quartet.
+- Local portrait smoke completed on original BF16/source-BF16 V263: technical
+  T0 plus generated T1; exported frames [120,240), 120 frames/5 s/24 fps.
+  Request 669.74 s (DCAE 356.70, DiT 58.56, decoder 193.76); sampled peak
+  24.60 GiB, minimum headroom 16.90 GiB, swap growth 0 under the 30 GiB cap
+  and 10% cache-aware reserve. Three phases retain 0/0/0 instrumented encode
+  allocations/readbacks/preterminal waits and one existing terminal wait each.
+  Plan/execution/final input identities and terminal export checks agree.
+- Selected portrait frames retain identity but the head is nearly static.
+  User playback reports noticeable changes only in the last two frames with
+  unnatural eye displacement. CPU-only tail/eye-crop inspection shows asymmetric
+  deformation without a complete close-and-reopen cycle; the earlier blink
+  interpretation is withdrawn. No natural blink or convincing head turn is
+  demonstrated. This smoke result alone is not photo full-pipeline upstream
+  parity or actor-control closure. The staged same-input control below now
+  compares the photo encoder, DiT and generated display endpoints. Evidence:
+  `.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json`.
+
+### 2026-11-06 — Same-portrait upstream MPS control
+
+- Same cached photo, saved V263 Qwen state26 and exact saved noise; original
+  BF16 weights, four T1 Euler steps. Source DCAE-V clean T0 and DiT generated
+  T1 each match all 138,240 native values bitwise. Upstream DiT first-60 output
+  SHA `19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42`
+  equals the channel-strided native prefix and is the actual decoder input.
+- Source PixelUMM: 36 blocks, 11 windows, saved noise [0,240), saved already
+  tile-major RoPE and source cosine overlap. Generated pixel crop [120,240)
+  is byte-identical across 53,084,160 finite F32 values; maxabs/RMSE/outside 0,
+  unchanged `atol=rtol=2e-5`. Five-second MP4 hashes also match. Pair:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/native-left-upstream-right-5s.mp4`.
+- Pinned source 911cea; DCAE/DiT Torch 2.8.0 MPS, PixelUMM pinned Torch 2.6.0
+  gathered adapter. Earlier 2.8 decoder failure remains rejected. No stock
+  CUDA/FlexAttention, live native Qwen, all-intermediate or natural-motion claim.
+  Zero intermediate readbacks/explicit MPS sync calls; one terminal transfer
+  per isolated stage. Native production code is unchanged.
+- Guard exit 0 for all stages: 18 GiB cap, cache-aware 10% reserve, 64 MiB
+  swap stop; max sampled peak 9.78 GiB, minimum headroom 17.85 GiB, swap growth 0.
+  Sampled enforcement is not a guarantee against between-poll spikes. Do not
+  promote these diagnostic timings to a native speedup measurement.
+- Weak motion and late eye deformation are reproduced by this source MPS
+  reference at fixed conditioning. The repeated-photo technical T0 is our
+  experimental extension: ordinary pinned seg_ar consumes text and initial
+  noise, without a stock reference-photo entrypoint. Same-scene text-cache
+  reuse matches source; no text-cache bug is established. Matching saved noise
+  is not stock RNG draw-order parity. The preset is eight steps; this control
+  explicitly chose four. Neither observation proves the cause of weak motion.
+- Decision/return pointer: test the photo-conditioning/motion contract next,
+  preserving this exact numerical control. Adversary ROBUST only for declared
+  endpoints/linkage; same-lineage review is correlated. Decoder producer SHA
+  is frozen worktree identity, not bound within its immutable receipt.
+  Evidence `.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json`.
+  Refresh on changed source/runtime/weights/conditioning/noise/cache/geometry
+  or mutated/missing artifacts. Rollback: omit diagnostic helpers and references.
+
+### 2026-11-07 — Portrait tail localization, cause still open
+
+- Saved raw T1 eye-region adjacent MAE peaks at zero-based frame 117, 4.875 s:
+  0.0142317 versus 0.00149639 over the first four seconds. Earlier tiny pixel
+  differences do not establish acting. No raw crop/window/frame-order shift
+  was found. This is not a demonstrated delayed head turn or natural blink.
+- Repeated-photo T0 has a ten-latent encoder phase. All 30 T1 nearest static
+  phases match `20 + (i % 10)`; against that baseline, coarse eye-neighborhood
+  RMSE is 0.33664/0.45886 in the final two latents. Feature deviation predates
+  decoding, but does not identify an anatomical or semantic cause.
+- Pinned PixelUMM `autoencoder.py:160-169,592-617` documents a right-edge
+  last-latent quality issue; its opt-in tail fix excludes the final push.
+  Final latent 59 nominally maps to T1 pixels [116,120); the window tail is
+  unblended. This correspondence is a candidate, not causal proof.
+- Next falsifier: same terminal DiT latents/noise, decoder counterfactual with
+  latent 59 off the right edge; compare common frames and label synthetic
+  future context. Static-history/shared-caption suppression remains untested.
+  Do not crop away the defect and call acting fixed.
+- Analysis/verifier use completed captures on CPU; no model/GPU run or runtime
+  change. DoD verifier exit 0; correlated adversary recomputed both ROI and
+  latent-phase observations, ROBUST only within that scope. Root cause open.
+  Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json`.
+  Refresh on input/source/runtime/geometry changes or artifact mutation/loss.
+  Rollback: remove this diagnostic note; production inference is untouched.
+
+### 2026-11-07 — Obsolete activation payloads retired
+
+- At the user's explicit request, removed 447 raw activation shards from the
+  owned upstream trace's full-v1 and pilot-v2/v3/v4 directories: 299,585,810,432
+  logical bytes (about 279 GiB). Indexes, replay receipts, final latents, videos,
+  source snapshots, weights and the active portrait probe remain available.
+- Post-cleanup enumeration found no target payloads; retained small artifact
+  hashes and larger output identities match the cleanup receipt. Historical
+  capture checks remain historical evidence, but replay or revalidation of
+  deleted activations requires recording them again. Do not treat an index as
+  an available corpus. Evidence:
+  `.landmark/evidence/2026-11-07-hy-nomas-activation-retirement.json`.
+- Keep reusable inputs and reviewable final results; remove owned obsolete
+  temporary payloads after their experiment closes. No inference change.
+
+### 2026-11-07 — Cyclic portrait-tail context does not correct eye deformation
+
+- Decoder-only test preserves the exact 60-latent prefix and common saved noise,
+  appending source latents [50,60) three times. Decode 90 latents in 17 windows;
+  compare the original 120 T1 display frames without trimming. This is synthetic
+  context plus local RoPE relocation and overlap blending, not genuine future
+  motion, stock randomized tail padding, or a DiT rerun.
+- Native/source Torch 2.6 MPS T1 display matches all 53,084,160 values bitwise;
+  maxabs/meanabs 0 at unchanged 2e-5 tolerances. GPU A/A checks preserve the
+  original first 100 display frames and the window-50 unblended tail after
+  BF16 postprocessing. No baseline raw-BF16 A/A comparison is claimed.
+- Only original T1 frames 100..119 change. Eye-ROI adjacent RGB MAE still peaks
+  at frame 117 (4.875 s), rising 0.01423170 to 0.01676856 (+17.8%). Selected
+  frames retain asymmetric eye deformation. This motion-magnitude proxy is not
+  an eye-pose error or proof of natural blinking. Reject this cyclic correction;
+  the general right-edge/context hypothesis and motion-conditioning cause remain
+  open. Do not promote numerical parity to acting quality.
+- Native: encode allocations/readbacks/preterminal waits 0/0/0, one terminal
+  wait; 22 GiB cap, sampled peak 18.80 GiB. The earlier 18 GiB native attempt was
+  stopped by the guard, not admitted as a passing result. Source: one code-audited
+  terminal packed transfer, 18 GiB cap, sampled peak 7.94 GiB. Both retain the
+  cache-aware 10% reserve and show zero swap growth. No new per-block activation
+  capture. These diagnostic timings do not establish a speedup.
+- Focused six CPU tests, Ruff, both GPU runs and postterminal verifier pass.
+  Correlated adversary ROBUST within artifact/layout/display-gate scope; causal
+  inference remains limited by the joint intervention and synthetic context.
+  Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json`;
+  helper `spec/support/hy_nomas_portrait_tail_control.py`. Refresh on changed
+  source/runtime/weights/conditioning/noise/geometry or missing/mutated evidence.
+  Rollback: omit diagnostics; production inference is unchanged.
+
+### 2026-11-07 — Fixed-shape T0 video-history visibility does not establish natural motion
+
+- Preserve the user's improved-gaze observation from the prior cyclic context.
+  Freeze prompt, saved V263 Qwen, original BF16 weights/arithmetic, clean T0,
+  T0 writer/noise/timestep, T1 noise, four-step schedule and RoPE. Compare an
+  explicit all-visible T1 mask with one hiding only the oldest twenty of thirty
+  T0 latent video frames. Both use 4,583 query rows and 8,903 keys; T0 caption
+  and current T1 video remain visible. The T0 writer stays unmasked.
+- Native all30 reproduces the full historical latent bank bitwise. Each arm's
+  terminal T1 matches pinned 911cea Torch 2.8 MPS on all 138,240 values exactly;
+  source all30 A/A matches 34 captured records and eleven sampled T0 writer
+  records match between arms. This is not a full native cache export.
+- Same-arm cyclic90 PixelUMM replay preserves noise, windows, overlap and local
+  RoPE. Both native/source Torch 2.6 MPS display crops match all 53,084,160
+  finite F32 values bitwise; unchanged atol=rtol=2e-5 throughout. Reuse all30
+  decode only through complete input-artifact identity. Pair:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/all30-left-last10-right-5s.mp4`.
+- Coarse adjacent-frame face/eye RGB change rises 4.25%/10.03%, but the eye
+  peak stays at frame 117 (4.875 s); selected frames retain nearly the same
+  head pose and late asymmetric eye deformation. Magnitude is not quality.
+  Do not adopt last10 as a motion correction. Retained deep K/V and caption
+  states already mix all thirty T0 frames, so indirect static-history influence
+  remains open. This is experimental portrait conditioning, not stock I2V.
+- Native DiT sampled peaks 24.16/24.17 GiB; last10 PixelUMM 18.81 GiB.
+  Cache-aware reserve 10%, observed swap growth zero. Native encode allocation,
+  readback and preterminal-wait counters 0/0/0; one terminal wait per stage.
+  Opaque MPS allocations are outside these counters. No speedup claim.
+- Fourteen Python tests, thirty Crystal examples, release build, same-arm GPU
+  gates and dereferenced input/output/command bindings pass. First all30 source
+  execution predates the wrapper: its command/source hashes and successful
+  guard remain, without a wrapper source-unchanged claim. The skill-referenced
+  structural graph validator is absent; packet status remains COMPLETED rather
+  than a structurally validated closure. Raw captures retired after verified
+  hashes: two files, 626,982,944 bytes; replay requires recapture.
+- Correlated read-only adversary: ROBUST within endpoint parity, fixed-input
+  lineage and selected-frame observation. Byte checks confirm both cyclic90
+  extensions. This does not qualify natural motion or resolve its cause.
+- Return pointer: isolate T0 caption-key access from video-key influence while
+  preserving query/text refinement and geometry. Require actual acting and
+  identity checks before promotion. Evidence:
+  `.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json`.
+  Refresh on source/runtime/binary/weight/input/noise/schedule/geometry changes
+  or artifact mutation/loss. Rollback: omit opt-in profiles/probe; defaults and
+  legacy attention labels retain their previous behavior.
+
+### 2026-11-07 — Hiding direct T0 caption keys corrupts the portrait
+
+- Fixed-shape follow-up retains all thirty T0 video latents and hides only
+  caption keys [4320,4583) from all T1 queries. Both arms retain 4,583 query
+  rows and 8,903 keys; T0 writer, inputs, BF16 arithmetic, noise, schedule and
+  RoPE stay fixed. Query geometry, not deeper-layer query values, is unchanged.
+  The opt-in profile rejects incompatible settings before GPU allocation.
+- Visible native A/A reproduces the full historical bank. Each native/source
+  Torch 2.8 MPS terminal DiT result matches all 138,240 T1 values bitwise;
+  34 source A/A records and eleven sampled writer records match. Each same-arm
+  cyclic90 PixelUMM display matches all 53,084,160 values bitwise against
+  Torch 2.6 MPS, at unchanged atol=rtol=2e-5. Actual native crop bytes are
+  crossbound to source pixels; a stale visible-source substitution is rejected.
+- Selected frames show colored/ghost overlap at frame 0 and severe duplicated
+  multicolor faces by frame 24 (1 s) with caption keys hidden. Reject this as
+  a correction; larger RGB differences are not useful motion. The original
+  weak-motion cause and indirect static-history effects remain open.
+- Pinned nomas_cpt.py:626-638 with cache_txt=False supplies history plus current
+  image K/V, while current text remains in Q. Hiding T0 captions removes the
+  last direct text K/V block; mixed video/query/refiner influence remains.
+  Next falsifier: restore current T1 text K/V with cache_txt=True and
+  update_cache=False while retaining the hidden T0 caption. This rescue is
+  unimplemented, changes key extent and requires a fresh memory plan/gate.
+  If coherent motion remains absent, compare technical repeated-photo T0
+  against real-video or stock-generated T0 rather than more direct-key masks.
+- Twenty Python tests, 31 Crystal examples, release build, formatting and
+  numerical/artifact gates pass. Native DiT sampled peaks 24.17/24.16 GiB;
+  hidden native PixelUMM 18.81 GiB. Cache-aware reserve remains 10%, observed
+  swap growth zero. Native encode allocation/readback/preterminal-wait counters
+  0/0/0, one terminal wait per stage; opaque MPS allocations are excluded.
+  No speedup or natural-motion claim. The referenced structural graph validator
+  is absent; packet status is COMPLETED with separately passed numerical DoD.
+- Correlated read-only adversary ROBUST within parity, artifact lineage and
+  selected-frame rejection; softmax renormalization remains a causal confound.
+  Retired two authenticated raw captures (626,982,944 bytes) and the owned
+  build cache (31,601,150 bytes), preserving inputs, weights, compact latents,
+  pixel outputs and review media. Intermediate replay requires recapture.
+- Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json`;
+  review pair under the experiment's photo-t0-caption-v1 directory. Refresh on
+  source/runtime/binary/weights/input/noise/schedule/geometry changes or artifact
+  mutation/loss. Rollback: omit --hide-t0-caption-keys and the diagnostic probe;
+  production defaults and the unmasked T0 writer are unchanged.
+
+### 2026-11-07 — Current T1 text K/V rescues coherence, not natural motion
+
+- Opt-in --t1-current-text-kv retains all 30 T0 video latents, hides old 263
+  caption keys and exposes current 263 T1 caption K/V. Source cache_txt=True,
+  update_cache=False for all 4 T1 calls; no persistent T1 append. Unmasked
+  T0 writer and 4,583 query rows remain; keys grow from 8,903 to 9,166, adding only
+  2,290,204 shared-workspace bytes. Production defaults remain unchanged.
+- New-binary visible A/A whole bank matches the historical baseline. Native
+  T1 matches pinned 911cea Torch 2.8 MPS on all 138,240 values bitwise; eleven
+  sampled writer records and nine T1 input records remain unchanged versus
+  hidden-only. First changed sampled record: t1.step1.block0.image.
+  Same-arm cyclic90 PixelUMM display matches all 53,084,160 finite values
+  bitwise against Torch 2.6 MPS, unchanged atol=rtol=2e-5. Actual native/source
+  crop-byte checks pass; recorded stale-source-crop substitution is rejected.
+- Root and correlated reviewer inspected full-face/eye selected frames:
+  current T1 text K/V restores a coherent portrait versus hidden-only severe
+  multicolor duplicated-face collapse, but both rescue and baseline remain
+  nearly static; no substantial head turn is established. This supports the
+  intervention package, not unique semantic attribution or a motion fix.
+  Added attention support renormalizes softmax; T0 video K/V retains indirect
+  conditioning. Stills/RGB magnitude do not certify acting quality.
+- Twenty-six Python tests, 32 Crystal examples, release build and static/gates
+  pass. Cache-aware floor 10%, observed swap growth zero; native DiT sampled peak
+  24.17GiB, native/source decoder 18.81/7.94GiB.
+  Native instrumented preterminal allocation/readback/wait 0/0/0, terminal 1
+  per stage; opaque MPS allocations excluded. No speedup claim. Correlated
+  adversary ROBUST within scope; missing structural validator keeps packet
+  COMPLETED independently of passed numerical DoD. Retired owned diagnostic
+  payload/build cache (345,208,990 bytes); retain inputs, weights, compact
+  latents, pixels, receipts, media. Intermediate replay requires recapture.
+- Next falsifier: technical repeated-photo T0 versus real-video or stock-
+  generated T0, preserving prompt/noise and source gates. Do not iterate
+  similar direct-key masks or promote this rescue into a motion policy.
+  Return pointer: docs/hy-nomas-object-control-frontier.md, current T1 text
+  K/V section. Evidence .landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json.
+  Refresh on source/runtime/binary/weights/input/noise/schedule/geometry or
+  artifact changes/loss. Rollback: omit the flag and diagnostic profile.
+
+### 2026-11-07 — Hiding all T0 DiT keys loses likeness without useful motion
+
+- Guarded keep0 requires both --hide-t0-caption-keys and --t1-current-text-kv.
+  T1 hides 4,320 T0 video plus 263 old caption keys and retains its own video
+  and text keys. T0 writer remains unmasked; no persistent T1 append. Both
+  keep30/keep0 arms retain Q4583/K9166 and identical named workspace. The
+  explicit CLI argument uses -1 as its unset sentinel. Defaults are unchanged.
+- New-binary keep30 A/A reproduces the accepted whole bank byte-for-byte.
+  Keep0 preserves T0 and changes T1; all 138,240 native/source T1 values match
+  exactly against pinned 911cea Torch 2.8 MPS. Eleven sampled writer and nine
+  pre-block T1 input records remain identical; first changed sampled record is
+  t1.step1.block0.image. Same-arm cyclic90 PixelUMM matches Torch 2.6 MPS on
+  all 53,084,160 display values exactly, unchanged atol=rtol=2e-5.
+- Actual channel-major transport and native/source crop bytes are checked.
+  Substituting legitimate control cyclic90 or stale source pixels is rejected.
+  Thirty-two Python tests, 34 Crystal examples, build and static checks pass.
+  Native encode preterminal allocation/readback/wait counts remain 0/0/0,
+  terminal wait 1 per stage; opaque MPS allocations are excluded. Reserve 10%,
+  observed swap growth zero. No inference speedup claim.
+- Full-face contacts and all 120 eye crops show a changed, nearly static face
+  in the hidden arm, without an established blink or clear head turn. Reject
+  the mask as a motion correction. PixelUMM still has T0 overlap and RoPE
+  remains at segment30; softmax support changes. This is not stock photo-I2V
+  or removal of every history path, and the weak-motion cause remains open.
+- Park direct-key masking variants. Next discriminator: repeated-photo T0
+  versus stock-generated or real-video T0 with fixed T1 prompt/noise and
+  source gates. Return pointer: all-T0-keys section in
+  docs/hy-nomas-object-control-frontier.md. Evidence:
+  .landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json. Refresh on source,
+  runtime, binary, weights, input, noise, schedule, geometry or evidence changes.
+  Rollback: omit the opt-in probe; no src/ kernels or production defaults change.
+- Correlated read-only adversary ROBUST within the stated scope. Retired
+  373,036,400 bytes of owned captures, caches and superseded preliminary
+  payloads after hash checks; retain weights, inputs, final binary, compact
+  latents, pixels, record indexes, receipts and media. Intermediate audit
+  replay requires recapture.
+
+### 2026-11-07 — Generated T0 does not restore sustained portrait T1 motion
+
+- The opt-in portrait probe adds --t0-context repeated-photo|generated.
+  Generated mode admits two source-BF16 unmasked segments, once-per-scene
+  text, no reference latent/edits/actions/LoRA/captures/checkpoints. It runs
+  four T0 Euler steps and one writer; photo T0 retains the accepted DCAE
+  endpoint and one writer. Both use identical frozen T1 prompt/Qwen/noise/
+  RoPE/cache epsilon/schedule, Q=4,583/K=8,903 and no final T1 writer. Defaults
+  and src/ kernels are unchanged; generated T0 receives no photograph.
+- The new photo arm reproduces the accepted whole bank exactly. Both arms'
+  native/source Torch 2.8 MPS T0 and T1 endpoints match all 138,240 values
+  per endpoint bitwise. Generated source T0 is independently denoised.
+  Same-arm cyclic90 PixelUMM T1 displays match Torch 2.6 MPS bitwise on
+  all 53,084,160 finite values at unchanged atol=rtol=2e-5. Actual transport,
+  full native output and source crop bytes are crossbound; opposite-arm
+  prefix60/cyclic90/RGB substitutions are rejected in both directions.
+- All 120 T1 face frames per arm and selected T0 frames were inspected.
+  Generated T0 turns its head but shows a different man; both T1s remain
+  nearly static until a late eyelid change around frames 113-119. Reject
+  the substitution as a useful motion correction in this fixture. This
+  context-package comparison does not isolate motion or fix likeness;
+  identity, initialization and preceding action state differ. User likeness
+  objection and the weak-motion cause remain open. Four steps override the
+  upstream default eight; cyclic future latents are display context only.
+- Forty-two Python tests, 36 Crystal examples, release build, formatting,
+  Ruff, actual-byte gates and negative probes pass. Native DiT sampled
+  peaks 24.16/24.17 GiB; decoder 18.81/18.81 GiB. Cache-aware reserve 10%,
+  observed swap growth zero. Instrumented preterminal allocation/readback/
+  wait 0/0/0, one terminal wait per stage; opaque MPS allocations excluded.
+  No speedup claim. Correlated adversary ROBUST within the bounded scope.
+- Provenance is local execution/current-artifact consistency, not historical
+  tamperproof attestation: old sidecars lack launch command/transitive-helper
+  hashes and reused decoder binary source provenance is outside scope.
+  Structural graph validator/template are absent. Retired 345,345,526 bytes
+  of owned capture/build cache; retained weights, inputs, binaries, compact
+  endpoints, pixels and media. Intermediate audit requires recapture.
+- Return pointer: repeated-photo/generated context section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json. Next proposed
+  history discriminator: moving T0 versus its staticized final frame, same
+  DCAE path and fixed T1 inputs, reducing identity/endpoint-pose confounds.
+  A distinct T1 continuation action is a separate untested branch. No new
+  experiment is admitted yet. Refresh on source/runtime/binary/weights/input/
+  noise/schedule/geometry or evidence loss. Rollback: omit the new mode/probe.
+
+### 2026-11-07 — Moving RGB history does not restore sustained T1 motion
+
+- Added an opt-in connected native DCAE -> T0 cache writer -> T1 probe.
+  Moving frames [0,120) and frame 119 repeated 120 times come from one
+  authenticated generated RGB bank, with fresh identical BF16 DCAE weights.
+  T1 retains all eight frozen input identities, prompt/Qwen, original BF16
+  weights, four-step schedule and ordinary unmasked Q4583/K8903 attention.
+  DCAE output is borrowed directly on GPU; owners remain live through drain.
+  Production defaults and src/ kernels are unchanged.
+- All eight guarded native/source runs completed. Actual exported DCAE/T0
+  and T1 endpoints have zero error on 138,240 values each; same-arm PixelUMM
+  T1 crops have zero error on 53,084,160 finite values, atol=rtol=2e-5.
+  Native normalized BF16 input bytes are reconstructed independently.
+  Source encodes its own MPS clip and reports zero differing values against
+  that native clip in its sole terminal transfer; source clip raw bytes were
+  not exported or independently CPU-hashed. Decoder argv/input/output joins,
+  channel-major prefix60/cyclic90 transport and negative substitutions pass.
+  Root rehashed 640 unique current source files against all 8 launch inventories;
+  zero mismatches. This is local consistency, not tamperproof attestation.
+- All 120 T1 face frames in each arm and selected full frames were inspected.
+  Both T1s remain nearly static. Only moving history has a brief partial
+  eyelid closure at 117-119, without established natural full blink or sustained
+  acting. Reject moving history as a useful motion correction in this fixture.
+  Static history alone does not explain weak motion; DCAE temporal effects and
+  DiT/PixelUMM history remain coupled. User likeness is not fixed. Four steps
+  override upstream default 8; cyclic future is diagnostic display context.
+- Focused 58 Python tests, 43 Crystal examples, release build, Ruff and
+  git diff --check pass. Crystal formatter reports alignment-only differences
+  in two diagnostic files; do not count it as passed. Named preterminal
+  allocation/readback/wait counters remain 0/0/0, terminal 1 per native stage;
+  opaque MPSGraph allocation is excluded. Reserve 10%, observed swap growth 0.
+  Initial 32 GiB cap stopped at 32.058 GiB without a localized peak stage; the
+  re-estimated 36 GiB cap completed, sampled native peak 33.225 GiB. No speedup.
+- Retired 80,149,313 bytes of owned compiler caches/repros/preliminary preview
+  and superseded verifier. Retained weights, frozen inputs, binaries, compact
+  latents, raw outputs, receipts, final verifier/index and media. Rebuilding
+  requires fresh compilation caches; endpoint/pixel audit remains available.
+- Return pointer: moving/repeat-last RGB section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-07-hy-nomas-t0-rgb-history.json. Next proposed
+  falsifier: a distinct T1 continuation/action instruction with fixed history
+  and noise. No further model run admitted here. Refresh on code/binary/runtime,
+  upstream/weights/normalization/geometry/frozen-input changes or evidence loss.
+  Rollback: omit diagnostic probe. Correlated read-only adversary ROBUST within
+  this bounded numerical/artifact and negative visual scope. Root-cause work
+  remains IN_PROGRESS.
+
+### 2026-11-08 — Separate photo reconstruction from DiT appearance changes
+
+- The earlier statement that selected portrait frames retain identity is
+  withdrawn: the user reports a likeness mismatch. Generated T0 receives no
+  photograph and is not the original-photo control. This slice starts from
+  the authenticated clean photo DCAE latent; encoder results are historical
+  reuse, not a fresh encode.
+- The original upstream DCAE decoder reconstructs that latent without DiT.
+  It looks closer to the prepared photo in selected crops; normalized BF16
+  input-fidelity RMSE 0.0163221 is lossy reconstruction, not numerical parity.
+  Native DCAE conversion remains encoder-only. PixelUMM is the production
+  decoder and already changes fine skin texture in the no-DiT control.
+- Added opt-in same-chain T1 captures: effective BF16 velocity, BF16 clean
+  estimate before Euler, and BF16 state after Euler, four steps, 6,635,520
+  preallocated bytes, one terminal wait. All twelve comparisons are bitwise
+  equal to historical source velocities/states and GPU-reconstructed source
+  clean estimates. Current formatted release reproduces the earlier capture
+  and final bank exactly. Default capture remains disabled.
+- Same-position/noise/window PixelUMM clean and first-clean-estimate native/
+  source controls have zero error on 53,084,160 finite values, atol=rtol=2e-5.
+  First-estimate changes to eyes/mouth partly reverse at the final endpoint;
+  monotone accumulated drift, an exact internal layer, natural blinking and
+  repaired likeness are not established. Final historical decoder pixels
+  were rejoined to the fresh fourth estimate and byte-compared again.
+- Eleven launch/execution records and 1,856 inventory entries were checked.
+  The earlier clean helper launch predates optional named-step validation;
+  that one current-source drift remains explicit. Fresh first-estimate control
+  matches current helper bytes. Native decode executable is hash-pinned;
+  its original build lineage and unmodified CUDA/flex-attention parity are
+  outside scope. Source controls use the existing gathered MPS adapter.
+- Focused 47 Python tests, 32 Crystal examples, release build, Ruff and
+  four-file Crystal formatting pass. Sequential model runs preserve the
+  cache-aware 10% reserve and 64 MiB swap-growth stop; observed swap growth 0.
+  Native DiT sampled peak 24.167 GiB; PixelUMM 18.411 GiB. Instrumented native
+  preterminal allocation/readback/wait 0/0/0, one terminal per stage; opaque
+  MPS allocations excluded. No speedup claim. Retired 33,693,941 bytes of own
+  rebuildable cache/preliminary previews; retained weights and audit payloads.
+- Return pointer: original-photo section of docs/hy-nomas-object-control-frontier.md
+  and .landmark/evidence/2026-11-08-hy-nomas-photo-appearance-localization.json.
+  Correlated read-only adversary verdict ROBUST within this bounded diagnostic;
+  the packet remains COMPLETED and does not establish likeness or internal-layer
+  cause. A separate streamed first-estimate pixel comparison found zero unequal
+  bytes across 212,336,640 bytes.
+  Likeness root cause remains IN_PROGRESS. Next proposed falsifier: fixed final
+  T1 latent decoded with original DCAE versus PixelUMM; not executed here.
+  Refresh on source/binary/runtime, weights, reference/normalization, conditioning,
+  noise/schedule, geometry or evidence changes. Rollback: omit diagnostic flag
+  and helpers; no production default changed.
+
+### 2026-11-08 — Original DCAE isolates a PixelUMM appearance contribution
+
+- Decoded the same authenticated `[clean photo T0, final T1]` paired60 bank
+  with the original pinned upstream DCAE-V and fresh native PixelUMM. The
+  endpoint joins the prior four-step checkpoint control; no encoder or DiT
+  rerun. Full T0 context is retained before cropping T1 display frames
+  [120,240). DCAE retains its six causal tiles; PixelUMM retains eleven
+  overlapping windows, fixed noise and global positions.
+- Fresh native/source PixelUMM T1 displays match on 53,084,160 finite values,
+  max/mean error zero at unchanged atol=rtol=2e-5. Separate CPU comparison
+  finds 212,336,640 identical exported F32 bytes. Native Crystal probe is
+  freshly built with fifteen reused, rehashed native objects. Source uses
+  the existing gathered MPS attention adapter; unmodified CUDA parity and
+  fresh native-object builds are outside scope.
+- Original DCAE's first 120 RGB8 frames exactly reproduce the earlier clean
+  photo reconstruction in the same sole terminal pack. Six inspected T1
+  crops retain fine photo texture more closely with DCAE; PixelUMM changes
+  skin creases and eye contours with the latent fixed. The late eyelid change
+  is visible in both. This is a bounded decoder contribution, not repaired
+  likeness or natural motion. Cross-decoder display RMSE 0.0131478 is
+  descriptive, not a parity or quality gate.
+- Three model-owning runs are sequential, reserve 10%, sampled swap growth
+  zero. Sampled peaks: native PixelUMM 18.410 GiB under 20 GiB; source PixelUMM
+  5.795 and original DCAE 13.057 GiB under 18 GiB. CPU-only admission overlaps
+  source PixelUMM. Native instrumented preterminal allocation/readback/wait
+  0/0/0, terminal 1; source/DCAE one packed export, explicit sync 0 and
+  intermediate readback 0. Opaque MPS allocation is outside named accounting.
+- Focused 21 Python tests, Ruff, release probe build and artifact checks pass.
+  Native request 167.139 s and original-DCAE control 754.470 s include ten seconds
+  of context and different validation work; no matched speedup or generation
+  rate claim. Preview is 120 frames at 24 fps, without interpolation.
+- Return pointer: same-final-latent section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-08-hy-nomas-final-dcae-pixelumm.json.
+  Correlated read-only adversary ROBUST within the frozen fixture and six
+  inspected crops; the texture judgment remains qualitative. Identity/motion
+  work remains IN_PROGRESS. Next proposed discriminator: blinded review of
+  preselected crops across the exported interval, with no new model run.
+  Refresh on source/binary/runtime, weights, input/normalization, noise,
+  schedule, geometry or evidence change. Rollback: omit the opt-in final
+  control; no production default changed.
+
+### 2026-11-08 — Native original DCAE-V decoder and bounded comparison
+
+- Added an opt-in Crystal/Metal/MPS decoder with the original 171 BF16
+  bindings, 38 prepared convolution templates, reusable scratch and causal
+  feature caches. GPU arithmetic preserves original BF16 boundaries and F32
+  accumulation. The dedicated decoder-only sidecar lives under
+  /opt/mldata_ssd/models/hy-nomas/dcae-v-native-decoder-ebbee483/; model files
+  and run payloads are excluded from Git.
+- Varying two-tile input passes all 18 upstream tensors bitwise (input,
+  output and 16 stage boundaries);
+  a second request reuses the same native resources. Full paired60 output
+  passes on 106,168,320 BF16 values with zero unequal/nonfinite values at
+  unchanged atol=rtol=2e-5. Fresh PixelUMM T1 also directly matches all
+  212,336,640 bytes of the saved upstream T1 fixture. This is a prior-source
+  join for PixelUMM, not a new upstream PixelUMM execution.
+- One serial first-request sample: native DCAE 684.661 s and 10.607 GiB
+  sampled process peak, PixelUMM 141.552 s and 18.413 GiB. Both decode ten
+  seconds of context (five history plus five new), not ten seconds of new
+  generation. Both weight populations occur in setup. The old DCAE event
+  incorrectly labels its first request as containing an upload; that request
+  only validates already-resident BF16 weights with zero staging. The 4.84
+  request-time ratio is descriptive
+  only; no matched speedup, warm/cold, frequency-controlled or end-to-end
+  rate claim. DCAE's observed sampled peak is 42.4% lower in this pair.
+- All guarded model processes are sequential, cache-aware reserve 10%,
+  observed swap growth zero. Each native request records zero instrumented
+  preterminal named allocations/readbacks/waits and one terminal drain.
+  Opaque MPS allocations and API waits remain outside those counters.
+- Release build, 11 focused Crystal specs, 26 Python tests, Ruff, Crystal
+  formatting and authenticated artifact audit pass. The full upstream run
+  pins the archived pre-cleanup oracle; a post-export traces.clear cleanup
+  reproduces the identical small artifact. Audit v3 additionally asserts
+  weight/reference/output/common-input command joins. Correlated final
+  adversary covered the bounded numerical/resource checks. The upload-timing
+  interpretation was corrected during the subsequent Conv3D profile; the raw
+  historical event remains unchanged and is annotated in its evidence packet.
+- Retired 23,045,232 bytes of owned rebuildable compiler cache and the empty
+  temporary directory; retained weights, binaries, payloads and evidence.
+  The port is a reusable module plus probe, not an end-to-end pipeline switch.
+  Batch one and complete ten-latent tiles are verified; a workspace requires
+  serial ownership. Exact decoder parity does not establish repaired likeness
+  or motion.
+- Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-native-dcae-v-decoder.json. Next proposed
+  performance discriminator: profile the high-resolution Conv3D stages;
+  their logical FLOP cost model is not measured bottleneck evidence. Refresh
+  on source/binary/runtime, weights, geometry, input, rounding/cache schedule,
+  measurement policy or evidence changes. Rollback: omit the opt-in decoder
+  and probe; PixelUMM and encoder defaults remain unchanged.
+
+### 2026-11-08 — Bounded native DCAE Conv3D profiling; no admitted speedup
+
+- Added opt-in operation markers, conservative command-root attribution and
+  graph API wall/thread-CPU timing. Interpret root durations as stage-associated
+  intervals, including possible internal GPU waits/idle time, not exclusive
+  convolution arithmetic. API phase 0 is a whole-request aggregate. Disabled
+  graph hooks still have a lightweight check; zero overhead is not claimed.
+- On the final default-path T10 real-spatial profile, 297 roots cover 111.443 s;
+  the request takes 111.490 s. Stage-2/stage-1 residual Conv3D-associated
+  intervals contribute at least 57.079/27.780 s (76.146% combined). All
+  17,740,800 input/output BF16 values match frozen upstream bitwise at
+  unchanged atol=rtol=2e-5. The final changing-input two-tile small control
+  matches all 18 tensors after two serial requests. A separate byte/hash audit
+  verifies the T10/T20 causal prefixes against the authenticated T60 source.
+- Auto-layout ABBA after equal warmup gives A 118.93/137.93 s and
+  B 149.72/144.05 s; order drift prevents a stable effect estimate and no gain
+  is admitted. Explicit channels-last, BF16 temporal subtiles and core Level 0
+  also have no matched gain. Conv2D temporal lowering and F32 Conv3D violate
+  unchanged stage-2 tolerances and were removed from the current API.
+  Do not reinterpret unmatched 105.12/105.93/114.38 s samples as a speedup.
+- The strict timestamp validator rejects one profiled temporal-subtile run
+  before export; its unprofiled retry separately passes numerical comparison.
+  A combined Instruments capture exceeds the unchanged 18 GiB group cap and
+  leaves an unreadable partial trace; its cleanup permission error is retained,
+  with a later empty native-probe/xctrace process census. The shorter trace
+  completes and reproduces output bitwise, but contains only shader inventory,
+  no per-shader durations or counter samples. Both raw bundles were retired
+  after allowlisted extraction; no hardware bottleneck inference is admitted.
+- All admitted native requests retain one terminal wait, zero instrumented
+  named hot allocations/readbacks/preterminal waits, 10% cache-aware reserve
+  and zero observed swap growth. Opaque MPS resources remain sampled by the
+  process guard. Paired plans coexist; this is not single-plan residency.
+- Profiling controls remain opt-in and the original Conv3D default is intact.
+  Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-conv3d-profile.json. The performance goal
+  remains IN_PROGRESS. Stage-2 conv1/SiLU fusion passes all 18 small traces
+  and real T10 bitwise. ABBA A140.383/B128.791/B126.325/A121.575 s and
+  BAAB B127.541/A143.951/A123.644/B117.792 s are confounded by position/reuse
+  drift; no matched speedup is admitted. All seven experimental controls were
+  removed from the active API and retained as pinned external source/binaries.
+- A separate tiny C512/T40/H3W5 pre/post-bias diagnostic matches fresh
+  PyTorch MPS Conv3D output bitwise at both BF16 boundaries for both caches;
+  CPU fallback is disabled. Native ordered FMA already fails pre-bias on
+  82/83 of 307,200 values, versus 67/69 post-bias. Explicit bias addition
+  agrees. An upcast-F32 MPS lane rounds to both MPS BF16 outputs, but is not
+  its hidden accumulator. Do not tile or promote the rejected reduction.
+  Next useful discriminator must address reduction/BF16 midpoint crossings or
+  obtain per-kernel evidence inside the dominant Conv3D-associated intervals;
+  further layout sweeps without one are parked.
+  Refresh on source/binary/runtime, fixture, weights, geometry, cache/rounding,
+  measurement or guard-policy changes. Parity is not a video-quality claim.
+
+### 2026-11-08 — DCAE Conv3D pre-BF16 reduction on the full stage-2 shape
+
+- Added a diagnostic-only native probe for C512/T40/H72/W128 with the real
+  stage-2 conv1 BF16 weights, synthetic GPU-generated inputs and both causal
+  cache states. All buffers/plans precede the chain; one terminal drain and
+  zero instrumented named hot allocations/readbacks/preterminal waits persist.
+  No production decoder/default change or full generation is admitted.
+- Full original/multi-target post-bias MPS outputs match bitwise on all
+  188,743,680 values per cache case. The separate upcast-F32 MPS convolution
+  rounded to BF16 also matches every exposed pre-bias value. This is a fixture
+  boundary equivalence, not access to the hidden BF16 accumulator. A fresh
+  pinned upstream operator matches all 8,192 sampled pre/post-bias values per
+  case, including original biased Conv3D versus separate BF16 bias addition.
+- The GPU exact-integer reference passes 256 independent exact Fraction/RNE
+  vectors for BF16 and F32. All 18 native F32 orders/groupings and the exact
+  reference nevertheless fail unchanged atol=rtol=2e-5 on both fixtures.
+  Full-shape exact failures are 1,872/8,192 per case: 6/3,584 stratified,
+  1,866/4,096 midpoint-enriched, zero tolerance failures in 512 edge samples.
+  These are selected-coordinate counts, not full-tensor error prevalence.
+  Staging exact accumulation through F32 repairs only 42/44 of the failures;
+  1,830/1,828 persist. The reduction schedule remains unidentified.
+- Comparator control success cannot pass a candidate gate without an explicit
+  candidate. Ordered-FMA/exact candidate replays fail as expected; nine focused
+  rounding/gate and 44 guard tests pass. The correlated static/evidence audit
+  is ROBUST only for this synthetic diagnostic. A post-drain sampled rounding
+  check independently supports the GPU full-output comparison counter.
+- Native/upstream sampled process peaks are 3.686/3.563 GiB, with 10% cache-aware
+  reserve and zero observed swap growth. Opaque driver/compiler activity and
+  between-sample spikes are not excluded. Diagnostic intervals contain many
+  operations and cannot be cited as per-Conv3D speed or generation rate.
+- Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-conv3d-reduction.json. Native reduction
+  parity/performance remain IN_PROGRESS. Next falsifier: true stage-2
+  activation/cache from a bounded decoder-prefix run, then the same declared
+  comparison, without full generation. Refresh on source/binary/runtime,
+  weights, input/geometry/cache, sampling/rounding or measurement-policy changes.
+
+### 2026-11-08 — DCAE stage-2 reductions on authenticated real activations
+
+- The opt-in reduction probe now executes two sequential ten-latent decoder
+  prefixes on its existing GPU chain, stopping before stage-2 residual conv1.
+  The 90 loaded BF16 prefix tensors are byte-joined to the original checkpoint.
+  Both full C512/T40/H72/W128 activations and both OLD causal caches match a
+  fresh pinned upstream prefix bitwise (773,849,088 bytes). Cold cache zero and
+  previous-activation last-frame transport are independently checked after drain.
+- Full MPS original/multi-output and F32-rounded/BF16 controls pass on every
+  188,743,680 output values per cache case. Fresh upstream pre/post-bias and
+  original biased-Conv3D checks match all 8,192 sampled values per case.
+  All 18 F32 schedules and the exact reference still fail atol=rtol=2e-5.
+  Exact failures are 1,910/1,911: 5/2 stratified and 1,905/1,909 deliberately
+  midpoint-selected, with zero boundary failures. These are selected counts,
+  not full-tensor prevalence. Exact-to-F32-to-BF16 still fails 1,893/1,877;
+  staged rounding alone cannot reproduce upstream arithmetic.
+- Native named residency is 5,945,318,352 bytes; the sampled group peak is
+  7.878 GiB. The separate upstream prefix/operator peaks are 7.106/4.561 GiB.
+  All runs preserve the cache-aware 10% reserve and zero observed swap growth.
+  One terminal drain and zero named hot allocations/readbacks/preterminal
+  waits remain; opaque MPS/driver activity is not thereby excluded.
+- Fourteen comparator, four oracle and 44 guard tests plus two native contract
+  examples pass. Nine post-drain CLI checks distinguish controls from candidate
+  passage and reject missing provenance, wrong nested checkpoint, and an equal
+  corrupted cache on both sides. Report metadata consistency is separate from
+  the observed source-pinned execution receipts. The correlated adversary
+  verdict covers this diagnostic only, not backend independence or speedup.
+- No production decoder default, numerical tolerance or full-generation scope
+  changed. The diagnostic interval is not a Conv3D benchmark. Return pointers:
+  docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-real-stage2-reduction.json. Native reduction
+  parity/performance remain open. Next falsifier: fixed-shape sparse K masks
+  separating inner-tile and outer-partial accumulation, then a held-out tile;
+  kernel-selection changes remain a confound. Refresh on source/binary/runtime,
+  weights, fixture, geometry, capture/cache, rounding or sampling-policy changes.
+
+### 2026-11-08 — DCAE stage-2 local FMA and partial-sum merge separated
+
+- On the same two authenticated activations, the GPU probe freezes 216 K64
+  F32 sums per sample before either merge. On prior failing points, reversing
+  the local FMA changes 55–62/53–54 BF16 values (cold/cached). Reversing the
+  merge changes 154–163/176–181. Every full-weight candidate still fails
+  `atol=rtol=2e-5`. The result applies to the selected points and tested
+  orders.
+- Forward FMA reproduces all four single-mask upstream F32 outputs exactly.
+  All 15 addition trees over those four isolated F32 sums fail to reproduce
+  the union's exact F32 on 2,765/2,719 points, with zero such cases in the
+  single-product controls. Thirteen of 15 fixed trees still pass the
+  sparse BF16 gate on both inputs. This rejects exact F32 composition of
+  these specific partials. The internal full-weight reduction remains open.
+- The pinned operator and native probe share one MPS stream, with one
+  terminal reporting transfer and zero explicit intermediate waits.
+  Sampled peak is 4.372 GiB with the 10% cache-aware reserve and zero swap
+  growth. See docs/dcae-v-decoder-frontier.md for the source-pinned run and
+  sample evidence. The next falsifier uses the adjacent K64 pair alone to
+  compare a running FMA accumulator against frozen partials on both
+  activations.
+
+### 2026-11-08 — DCAE Conv3D carry across adjacent K64 tiles
+
+- With full stage-2 geometry and sparse masks 106/107 and 181/182, each
+  isolated tile matched upstream F32 exactly on both authenticated inputs.
+  Forward FMA with accumulator carry matched the upstream pair bitwise
+  in F32 and BF16 on 32,768 selected values. Summing frozen F32 tile sums
+  missed 1,996–2,353 exact values per comparison yet matched after BF16
+  rounding. Reverse carry had one BF16 failure at `atol=rtol=2e-5`.
+- The corrected GPU probe repeated the observation bytes, passed the
+  cancellation and unmasked controls, and used one terminal transfer and
+  the 10% reserve with zero swap growth. The post-drain audit checked
+  numerical counts and rejected aliased, bad-rounding and changed-reference
+  inputs. No default or speed claim changes. Next falsifier is carry versus
+  channel interleaving across temporal taps on aligned channels; include
+  a tap that reads the prior-frame cache. See docs/dcae-v-decoder-frontier.md
+  for pins and refresh conditions. The dense reduction is still open.
+
+### 2026-11-08 — DCAE Conv3D cross-tap G8 accumulation
+
+- On the same C512/T40/H72/W128 fixtures, G8 in temporal order was the
+  only fixed policy with bitwise F32 agreement on all 32,768 outputs for
+  masks `34/106` and `106/178`, including 327 active cached points. It
+  visits eight aligned channels per tap with one carried FMA accumulator.
+  All 15 policies passed the actual sparse BF16 gate at `atol=rtol=2e-5`.
+- The post-drain audit reproduced the counts, confirmed active singleton
+  cache inputs, and rejected aliased policies, bad BF16 rounding and
+  forged cold-cache contributions. One terminal transfer, no explicit
+  intermediate wait, 5.112 GiB sampled peak, 10% reserve and zero swap
+  growth. See docs/dcae-v-decoder-frontier.md for evidence and replay.
+- Keep MPS as the production path. Predict the three aligned taps and a
+  crossed spatial/channel mask before trying the dense reduction. Refresh
+  on backend, operator, precision, geometry, mask or fixture changes.
+
+### 2026-11-08 — DCAE Conv3D G8 survives aligned and crossed three-tile masks
+
+- The predeclared channel-group → tap → lane FMA order was the only
+  fixed policy with zero F32 bit mismatches across all 32,768 outputs
+  of masks `34/106/178` and `99/106/107` on both real cache cases. G8
+  also matched every actual BF16 value; G16 failed the existing gate
+  once. There were 327 aligned first-frame samples with all three
+  tiles active on the live cache.
+- Cold-cache and temporal/spatial padding projections matched the
+  retained pair controls. The offline audit independently recounted
+  the gates and rejected aliased, misrounded and forged observations.
+  Sampled group peak was 5.107 GiB under the 10% floor with no swap
+  growth. See docs/dcae-v-decoder-frontier.md for pins and replay.
+- Next falsifier is continuous G8 over dense K at the original sampled
+  coordinates, including the previous BF16 failure points. Scope the
+  result to the pinned upstream, runtime, precision, shape and fixtures.
+
+### 2026-11-08 — DCAE dense G8 matches the sampled upstream Conv3D
+
+- One F32 FMA accumulator per output in global eight-channel group,
+  ascending `kt,kh,kw`, ascending lane order matched dense `K=13,824`
+  pre-bias upstream F32 bitwise at all 16,384 authenticated stage-2
+  coordinates across cold and live caches. Its rounded result matched
+  actual upstream BF16 bitwise, resolving all 1,855/1,947 prior BF16
+  gate failures at `atol=rtol=2e-5` with zero new failures.
+- The same kernel reproduced both masked controls and the fresh dense
+  upstream columns reproduced the retained references. The post-drain
+  audit confirmed raw bits and caught swapped references, bad BF16
+  rounding and candidate failure churn. One terminal transfer, zero
+  explicit intermediate waits, 5.061 GiB sampled group peak, a 10%
+  cache-aware reserve and zero observed swap growth.
+- Return pointer is `docs/dcae-v-decoder-frontier.md`. The next gate is a
+  native kernel tiled across outputs, with full-tensor parity on both
+  cache cases and a paired full-shape timing against MPS. Refresh the
+  sampled certificate on upstream, runtime, precision, geometry, weight,
+  fixture or sampling changes.
+
+### 2026-11-08 — DCAE tiled G8 is bitwise exact on both full stage-2 caches
+
+- A tile of four output channels and two x positions preserves each
+  output's continuous G8 FMA order. It matches pinned upstream stage-2
+  conv1 before bias on all 188,743,680 values per cache in both F32 and
+  BF16. The GPU comparator passes its negative witnesses and every
+  comparison at the existing `atol=rtol=2e-5` gate.
+- Warm BF16 batches in both orders give median paired G8/MPS ratios
+  1.006× cold and 1.034× live. Pair ranges cross parity, so the data
+  support keeping G8 as a diagnostic and MPS in the production decoder.
+  The stage-boundary clock failed its MPS witnesses. Use the audited
+  completed-batch wall time with one terminal readout per batch and
+  zero explicit intermediate GPU waits.
+- Peak sampled footprint was 5.933 GiB, minimum cache-aware headroom
+  23.997 GiB and swap growth zero at the 10% floor. Return pointer
+  `docs/dcae-v-decoder-frontier.md` has the source pins and timing
+  protocol. Refresh on upstream, runtime, geometry, inputs, precision
+  or timing-method changes.
+
+### 2026-11-08 — Packed C8 reduces exact DCAE G8 Conv3D time
+
+- A counterbalanced load and dependency probe at full T/H/W shows
+  C8 / strided ratios of 0.541× cold and 0.536× live for 128 output
+  channels. Splitting G8 into even/odd FMA chains slows both layouts
+  and fails the existing tolerance. A/A spans 0.982–1.013×. This
+  measures the effect of the interventions on completed batches.
+- C8 with one ordered F32 accumulator matches pinned upstream
+  bitwise for all 188,743,680 values in each precision and cache.
+  Including a GPU pack per call, full-shape BF16 paired ratios are
+  0.811×/0.835× against original G8 and 0.789×/0.787× against MPS
+  (cold/live). All 16 pairs favor C8. The reused pack buffer is 378 MiB.
+- One terminal readout per independent chain, 6.085 GiB sampled
+  peak, 18.876 GiB minimum cache-aware headroom and zero swap growth
+  at the 10% floor. Return pointer `docs/dcae-v-decoder-frontier.md`
+  holds the pins and replay evidence. Promotion requires a connected
+  decoder result with the same precision gate and end-to-end timing.
+
+### 2026-11-09 — Packed C8 qualifies as an optional DCAE-V route
+
+- The connected decoder applies C8 to 20 stage-2 residual convolutions
+  per causal tile and reuses 391.5 MiB of GPU packs. All four runs matched
+  the pinned upstream T20 prefix bitwise on both cache tiles at unchanged
+  `atol=rtol=2e-5`. A last-frame mutation failed the live gate.
+- Against MPS, decode wall time fell 13.8% and 5.3% in opposite orders.
+  The live tile improved in both pairs; the cold tile did not. Sampled
+  peak rose from 9.66 to 10.33 GiB. Host drift limits generalization, so
+  MPS remains the default and `--c8` selects the measured route.
+- No new in-chain GPU waits or tensor transfers. Minimum sampled cache-aware
+  headroom was 11.30 GiB at the 10% floor; no swap growth. Return pointer:
+  `docs/dcae-v-decoder-frontier.md` and
+  `.landmark/evidence/2026-11-09-dcae-c8-decoder.json`. Refresh after an
+  upstream, runtime, geometry, input, precision, or measurement change.
+
+### 2026-11-09 — Stage-1 C8 lowers the measured DCAE-V decoder footprint
+
+- Passing the active channel stride corrected the C256 stage-1 C8 store.
+  The first residual convolution matched upstream and MPS bitwise on
+  377,487,360 words per cache case. Four isolated pairs improved wall time
+  by 16.7–23.6% with activation and weight packing included.
+- The two-tile decoder applies C8 to 10 more convolutions per tile. It
+  shares one pair of GPU packs across stages 1 and 2 and adds 378 MiB of
+  named storage. The whole sampled peak fell from 10.33 to 9.89 GiB in
+  both orders and command roots fell from 493 to 443. Wall time changed
+  by −3.2% and +6.1%; the isolated speedup did not establish a decoder win.
+- All four runs matched both upstream tiles bitwise at the existing
+  `atol=rtol=2e-5` gate. The final live-frame mutation failed. One
+  terminal wait per decode, 18.12 GiB minimum cache-aware headroom at the
+  10% floor and zero swap growth. `--c8-stage1` is opt-in. Return pointer
+  `docs/dcae-v-decoder-frontier.md` and
+  `.landmark/evidence/2026-11-09-dcae-stage1-c8.json`. Refresh on source,
+  runtime, geometry, inputs, precision, workspace or measurement changes.
+
+### 2026-11-09 — Two-tile C8 A/A drift is inside GPU command intervals
+
+- Identical C8 runs took 173.30 and 194.99 s. The GPU root interval
+  union grew by 21.68 s with under 0.30 ms of gaps in each arm. Stages
+  2 and 1 contributed 12.02 and 6.94 s on phase-only roots. The 442
+  `commitAndContinue` calls gained 15.51 s of wall time at about 8 ms
+  of calling-thread CPU per arm. Keep these API and GPU totals separate.
+- GPU active frequency fell from a median 1315.5 to 1169.5 MHz as
+  observed thermal pressure reached Heavy. Match measured GPU frequency
+  and thermal state by tile for the next C8/MPS comparison. The A/A
+  establishes timing attribution within this pair. Per-call driver
+  wait causes and the causal effect of thermal pressure remain open.
+- Both runs matched the retained upstream prefix bitwise on both tiles
+  at `atol=rtol=2e-5`. One terminal wait, 9.89 GiB sampled peak,
+  21.52 GiB minimum cache-aware headroom at the 10% floor and no swap
+  growth. Return pointer `docs/dcae-v-decoder-frontier.md` records the
+  receipt and replay. Refresh on runtime, input, geometry, resource plan,
+  observer or thermal regime changes.
+
+### 2026-11-09 — C8 cuts matched cold-tile DCAE GPU time by 19.5%
+
+- On the same pinned real T20 BF16 prefix, C8 stages 1 and 2 reduced
+  two-tile wall time by 17.2%, 18.9% and 19.0% against MPS. After 301 s
+  of quiet recovery per arm, the cold tile passed the predeclared
+  frequency and thermal gate at 84.04–84.10 s versus 104.44–104.50 s.
+  The live tile still exceeded the thermal variation limit of 0.20
+  at 0.265. Treat whole-request timings as descriptive.
+- Two-minute recovery admitted Nominal starts but let both second
+  arms reach Heavy on the live tile. Longer recovery removed Heavy
+  in the follow-up. GPU root-time savings accounted for essentially
+  the entire wall delta. Compare root intervals and API time separately.
+- All six outputs matched upstream bitwise on both cache tiles at
+  `atol=rtol=2e-5`. One terminal wait per request, 9.66/9.89 GiB
+  sampled MPS/C8 peaks, 18.84 GiB minimum cache-aware headroom at the
+  10% floor and no swap growth. Return pointer
+  `docs/dcae-v-decoder-frontier.md` records both receipts and replay.
+  Refresh on runtime, input, geometry, resources, observer or thermal
+  regime changes.
+
+### 2026-11-09 — Reversed DCAE pair matches thermal pressure on the live tile
+
+- MPS → C8 after 301 s per arm gave 49/49 and 39/39 Nominal live-tile
+  samples. The prior order showed 13 Moderate samples in second-position
+  MPS. The elevated pressure did not follow the second position in the
+  reversal. Mean and median C8 clocks were 3.98% and 4.30% lower than
+  MPS, so the 18.32% wall reduction stays descriptive under the existing
+  matching rule.
+- Both outputs matched the saved upstream BF16 prefix bitwise at
+  `atol=rtol=2e-5`. One terminal wait per request, zero preterminal waits
+  or readbacks, 17.99 GiB minimum cache-aware headroom under the 10%
+  reserve policy and zero swap growth. The order comparison and receipt
+  are in `docs/dcae-v-decoder-frontier.md`. Refresh on runtime, input,
+  geometry, resources, observer or thermal regime changes.
+
+### 2026-11-09 — Both 301 s recovery orders miss strict live-tile Nominal
+
+- MPS → C8 and C8 → MPS both started at Nominal after the recovery
+  gate. Both arms left Nominal on the live tile in each pair. The reverse
+  pair matched mean and median active frequencies within 2%. Its thermal
+  mismatch keeps the live and whole-request gains descriptive. The
+  reverse-order cold tile matched and showed 18.84–18.94% lower GPU
+  root time with C8. A Nominal start alone fails to certify the live tile.
+- All four outputs matched the saved upstream BF16 prefix bitwise at
+  `atol=rtol=2e-5`. One terminal wait per request, 13.46 GiB minimum
+  cache-aware headroom with the 10% reserve policy and zero swap growth.
+  `docs/dcae-v-decoder-frontier.md` links the receipt and replay. Refresh
+  on runtime, input, geometry, resources, observer or thermal regime changes.
+
+### 2026-11-09 — Six-tile C8 matches upstream across the T0/T1 seam
+
+- A blinded review of the fixed T1 portrait found a small recurring
+  appearance difference between DCAE and PixelUMM, with similar late
+  eyelid changes. It triggered one C8 decoder replay on the saved T0/T1
+  bank. All 106,168,320 BF16 pixel values matched upstream across the six
+  tiles at `atol=rtol=2e-5`. A one-word negative isolated the first T1
+  frame. The decoder used one terminal wait, 10.842 GiB sampled peak,
+  15.786 GiB minimum cache-aware headroom under the 10% reserve, and
+  zero swap growth.
+- The full C8 request took 645.498 s. Its late tiles rose to 131 s from
+  89 s on the first. Treat the difference from the historical 684.661 s
+  MPS request as descriptive. Return pointer
+  `docs/dcae-v-decoder-frontier.md` records scope, replay and refresh.
+
+### 2026-11-10 — Close-portrait T0 writer fails tap-dance identity retention
+
+- On native source `24d9d14c`, an authenticated portrait latent replaced
+  only the T0 cache writer; clean full-body T0, prompt and T1 noise stayed
+  fixed. At each of four steps, velocity outside the head was projected
+  to accepted take B before capture and Euler. All 12 non-head captures
+  remained bitwise B. Decoded non-head RGB is not guaranteed invariant.
+- Against pinned upstream `911cea6458a8`, all 12 velocity/x0/post-Euler
+  tensors and final T1 matched bitwise at unchanged `atol=rtol=2e-5`.
+  The first source control was discarded: an asynchronous upload outlived
+  its host owners and consumed a baseline velocity instead of the portrait.
+  Retaining the upload owners through the existing terminal transfer
+  corrected the control without adding a synchronization.
+- Direct review rejected the candidate: likeness still drifted, head scale
+  and background leaked, and eyes were mostly closed. Numerical parity is
+  robust for this intervention; identity retention and live expression are
+  not established. Do not promote this writer substitution. A separately
+  registered, spatially masked identity donor is an untested next falsifier;
+  an identity adapter may be needed.
+- Native sampled peak was 24.70 GiB, minimum cache-aware headroom 13.72 GiB,
+  with the 10% reserve, zero swap growth and no new in-chain waits/readbacks.
+  Video, scripts and receipts remain under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-face-appearance-20261110.rtzd_lkc/`;
+  `result.json` indexes the evidence and `appearance/source-comparison.json`
+  records the executed gate. Owned large tensors and restored input links
+  were removed after review. Refresh parity after code, weights, runtime,
+  geometry, inputs or conditioning changes; visual rejection is seed- and
+  intervention-specific. Production code was not changed.
 
 ### 2026-10-17 — Gemma 4 token profiles and physical measurement boundary
 

@@ -1,0 +1,855 @@
+{
+  "adversary_verdict": "ROBUST within measured scope; direct-kernel residual attribution unresolved",
+  "base_commit": "6b8d83386a9acf27c912ca69802e5807a4ad10d5",
+  "boundaries": {
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      "docs/hy-nomas-q4-dit-frontier.md",
+      ".landmark/evidence/2026-10-25-hy-nomas-q4-dit.json",
+      "src/ml/video/hy_nomas_bf16_stack.cr",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_dit_boundaries.cr",
+      "src/ml/video/hy_nomas_q4_cache.cr",
+      "src/ml/video/hy_nomas_q4_stack.cr",
+      "src/ml/video/hy_nomas_serial_mps.cr",
+      "src/ml/video/hy_nomas_text_refiner.cr",
+      "src/ml/video/kernels/hy_nomas_dit_boundaries.metal",
+      "src/ml/video/kernels/hy_nomas_q4_cache.metal",
+      "examples/hy_nomas_q4_dit_pack.cr",
+      "examples/hy_nomas_q4_dit_probe.cr",
+      "examples/support/hy_nomas_q4_dit_io.cr",
+      "examples/support/hy_nomas_q4_dit_probe.cr",
+      "spec/hy_nomas_dit_boundaries_spec.cr",
+      "spec/hy_nomas_full_checkpoint_test.py",
+      "spec/hy_nomas_q4_bf16_finite_spec.cr",
+      "spec/hy_nomas_q4_cache_spec.cr",
+      "spec/hy_nomas_q4_dit_reference_test.py",
+      "spec/hy_nomas_q4_stack_spec.cr",
+      "spec/support/hy_nomas_full_checkpoint.py",
+      "spec/support/hy_nomas_q4_dit_reference.py"
+    ],
+    "risk": "CAUTION: checkpoint/cache identities, lossy representation and full-stack shared-resource lifetimes",
+    "rollback": "Leave the new opt-in packer/full-DiT probes unused or revert this atomic feature; existing BF16 probe defaults remain unchanged."
+  },
+  "claim": "One saved-input, camera/action/history-off first-segment DiT forward executes all 54 ordered blocks with authenticated BF16 or Q4 storage and matches selected corresponding frozen upstream MPS captures exactly twice.",
+  "claim_level": "VERIFIED",
+  "date": "2026-10-25",
+  "decay_triggers": [
+    "changed source/cache/fixture bytes or missing artifacts",
+    "changed quantizer, dtype, geometry, mask or timestep",
+    "changed shared-resource ownership/encode/transfer behavior",
+    "changed compiler/SDK/OS/device or MPS runtime"
+  ],
+  "direct_q4_discriminator": {
+    "binary": {
+      "nbytes": 1685776,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/direct_q4_probe_v1",
+      "sha256": "682c756ea7ecd4285e565fa9ecec951179cdcd17500bdcf216a0ee3d7db778f2"
+    },
+    "decision": "Direct-Q4 execution is feasible; unchanged arithmetic gate fails. No promotion or isolated speedup claim. Residual may involve decoded-F16 arithmetic and reduction order; exact register-decoded weight equality has not been checked.",
+    "execution": {
+      "activation_readbacks_before_terminal_wait": 0,
+      "cache_upload_seconds": 0.080572708,
+      "command_segments": 1,
+      "decode_cost_included_in_gpu_elapsed": true,
+      "encode_named_allocations": 0,
+      "encode_seconds": 0.002461041,
+      "gpu_elapsed_seconds": 0.009675458331912523,
+      "one_command_chain": true,
+      "setup_seconds": 0.503372709,
+      "source_output_used_as_input": false,
+      "terminal_packed_readbacks": 1,
+      "terminal_wait_count": 1,
+      "terminal_wait_seconds": 0.025947208
+    },
+    "geometry": {
+      "input_dim": 8192,
+      "output_dim": 2048,
+      "qwen_tile": {
+        "nr0": 64,
+        "nr1": 32,
+        "threadgroup_memory_bytes": 12288,
+        "threads": 128
+      },
+      "rows": 23
+    },
+    "report": {
+      "nbytes": 9942,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/tmp/direct-q4/result-v1.json",
+      "sha256": "ddc3a1eed2ab48eacd72a6ab7f1a35dcaf7c3e5a5c4d36175c1b675fd5ee86b3"
+    },
+    "source": {
+      "nbytes": 35036,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/tmp/direct-q4/direct_q4_probe.cr",
+      "sha256": "4eedf4640268a848ccb43a676412d1e376e657ee3bf0ad86046710076cc90e60"
+    },
+    "summary": {
+      "all_outputs_finite": true,
+      "diagnostic_completed": true,
+      "direct_qwen_vs_mps_with_both_operands_rounded_to_f16": {
+        "atol": 2e-05,
+        "elements": 47104,
+        "failures": 17,
+        "finite": true,
+        "gate_passed": false,
+        "max_abs": 0.000247955322265625,
+        "name": "qwen_f16_operands.vs_mps_f16_weights_h16_rounded_activation",
+        "raw_bit_differences": 45853,
+        "relative_l2": 1.4113482393796142e-06,
+        "rmse": 1.8544793163295328e-05,
+        "rtol": 2e-05
+      },
+      "qwen_f32_and_preconverted_h16_paths_bitwise_equal": true,
+      "saved_upstream_2e5_gate_passed_for_every_path": false
+    }
+  },
+  "dod": {
+    "command_index": "guarded_runs[*].argv",
+    "cpu_tests": 25,
+    "expected_and_observed_signal": "Complete source and ordered54 cache authenticated; BF16 and same-decoded-Q4 54-block forwards each pass14 captured outputs raw-exact twice, including repeat after poisoning214 exposed mutable buffers; zero tracked encode allocations or preterminal reads and one terminal wait/request; independent10% memory guard passes; lossy error reported separately.",
+    "focused_commands": [
+      "python3 -B -m unittest spec/hy_nomas_full_checkpoint_test.py spec/hy_nomas_q4_dit_reference_test.py",
+      "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 spec_hy_nomas_q4_dit",
+      "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 spec_hy_nomas_conditioned_eight"
+    ],
+    "format_and_diff_check": "Crystal scoped format --check and git diff --check passed.",
+    "new_crystal_examples": 7,
+    "regression_crystal_examples": 11
+  },
+  "excluded_attempts": {
+    "build-direct-q4-v1 and early direct typechecks": "External experimental probe had Crystal syntax, require-path and definite-initialization errors before GPU. Fixed before release-v1 build and real-projection-v1 run.",
+    "host-transfer-mmap-v1/host-transfer-clone-v1": "Both two-block transfer-only controls passed with zero swap growth; they did not reproduce or explain full-forward host growth.",
+    "oracle-full-bf16-v1/v2": "Original mapped-source controls stopped on unchanged64MiB system-swap-growth stop. Driver allocation remained flat; host growth cause unresolved. Bounded cleanup did not verify termination by deadline, subsequent inspection found no process.",
+    "oracle-full-q4-v1/native-full-q4-v1": "Historical Q4 parity/timing observations. Exact producer source bytes were not retained; frozen v3 rerun replaces qualification lineage and reproduces the raw Q4 sidecar."
+  },
+  "failure_policy": "Reject altered/missing pins or a failed gate; preserve2e-5 and10% reserve, footprint/swap/deadline stops and existing BF16 controls.",
+  "geometry": {
+    "attention_query_chunk": 256,
+    "batches": 1,
+    "dim": 2048,
+    "double_blocks": 54,
+    "ffn_dim": 8192,
+    "head_dim": 128,
+    "heads": 16,
+    "joint_tokens": 6560,
+    "latent_shape": [
+      1,
+      32,
+      6,
+      22,
+      40
+    ],
+    "rope_axis_dims": [
+      16,
+      56,
+      56
+    ],
+    "rope_grid": [
+      6,
+      22,
+      40
+    ],
+    "rope_theta": 256,
+    "single_blocks": 0,
+    "text_tokens": 1280,
+    "timestep": 500,
+    "valid_joint_tokens": 5303,
+    "valid_text_tokens": 23,
+    "video_tokens": 5280
+  },
+  "guarded_runs": [
+    {
+      "argv": {
+        "nbytes": 737,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/download-full-v2.argv.json",
+        "sha256": "ea0aec89de304bad296b4cc88738e0973142c10b432415507dc811e1378f0fe0"
+      },
+      "guard_log": {
+        "nbytes": 566074,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/download-full-v2.guard.jsonl",
+        "sha256": "afedac8e9211d1d38dd961983c56aeb53779c4682cfa44adc89c16fab7350c26"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 536870912,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 26180.187863416,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 20520
+      },
+      "min_cache_aware_headroom_bytes": 28750364672,
+      "min_pressure_free_pct": 88,
+      "name": "download-full-v2",
+      "output": {
+        "nbytes": 2954,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/download-full-v2.out",
+        "sha256": "d4ec759a92cd98f4640c085edd37fde5a2e24ec202a1be33b1ca766135319c67"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 79004224,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 633,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-q4-specs-v4.argv.json",
+        "sha256": "075609a66d89a560b4f3b952715d2764992515117d1a9684512eb7b66c4eb9a7"
+      },
+      "guard_log": {
+        "nbytes": 3191,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-q4-specs-v4.guard.jsonl",
+        "sha256": "288835e0928484e01795b825a1ee31264db68d2a7c5abce09ff66f9abd1b1890"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 4294967296,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 28111.267361958,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 600
+      },
+      "min_cache_aware_headroom_bytes": 50812649472,
+      "min_pressure_free_pct": 85,
+      "name": "native-q4-specs-v4",
+      "output": {
+        "nbytes": 1531,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-q4-specs-v4.out",
+        "sha256": "7abb69120ff5969ffb872f2ae2f4e9b689dabb599af0ebec7f91222f96b830fb"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 734726400,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 662,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-full-native-v2.argv.json",
+        "sha256": "290da09d87a2fd1784417f12a55aa332e023db7651b20ea8324f9e9b65a5e462"
+      },
+      "guard_log": {
+        "nbytes": 10251,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-full-native-v2.guard.jsonl",
+        "sha256": "d617137e38bfde0cd968fd0720ab0ee372a9ba9160f7a596f7cd92af92dfcf82"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 6442450944,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 28136.643239166,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 900
+      },
+      "min_cache_aware_headroom_bytes": 51228409856,
+      "min_pressure_free_pct": 86,
+      "name": "build-full-native-v2",
+      "output": {
+        "nbytes": 2392,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-full-native-v2.out",
+        "sha256": "d668a556ed463ea9540827f0476d7e26638486bfb4ac21d3d0ec27465d8e0e92"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 639944024,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 846,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/pack-all-v2.argv.json",
+        "sha256": "1c4e4ff42cdf8476a836158f7a71152f975961cb21f289c570a006d0f7991697"
+      },
+      "guard_log": {
+        "nbytes": 63934,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/pack-all-v2.guard.jsonl",
+        "sha256": "c266084b7e46f7e95cae1e34ba47bce8883468e55efa3b5ec56c149b493dd8c9"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 28231.161169541,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 1800
+      },
+      "min_cache_aware_headroom_bytes": 31338643456,
+      "min_pressure_free_pct": 81,
+      "name": "pack-all-v2",
+      "output": {
+        "nbytes": 1466,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/pack-all-v2.out",
+        "sha256": "11795dce9517ffcf6f0df19693eabadd50aeb5bfd0a704f85e0ae9d481d65134"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 2007786136,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 668,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-decoder-v1.argv.json",
+        "sha256": "f98997dedaadd011a2d31e7fbee07ae94fa79971cc8509672b896bba3e7787ec"
+      },
+      "guard_log": {
+        "nbytes": 2821,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-decoder-v1.guard.jsonl",
+        "sha256": "97334232e70b045b654ab440d334596ce6a8149e5741687b0a9e212593055306"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 27487.451511333,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "min_cache_aware_headroom_bytes": 46460452864,
+      "min_pressure_free_pct": 88,
+      "name": "oracle-decoder-v1",
+      "output": {
+        "nbytes": 123,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-decoder-v1.out",
+        "sha256": "5f3e31e81e9c2af374ad68df2cb7640c106124d9ca1a0180c10f9f286245fe09"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 171263296,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 1310,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-bf16-owned-v3.argv.json",
+        "sha256": "7f19ae9c533c6c66335a7994fe0195c91481fff2aceaee1eec05e5863c2f0952"
+      },
+      "guard_log": {
+        "nbytes": 38049,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-bf16-owned-v3.guard.jsonl",
+        "sha256": "bf8db03ef0801c78b6bbadc5aa5ca23b3f24e6962f5810ca1e172cd3c716803c"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 8589934592,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30078.274924833,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 900
+      },
+      "min_cache_aware_headroom_bytes": 39216349184,
+      "min_pressure_free_pct": 80,
+      "name": "oracle-full-bf16-owned-v3",
+      "output": {
+        "nbytes": 51061,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-bf16-owned-v3.out",
+        "sha256": "9dbf6c453c5c93e0399253f9928a14be6016c6ab872ec5dc2d37bcbc5dfcecc3"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 5081615144,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 1201,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-bf16-owned-v3.argv.json",
+        "sha256": "17df853cebcf600b6aaa4d4b71597a04fad71bcdcb6b4c8bd5a49508e834764e"
+      },
+      "guard_log": {
+        "nbytes": 25371,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-bf16-owned-v3.guard.jsonl",
+        "sha256": "26e1d6ed955b3b18b6326d82bc7a0ec8d5d5a2fce3d9004919caadf832412da6"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 25769803776,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30319.522338791,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 900
+      },
+      "min_cache_aware_headroom_bytes": 24003624960,
+      "min_pressure_free_pct": 75,
+      "name": "native-full-bf16-owned-v3",
+      "output": {
+        "nbytes": 639,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-bf16-owned-v3.out",
+        "sha256": "a0dfed6987d43c3df11da31c3a3e222a5667f30ad0d0a372a68ef273ee90d668"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 23014044752,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 1259,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-q4-v3.argv.json",
+        "sha256": "533a0893595d166e03a4eafe21ab47dfdf450adf81aca56688103bca9d9168c4"
+      },
+      "guard_log": {
+        "nbytes": 38752,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-q4-v3.guard.jsonl",
+        "sha256": "7c9fbaaf6588eb1707f6d3ebd2b36a505f2d28081b72472af7b20541cc1809f9"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 8589934592,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30382.711686125,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 900
+      },
+      "min_cache_aware_headroom_bytes": 40364376064,
+      "min_pressure_free_pct": 80,
+      "name": "oracle-full-q4-v3",
+      "output": {
+        "nbytes": 50836,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/oracle-full-q4-v3.out",
+        "sha256": "b777feaae12428600e04902c3881e6b6725670ddc47c9a3eb63901e6d348bf7c"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 5112858880,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 1175,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-q4-v3.argv.json",
+        "sha256": "73cf884413b072faf34b7142ed1572da07a2bea643f0f3fae11e0746816f5ef5"
+      },
+      "guard_log": {
+        "nbytes": 13870,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-q4-v3.guard.jsonl",
+        "sha256": "f431196c680f3a7bffe8eadad428550b6e05fd9a1222310d6f09bc4955ddbd2f"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 15032385536,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30475.207143916,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 900
+      },
+      "min_cache_aware_headroom_bytes": 38154354688,
+      "min_pressure_free_pct": 77,
+      "name": "native-full-q4-v3",
+      "output": {
+        "nbytes": 626,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/native-full-q4-v3.out",
+        "sha256": "52f110314b25adab304183845bd231be98139565be551f40ca4e880d439ebe11"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 11268248400,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 645,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/regression-eight-v3.argv.json",
+        "sha256": "d449c96994ad2b2fd302308b5abb71ffaa09f42dffc1827f46f9cb5ce9138463"
+      },
+      "guard_log": {
+        "nbytes": 3796,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/regression-eight-v3.guard.jsonl",
+        "sha256": "9f8e742a809449bbe600438405b51d000df5a3c87401093f0c089ba4e4519899"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 4294967296,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30587.55132425,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 600
+      },
+      "min_cache_aware_headroom_bytes": 47544713216,
+      "min_pressure_free_pct": 86,
+      "name": "regression-eight-v3",
+      "output": {
+        "nbytes": 1561,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/regression-eight-v3.out",
+        "sha256": "3c86d322e0e51dc02d875a7dcfc1a15202ca561fe607d49982f58e5abfd2007b"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 941984240,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 646,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/cpu-tests-final-v3.argv.json",
+        "sha256": "2990fd958013e55801109da393b9ce511f7f57a5f231a5d27f622e98d1263eac"
+      },
+      "guard_log": {
+        "nbytes": 1649,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/cpu-tests-final-v3.guard.jsonl",
+        "sha256": "2b274ce128eef829902a0c34e0200cf2c4c6e85a6271cf62a53f2194ba2b2241"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 1073741824,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30904.549080375,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "min_cache_aware_headroom_bytes": 36442406912,
+      "min_pressure_free_pct": 87,
+      "name": "cpu-tests-final-v3",
+      "output": {
+        "nbytes": 124,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/cpu-tests-final-v3.out",
+        "sha256": "4b369178943a66617fa01e388e34ee32fe0dfb941b92fe35b444df02f772cd13"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 4473216,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 1042,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-direct-q4-release-v1.argv.json",
+        "sha256": "e5903aef810a6f626a65830edace7607f561e8ea0b99f1c5b66a1be05301afb8"
+      },
+      "guard_log": {
+        "nbytes": 6543,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-direct-q4-release-v1.guard.jsonl",
+        "sha256": "28dfaa38965ef7e7568341ca8bf696b55b98bffa66b4574b2f079b752b60390d"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 4294967296,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 30964.797866,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 600
+      },
+      "min_cache_aware_headroom_bytes": 39618985984,
+      "min_pressure_free_pct": 87,
+      "name": "build-direct-q4-release-v1",
+      "output": {
+        "nbytes": 1745,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/build-direct-q4-release-v1.out",
+        "sha256": "828dade23988c163051ff579e84759363051abeb1adf5f2625b8c420d4c83d17"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 516277520,
+      "swap_growth_bytes": 0
+    },
+    {
+      "argv": {
+        "nbytes": 742,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/direct-q4-real-projection-v1.argv.json",
+        "sha256": "99a5edb72ecdd16b6867d3994ef1581a55828514e3003d667964f558069a3016"
+      },
+      "guard_log": {
+        "nbytes": 1954,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/direct-q4-real-projection-v1.guard.jsonl",
+        "sha256": "ce3b764c9e108d029a1c2a979bcb7a4459ecdfe706c6a6280776c4da8e0fe671"
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 31026.354266916,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 180
+      },
+      "min_cache_aware_headroom_bytes": 41714286592,
+      "min_pressure_free_pct": 87,
+      "name": "direct-q4-real-projection-v1",
+      "output": {
+        "nbytes": 470,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/logs/direct-q4-real-projection-v1.out",
+        "sha256": "0ae746680c76fc7d07b2a34432f26a5d8019da46d8fceed3c163bb22b387c8e9"
+      },
+      "returncode": 0,
+      "sampled_peak_group_footprint_bytes": 96551560,
+      "swap_growth_bytes": 0
+    }
+  ],
+  "native_observed": {
+    "bf16": {
+      "all_captured_values_raw_exact": true,
+      "captures_per_request": 14,
+      "named_bytes": 22616779332,
+      "report": {
+        "nbytes": 11742,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/reports/native-full-bf16-owned-v3.json",
+        "sha256": "caf97931a7d335bb21022cbb558e268dee84b84ad5f9da1c77522833b7bc4bfb"
+      },
+      "requests": [
+        {
+          "activation_readbacks_before_terminal_wait": 0,
+          "command_segments": 1244,
+          "diagnostic_readbacks_after_terminal_wait": 14,
+          "early_release_rejected": true,
+          "encode_seconds": 6.105132917,
+          "gpu_elapsed_seconds": 6.367086416623351,
+          "named_allocations_during_encode": 0,
+          "passed": true,
+          "poison_buffer_count": 0,
+          "request": 0,
+          "scratch_poisoned": false,
+          "terminal_wait_count": 1,
+          "terminal_wait_seconds": 0.315249708
+        },
+        {
+          "activation_readbacks_before_terminal_wait": 0,
+          "command_segments": 1244,
+          "diagnostic_readbacks_after_terminal_wait": 14,
+          "early_release_rejected": false,
+          "encode_seconds": 6.09886375,
+          "gpu_elapsed_seconds": 6.371440041733877,
+          "named_allocations_during_encode": 0,
+          "passed": true,
+          "poison_buffer_count": 214,
+          "request": 1,
+          "scratch_poisoned": true,
+          "terminal_wait_count": 1,
+          "terminal_wait_seconds": 0.316183625
+        }
+      ],
+      "resident_block_payload_bytes": 16314144768
+    },
+    "q4": {
+      "all_captured_values_raw_exact": true,
+      "captures_per_request": 14,
+      "named_bytes": 10895796804,
+      "report": {
+        "nbytes": 11730,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/reports/native-full-q4-v3.json",
+        "sha256": "bad346b292ea6d922069194ec08a036d1e5760374eea73da378166a7b2f052e8"
+      },
+      "requests": [
+        {
+          "activation_readbacks_before_terminal_wait": 0,
+          "command_segments": 1244,
+          "diagnostic_readbacks_after_terminal_wait": 14,
+          "early_release_rejected": true,
+          "encode_seconds": 6.225843583,
+          "gpu_elapsed_seconds": 6.497913500050345,
+          "named_allocations_during_encode": 0,
+          "passed": true,
+          "poison_buffer_count": 0,
+          "request": 0,
+          "scratch_poisoned": false,
+          "terminal_wait_count": 1,
+          "terminal_wait_seconds": 0.319228583
+        },
+        {
+          "activation_readbacks_before_terminal_wait": 0,
+          "command_segments": 1244,
+          "diagnostic_readbacks_after_terminal_wait": 14,
+          "early_release_rejected": false,
+          "encode_seconds": 6.2398065,
+          "gpu_elapsed_seconds": 6.520903333381284,
+          "named_allocations_during_encode": 0,
+          "passed": true,
+          "poison_buffer_count": 214,
+          "request": 1,
+          "scratch_poisoned": true,
+          "terminal_wait_count": 1,
+          "terminal_wait_seconds": 0.323666375
+        }
+      ],
+      "resident_block_payload_bytes": 4593162240
+    }
+  },
+  "next_falsifier": "Localize accumulated Q4 error with identical-input BF16 projection controls and higher-precision/correction packs; separately match decoded weights and reductions for direct Q4 GEMM before full-block speed measurement. No full generation.",
+  "quantization_delta": {
+    "all_finite": true,
+    "decision": "Keep Q4 opt-in; no negligible-error or image/video-quality promotion.",
+    "final_latent": {
+      "atol_rtol_failures_vs_bf16": 168946,
+      "bf16_exact_zero_count": 0,
+      "bf16_finite_max": 1.2691951990127563,
+      "bf16_finite_min": -1.0348578691482544,
+      "bf16_nonfinite_elements": 0,
+      "bf16_reference_l2": 112.20543528825962,
+      "comparison_failures_including_nonfinite": 168946,
+      "cosine_similarity": 0.6386433352208852,
+      "elements": 168960,
+      "finite": true,
+      "finite_elements_in_both": 168960,
+      "max_abs_difference": 1.7768290042877197,
+      "nontrivial_both": true,
+      "q4_exact_zero_count": 0,
+      "q4_finite_max": 2.0471458435058594,
+      "q4_finite_min": -1.7239161729812622,
+      "q4_nonfinite_elements": 0,
+      "q4_output_l2": 172.6968738101533,
+      "relative_l2_vs_bf16": 1.184474898027869,
+      "rmse": 0.3233313427455408,
+      "shape": [
+        1,
+        32,
+        6,
+        22,
+        40
+      ]
+    },
+    "raw_inputs_exact": true,
+    "report": {
+      "nbytes": 16618,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/reports/q4-vs-bf16-v3.json",
+      "sha256": "02987c907961d216c2dd3b58f70346108807b6c521b5ccba22b842824b0bcea7"
+    },
+    "script": {
+      "nbytes": 23032,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/tmp/compare_dit_references_v3.py",
+      "sha256": "a9865dae734befd0b24363e306fef14b60de292c26fe8c4fc49fc25f735921b7"
+    },
+    "threshold_failures": 62059101
+  },
+  "references": {
+    "bf16": {
+      "nbytes": 28345,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/full-bf16-reference-owned-v3.json",
+      "sha256": "da144e1a28436fb0986820100996aab0289e47aeb7595d49283cec7296fb38a6"
+    },
+    "bf16_sidecar": {
+      "nbytes": 327274496,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/full-bf16-reference-owned-v3.tensors.f32le",
+      "sha256": "043e9289248926f88d3f54491bbc40e2b84c1a88918f2358e831d3871ee6f683"
+    },
+    "q4": {
+      "nbytes": 28363,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/full-q4-reference-v3.json",
+      "sha256": "fd51333fb7908f64915a06bf5bdc392be88332270dd0c18c969eef26781a5c2e"
+    },
+    "q4_sidecar": {
+      "nbytes": 327274496,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/full-q4-reference-v3.tensors.f32le",
+      "sha256": "cb50ba2c723f6c71fc1abb27ae805f1b070c78905186aaebb8a4511fbac6cf9d"
+    }
+  },
+  "refresh": "Rerun affected focused falsifiers and frozen-source same-input native/upstream controls before renewing affected claims.",
+  "schema": "cogni_ml.hy_nomas_q4_dit_evidence",
+  "schema_version": 1,
+  "scope_limits": [
+    "One saved upstream Qwen26 hidden-state crop, one prompt/mask/timestep and one latent geometry; no live native Qwen26-to-full-DiT qualification.",
+    "Every block executes, but numeric captures cover only blocks0/7/53 and conditioning/final outputs, not every intermediate.",
+    "Resident BF16 parameters or Q4 decoded into one reusable BF16 stage, F32 neural arithmetic and MPS attention; no CUDA/Magi or native BF16-activation parity.",
+    "Native handoffs/weight reconstruction stay GPU-resident. Setup I/O/uploads/cache persistence and postterminal diagnostics use CPU. The upstream transfer implementation can block internally; its single explicit activation readback is not an upstream no-sync claim.",
+    "No diffusion scheduler/loop, VAE video decode, history/camera/action support, video quality, seconds-of-video speed, or relative speedup claim.",
+    "Q4-versus-BF16 latent error is substantial; arithmetic correctness of the same-Q4 path does not qualify compressed model quality.",
+    "Native identity capture was made after runs and is not a hermetic compilation attestation; the oracle59-file source snapshot is preserved and independently hash-checked.",
+    "MPS opaque workspace and immutable weights were not scratch-poisoned; allocation/read counters cover the declared tracked surface.",
+    "Memory guard is periodically sampled, file-backed memory is a reclaimability estimate, and no instantaneous reservation is guaranteed.",
+    "Operator-pinned artifacts are assumed immutable; changed/missing bytes invalidate dependent evidence.",
+    "Mini-Quad reviews are correlated same-lineage source/result checks, not independent neural implementations."
+  ],
+  "source": {
+    "bf16_block_payload_bytes": 16314144768,
+    "cache_index": {
+      "nbytes": 21549,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/index.json",
+      "sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0"
+    },
+    "cache_quantized_block_payload_bytes": 4593162240,
+    "checkpoint_nbytes": 34213991280,
+    "checkpoint_path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/diffusion_pytorch_model_ema_0_995.safetensors",
+    "checkpoint_repo": "tencent/Hy-Nomas",
+    "checkpoint_revision": "bac719a80c8d02f91c485fca804bb8221e149b70",
+    "checkpoint_sha256": "73819bcf3b82b090116dd1a1748795de95eef703c304e7443963d00ea8aa4d70",
+    "native_runtime_identity": {
+      "nbytes": 8349,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/source/native-runtime-identity-v3.json",
+      "sha256": "f5f4b71c2dab9adbf24e7911ec646d193626fed3d9ff6a4e628816c8277446b3"
+    },
+    "oracle_producer": {
+      "nbytes": 84317,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/source/oracle-v3/spec/support/hy_nomas_q4_dit_reference.py",
+      "sha256": "fd960c6bae7c7386145be6f616b05ee8d7661ec562675f079b77b369f4519ea8"
+    },
+    "oracle_snapshot": {
+      "nbytes": 11017,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/source/oracle-v3/manifest.json",
+      "sha256": "27198bafbc826502123b806dc6e117028bcb572788f1a9aed9fb857a90296aaf"
+    },
+    "source_dtype": "F32",
+    "tensor_inventory": 2268,
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "whole_checkpoint_lfs_digest_verified": true
+  },
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "scope": "Finite native versus upstream with identical decoded weights; unchanged. Q4 versus original BF16 is separately measured and fails this threshold."
+  }
+}

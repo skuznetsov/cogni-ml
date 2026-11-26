@@ -1,0 +1,244 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 31999,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/qualification-summary.json",
+      "sha256": "8f9bb71905e50ce35f3e4c2d3b1e2fb0c67e36a724cb1fd17f226a4a08058c3d"
+    },
+    {
+      "bytes": 2225,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/matrix-index.json",
+      "sha256": "705eb28a94afe49231895f44168ead00813447126b37d03d8325ac14a5996ce1"
+    },
+    {
+      "bytes": 25713,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/matrix-report.json",
+      "sha256": "5b18dc6187b60a5c545a9d17198f370f262e6af7a24d2af03ea7d202f8eb1913"
+    },
+    {
+      "bytes": 1034,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/default-regression.json",
+      "sha256": "5baf715c17fc0592417c50c233018a208d71600984558710c7540d3803fb6a7d"
+    },
+    {
+      "bytes": 976,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/state-rejections.json",
+      "sha256": "e8efc368e834717bc38a43403c14e8930206140d0b522928601a886184390b37"
+    },
+    {
+      "bytes": 1340,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/probe/reference.json",
+      "sha256": "4f869d9c91d92006424a9c3ba5a77882cb6fbea8de6390172f39cc4b1486ca02"
+    },
+    {
+      "bytes": 767,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/probe/upstream-slicing.json",
+      "sha256": "eff1eeb84f5f2cb4c9547078a1a41c6d625272703ca0c8f503aa74951e23beb0"
+    },
+    {
+      "bytes": 1730,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/source-pins.json",
+      "sha256": "0268911fc9762fd17af19ef7106f7c8aef9751b8e8be3f47225ec6a8179c5b61"
+    },
+    {
+      "bytes": 1293,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/checker-pins.json",
+      "sha256": "3a68689ffb40d686ebe36510bada0f03a05dcc0238734f3737128f51e4694fe5"
+    },
+    {
+      "bytes": 1041,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/logs/collect-qualification-01-command.json",
+      "sha256": "5c930c02e3e1f3e7e7d6596f698176baab92e1922b100afce6a16a7a8db97187"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_segment_edit.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/hy_nomas_segment_edit_probe.cr",
+      "spec/hy_nomas_segment_edit_spec.cr",
+      "spec/support/hy_nomas_segment_edit_reference.py",
+      "spec/hy_nomas_segment_edit_reference_test.py",
+      "spec/support/hy_nomas_segment_edit_resume_reference.py",
+      "spec/hy_nomas_segment_edit_resume_reference_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-segment-edit.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_segment_edit.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/hy_nomas_segment_edit_probe.cr",
+      "spec/hy_nomas_segment_edit_spec.cr",
+      "spec/support/hy_nomas_segment_edit_reference.py",
+      "spec/hy_nomas_segment_edit_reference_test.py",
+      "spec/support/hy_nomas_segment_edit_resume_reference.py",
+      "spec/hy_nomas_segment_edit_resume_reference_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-segment-edit.json"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Large native states, F32 captures, binaries and guard logs remain external; hashes detect changes and do not provide recovery.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Source/executable/input/noise/weights/codec/geometry/backend/device change, or referenced artifact modification/loss.",
+    "level": "VERIFIED",
+    "scope": "Exact-checkpoint three-segment native DiT continuation, four updates per segment, shared scene prompt and one unused donor. No decoded video or general prompt editing.",
+    "text": "A bounded native B-noise fork preserves A and regenerates B/C identically with or without a restart after the new B."
+  },
+  "created_at": "2026-11-01T14:46:25.493696+00:00",
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/matrix-report.json",
+      "result": "passed",
+      "signal": "All eight B/C updates and all 829440 timeline F32 values match edited continuous/split restart bitwise. A/future suffix unchanged; B and C nonvacuously changed; all parent checkpoint digest links authenticate."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/state-rejections.json",
+      "result": "passed",
+      "signal": "Actual edited post-B state is rejected by base and other-donor branches with a contract mismatch before model setup; no output artifacts."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/default-regression.json",
+      "result": "passed",
+      "signal": "Unedited full timeline is bitwise equal to the prior native exact three-segment control."
+    },
+    {
+      "kind": "upstream_reference",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/probe/upstream-slicing.json",
+      "result": "passed",
+      "signal": "Pinned upstream temporal gather/scatter AST expressions match tiny native GPU fixture with max error 0; RoPE check is source-level global-offset contract only."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/logs/focused-spec-02.out",
+      "result": "passed",
+      "signal": "48 Crystal examples: 11 segment edit/admission plus 37 history/timeline/exact/compact resume."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/logs/final-resume-python-02.out",
+      "result": "passed",
+      "signal": "37 Python resume comparator tests including the new edit lineage/capture/counter mutation cases."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/logs/final-timeline-python-01.out",
+      "result": "passed",
+      "signal": "10 Python tiny-GPU-reference validation and mutation tests."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/qualification-summary.json",
+      "result": "passed",
+      "signal": "Rehashed source/checker/binary pins, five native guards and command receipts pass; no instrumented preterminal GPU readback/wait or encode allocation."
+    }
+  ],
+  "id": "lep-20261101-hy-nomas-segment-edit",
+  "limitations": [
+    "Same-lineage correlated review.",
+    "No decoded video or perceptual edit-quality assessment.",
+    "Full BF16/CUDA/Magi upstream neural parity not established; upstream refresh is temporal slicing and source-level RoPE offset only.",
+    "Real edit matrix is exact only; QBit stale-contract rejection is covered by focused Crystal specs.",
+    "Model uses one shared scene prompt; per-segment prompt edits, arbitrary new seeds and multiple edits remain unimplemented.",
+    "A latent immutability does not imply the last 20 A pixel frames remain unchanged with overlapping decoding.",
+    "Instrumented allocation counters exclude opaque MPS allocations; sampled guards cannot bound between-sample spikes.",
+    "Cache-aware headroom estimates reclaimability; no benchmark speedup claim from ordered runs.",
+    "Checkpoint semantics rely on the authenticated native producer; arbitrary self-consistent forged states are outside scope.",
+    "All large artifacts are local-only; digests do not provide recovery."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-generation-frontier.md",
+    "landmark": "LANDMARKS.md#lm-hy-nomas-segment-edit-2026-11-01-a-retained-prefix-supports-a-new-bc-take-with-exact-restart-lineage",
+    "related_packets": [
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-resume.json",
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-video.json"
+    ]
+  },
+  "parent_revision": "62f779f3e8525c6ac5cd5c3eda52a71befa66c98",
+  "reason": "Support a new take without recomputing the retained prefix or accidentally consuming a stale descendant history.",
+  "refresh": "Use fresh external outputs. Rebuild and pin sources/executable, run focused specs and tiny native GPU/upstream slicing, repeat bounded parent/original/edited/split runs under the 30GiB/10%/64MiB/900s guards, authenticate all captures and checkpoint links, rerun stale-branch rejection and default regression. Use docs for commands.",
+  "results": {
+    "a_latent_prefix_bitwise_unchanged": true,
+    "atol": 2e-05,
+    "b_and_c_changed": true,
+    "crystal_examples": 48,
+    "decoder": false,
+    "edited_restart_all_eight_updates_bitwise_equal": true,
+    "edited_restart_full_timeline_bitwise_equal": true,
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "full_generation": false,
+    "full_upstream_video_parity": false,
+    "invalidation": {
+      "latent_frames": [
+        30,
+        90
+      ],
+      "pixel_frames": [
+        100,
+        360
+      ],
+      "units": "half-open global ranges"
+    },
+    "maximum_sampled_footprint_bytes": 31366269192,
+    "minimum_cache_aware_headroom_bytes": 20838629376,
+    "new_edited_qbit_runtime_qualified": false,
+    "original_and_edited_bc_command_segments": 19457,
+    "preterminal_waits": 0,
+    "process_cap_bytes": 32212254720,
+    "python_tests": 47,
+    "resident_segments": 6,
+    "rtol": 2e-05,
+    "runtime_floor_pct": 10,
+    "segments": 3,
+    "speedup_claim": false,
+    "steps_per_segment": 4,
+    "swap_growth_bytes": 0,
+    "target_segment": 1,
+    "terminal_waits_per_native_process": 1,
+    "unused_donor_segment": 5
+  },
+  "risk": "CAUTION: checkpoint branch identity and GPU temporal-source selection. Model arithmetic and tolerances unchanged.",
+  "rollback": "Omit the paired opt-in noise-edit flags and continue the original branch with its matching states. Original files are never rewritten. Reverting this commit restores the former interface; strict executable/source binding disallows cross-build state reuse.",
+  "schema_version": 1,
+  "source": {
+    "bounded_context": "cogni-ml Hy-Nomas native shared-prompt DiT continuation",
+    "producer": "codex",
+    "task": "Preserve A, fork the initial noise of B and regenerate B/C with authenticated restart lineage"
+  },
+  "verification": {
+    "adversary_scope": "Same-lineage correlated read-only review of production changes and comparison boundaries, followed by actual state/executable/input/payload/capture rehash and guard/rejection review. Producer trust, sampled guards and lack of decoder/quality evidence remain limits.",
+    "adversary_verdict": "ROBUST",
+    "dod_commands": [
+      "make BUILD_DIR=\"$RUN_ROOT/build\" spec_hy_nomas_segment_edit spec_hy_nomas_compact_resume",
+      "make BUILD_DIR=\"$RUN_ROOT/build\" \"$RUN_ROOT/build/hy_nomas_segment_edit_probe\" \"$RUN_ROOT/build/hy_nomas_compact_sequence_probe\"",
+      "python3 -B -m unittest discover -s spec -p 'hy_nomas*resume_reference_test.py' -v",
+      "python3 -B spec/hy_nomas_segment_edit_reference_test.py -v",
+      "python3 -B \"$RUN_ROOT/run_edit_matrix.py\"",
+      "python3 -B spec/support/hy_nomas_segment_edit_resume_reference.py --index \"$RUN_ROOT/real/matrix-index.json\" --output \"$RUN_ROOT/real/fresh-report.json\"",
+      "python3 -B \"$RUN_ROOT/check_state_rejections.py\"",
+      "python3 -B \"$RUN_ROOT/collect_qualification.py\"",
+      "git diff --check"
+    ],
+    "dod_signal": "48 Crystal examples and 47 Python tests pass; real matrix, branch rejection, default regression, pins and all five guards pass; split edited captures match continuous bitwise.",
+    "structural_validation": "Packet template and scripts/validate-landmark-graph.sh are absent. Strict JSON, required fields and dereferenced artifact hashes are checked locally; this does not substantively validate claims by itself."
+  }
+}

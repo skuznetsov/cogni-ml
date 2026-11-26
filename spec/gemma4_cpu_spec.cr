@@ -1,9 +1,14 @@
 require "./spec_helper"
 require "../src/ml/gguf/gemma4_cpu"
+require "./support/gemma4_weights_spec_lifecycle"
 
 GEMMA4_CPU_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 
 describe ML::GGUF::Gemma4CPU do
+  after_each do
+    Gemma4WeightsSpecLifecycle.close_all
+  end
+
   it "applies weighted and plain RMSNorm with Gemma epsilon" do
     x = [3.0_f32, 4.0_f32]
     w = [2.0_f32, 0.5_f32]
@@ -56,7 +61,7 @@ describe ML::GGUF::Gemma4CPU do
   it "dequantizes one Gemma4 token embedding row without vocab-sized allocation" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     emb0 = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 0)
     emb42 = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
 
@@ -73,7 +78,7 @@ describe ML::GGUF::Gemma4CPU do
   it "scales token embeddings by sqrt(n_embd) for Gemma4 token input" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     raw = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     scaled = ML::GGUF::Gemma4CPU.scaled_embedding_lookup(w, 42)
     factor = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
@@ -91,7 +96,7 @@ describe ML::GGUF::Gemma4CPU do
   it "projects and normalizes SWA layer Q/K/V with explicit V" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     proj = ML::GGUF::Gemma4CPU.attention_project_normed(w.layers[0], x, w.hparams, 0)
 
@@ -107,7 +112,7 @@ describe ML::GGUF::Gemma4CPU do
   it "projects full-attention layer Q/K and reuses pre-norm K as V" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, w.layers[5].attn_norm, w.hparams.rms_eps)
     pre = ML::GGUF::Gemma4CPU.attention_project_pre_norm(w.layers[5], x_norm)
@@ -127,7 +132,7 @@ describe ML::GGUF::Gemma4CPU do
   it "applies text-mode RoPE to Q/K but not V" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     proj = ML::GGUF::Gemma4CPU.attention_project_normed(w.layers[0], x, w.hparams, 0)
     q0 = proj.q.dup
@@ -144,7 +149,7 @@ describe ML::GGUF::Gemma4CPU do
   it "accepts Gemma4 full-layer proportional RoPE factors" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     proj = ML::GGUF::Gemma4CPU.attention_project_normed(w.layers[5], x, w.hparams, 5)
     q0 = proj.q.dup
@@ -161,7 +166,7 @@ describe ML::GGUF::Gemma4CPU do
   it "computes a one-token SWA attention context and projected output" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
 
@@ -182,7 +187,7 @@ describe ML::GGUF::Gemma4CPU do
   it "computes full-layer attention context with normalized K-as-V cache split" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
 
@@ -198,7 +203,7 @@ describe ML::GGUF::Gemma4CPU do
   it "runs one Gemma4 layer through attention, FFN, residuals, and layer scale" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_CPU_12B_Q4KM)
     state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     y = ML::GGUF::Gemma4CPU.forward_layer(w, 0, x, 0, state)

@@ -1,0 +1,564 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-shared-reserve",
+  "base_commit": "819345eb50a5689251c176e0f14153902f887d5d",
+  "status": "VERIFIED within bounded reservation-only projection diagnostics",
+  "risk": "CAUTION: GPU resource reservation and lifetime; timed experiment",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "With exact K32 code/pipeline/geometry/order retained, reserving 32 KiB rather than the addressed 16 KiB increases paired median duration by 16.43% in dense F16 and 17.98% in direct Q4. The 32 KiB arm loses all 12 same-round pairs per representation; candidate outputs are bitwise equal to identical-operand controls. Keep existing 16 KiB K32. No production promotion."
+  },
+  "problem": "The prior K32/K64 experiment changed both loading and reservation; isolate reservation before attributing performance to panel width.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "input_scope": "23 saved real upstream rows cyclically repeated on GPU to M1280; not a new full-prefix activation distribution",
+    "launches": [
+      {
+        "arm": "dense.s16",
+        "kernel": "hy_q4_bench_dense_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "dense.s32",
+        "kernel": "hy_q4_bench_dense_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 32768,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "packed.s16",
+        "kernel": "hy_q4_bench_packed_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "packed.s32",
+        "kernel": "hy_q4_bench_packed_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 32768,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      }
+    ],
+    "isolation": "One compiled pipeline per precision for both reservations, exact prior generated K32 source, identical buffer/value/grid arguments. Only set_threadgroup_memory changes from 16384 to 32768. Addressed SA0/SB0/SA1/SB1 span [0,16384); extra 16 KiB unused. Static storage plus 32 KiB must fit queried device limit.",
+    "ordered_reduction": "K8192 ascending, 256 K32 panel iterations, 1024 K8 MMAs/output, M64/N64/256-thread geometry and threadgroup barriers preserved.",
+    "precision": "F16 operands, F32 accumulation, unchanged merge and BF16 bias; packed Q4 decoded within GEMM.",
+    "qualification_order": "Dense-only v1 built, ran and passed byte replay before the first Q4 candidate run. Final frozen checkers replay all three reports again.",
+    "schedule": "Two opposite-initial-order profiler-off schedules; alternating forward/reverse rounds, 2 warmup + 6 measured, 16 complete projections/root.",
+    "timed": {
+      "dense": "resident canonical F16 loads + SIMD GEMM + F32 merge + in-place BF16 bias",
+      "q4": "tile decode + SIMD GEMM + F32 merge + in-place BF16 bias",
+      "mps_resident": "prepared resident F32 matrix MPS projection + in-place BF16 bias",
+      "mps_expand": "Q4 helper F16 decode widened to F32 + MPS projection + in-place BF16 bias"
+    },
+    "excluded": "setup/input preparation/qualification/poisoning/comparators/packing; no profiler or full model",
+    "maximum_threadgroup_bytes": 32768,
+    "kernel_sources": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "benchmark_sha256": "c904ac8240981695bde8c7904bc47f0182bba3a36e4a596ea32f6e28ff925adf",
+      "dense_sha256": "99ca4953cd8c494a330d3f891edf2db39799a3dd185105eb6a263b55e90fbfd5",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158",
+      "kpanel_sha256": "0304fee3a1025da22694a048e974661c296e4422dd2dc3bae3a0b98b43acaf39"
+    }
+  },
+  "dod": {
+    "build": "Guarded dense/final release builds exit 0; 31 selected sources and ten linked objects per lineage plus binaries/fixtures/Q4 payload reauthenticated.",
+    "native": "Both opposite-initial-order schedules exit 0, all four candidate finite gates PASS with zero bit differences raw and biased versus B64 and identical-operand MPS.",
+    "replay": "Three real byte replays PASS. Each final replay recomputes 42 same-operand + three saved-BF16 comparisons, raw comparator controls, row bands, source/launch bindings, schedule, root isolation and guard telemetry.",
+    "negative_checks": "56 frozen v1/v2 CPU corruption and metadata tests PASS; eleven pre-Metal admission negatives PASS with artifacts preserved.",
+    "hygiene": "Scoped Crystal format check and git diff --check exit 0. JSON/pins checked directly; generic Landmark graph validator/template absent in this checkout.",
+    "rollback": "Remove opt-in Make target, two companion examples and directly related documentation/evidence; production unchanged."
+  },
+  "results": {
+    "gpu_median_ms_by_run": {
+      "reserve-forward-v1": {
+        "dense.s16": 4.427252604273235,
+        "dense.s32": 5.128024739406101,
+        "packed.s16": 4.9480520833640185,
+        "packed.s32": 5.792677083263698,
+        "mps.resident": 4.197636718345166,
+        "mps.expand": 4.443023437943339
+      },
+      "reserve-reverse-v1": {
+        "dense.s16": 4.331402343268564,
+        "dense.s32": 5.130756510425272,
+        "packed.s16": 4.852972656408383,
+        "packed.s32": 5.7006067709153285,
+        "mps.resident": 4.117699219023052,
+        "mps.expand": 4.275938802038581
+      }
+    },
+    "paired_rounds": {
+      "dense.s32.over.dense.s16": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.164328686204989,
+        "min_ratio": 1.1093879499270944,
+        "max_ratio": 1.2025199360385457,
+        "time_reduction_pct_by_run": {
+          "reserve-forward-v1": -15.82860066435947,
+          "reserve-reverse-v1": -18.454858353184033
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1706768502148877
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1607044332887855
+          }
+        }
+      },
+      "packed.s32.over.packed.s16": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.179826384711943,
+        "min_ratio": 1.1047499904152311,
+        "max_ratio": 1.2154106099648314,
+        "time_reduction_pct_by_run": {
+          "reserve-forward-v1": -17.069848612536155,
+          "reserve-reverse-v1": -17.46628663542209
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1644404725053548
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1865481731016974
+          }
+        }
+      },
+      "dense.s16.over.mps.resident": {
+        "paired_rounds": 12,
+        "wins": 2,
+        "median_ratio": 1.054097570999005,
+        "min_ratio": 0.9963279966306517,
+        "max_ratio": 1.0987427884189225,
+        "time_reduction_pct_by_run": {
+          "reserve-forward-v1": -5.47012286519617,
+          "reserve-reverse-v1": -5.189867274866544
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 2,
+            "median_ratio": 1.0469390129398848
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.0749786957157956
+          }
+        }
+      },
+      "packed.s16.over.mps.resident": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.1745232996739594,
+        "min_ratio": 1.1180426599916227,
+        "max_ratio": 1.2226696554915377,
+        "time_reduction_pct_by_run": {
+          "reserve-forward-v1": -17.877091691600434,
+          "reserve-reverse-v1": -17.856414426495636
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1588705870614944
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1850493784539329
+          }
+        }
+      }
+    },
+    "identities": {
+      "all_28_final_banks_equal_between_orders": true,
+      "all_24_dense_v1_banks_equal_to_final_v2": true,
+      "original_bf16_quality_gate_passed": false,
+      "g2_same_operand_gate_passed": false
+    },
+    "failed_same_operand_controls": [
+      {
+        "name": "packed.g2.raw.vs.mps.resident.raw",
+        "elements": 2621440,
+        "failures": 949,
+        "raw_bit_differences": 2551961,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8545895110040667e-05,
+        "relative_l2": 1.4121463866307028e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "packed.g2.bias.vs.mps.resident.bias",
+        "elements": 2621440,
+        "failures": 949,
+        "raw_bit_differences": 2551794,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8546094096519274e-05,
+        "relative_l2": 1.41129386918319e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "original_bf16_lossy_comparisons": [
+      {
+        "name": "packed.g1.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621164,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914271354675293,
+        "rmse": 0.6173250074231923,
+        "relative_l2": 0.04703424499104567,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "packed.g2.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621108,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914328575134277,
+        "rmse": 0.6173250756047323,
+        "relative_l2": 0.04703425018582511,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.resident.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621164,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914271354675293,
+        "rmse": 0.6173250074231923,
+        "relative_l2": 0.04703424499104567,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "guarded_native_samples": {
+      "reserve-forward-v1": {
+        "sampled_peak_group_mib": 1382.6111602783203,
+        "sampled_min_headroom_gib": 33.53450012207031,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      "reserve-reverse-v1": {
+        "sampled_peak_group_mib": 1714.2048873901367,
+        "sampled_min_headroom_gib": 33.37068176269531,
+        "sampled_max_swap_growth_bytes": 0
+      }
+    },
+    "execution_per_final_run": {
+      "terminal_waits": 1,
+      "preterminal_readbacks": 0,
+      "terminal_packed_readbacks": 1,
+      "encode_named_allocations": 0,
+      "command_segments": 97,
+      "named_bytes": 868056672,
+      "all_math_and_input_replication_on_gpu": true,
+      "diagnostic_async_boundaries": 96
+    },
+    "samples_per_final_run": 48,
+    "invariants": "All 28 final banks repeat both orders; all 24 dense-stage banks and 20 pinned prior-control banks remain fixed. Finite F32 atol=rtol=2e-5 unchanged. Separate G2 and original-BF16 Q4 quality gates remain failed and unwaived.",
+    "timing_limits": "MPS resident medians drift -1.90% between runs, MPS expand -3.76%. Within-round effects survive six candidate-first and six control-first pairs per representation. Run ranges are not confidence intervals."
+  },
+  "guards": {
+    "memory_accounting": "file-cache (printed free + file-backed; speculative counted once)",
+    "runtime_floor_pct": 10,
+    "native_footprint_mib": 2048,
+    "native_deadline_sec": 120,
+    "build_footprint_mib": 4096,
+    "build_deadline_sec": 600,
+    "cpu_checker_footprint_mib": 1024,
+    "max_swap_growth_mib": 64,
+    "limitations": "Sampled process-group limits cannot bound between-poll peaks; reclaimable file cache is an estimate; named allocation counters exclude private MPS allocations."
+  },
+  "mini_quad": {
+    "verdict": "ROBUST within the declared reservation-only projection scope",
+    "source_math": "Reviewed same pipeline per precision, unchanged source/geometry/K8 order, 16 KiB addressed extent, reservation/device limit, and lifetimes through terminal wait.",
+    "performance": "Recomputed all twelve within-round ratios and both order strata per representation; all ratios exceed one despite MPS run drift.",
+    "evidence_boundary": "Correlated same-lineage review; byte replays and raw timestamps supply substantive evidence. No independent replication or measured occupancy causality.",
+    "falsifier": "Any candidate bit mismatch, changed source/grid/pipeline/bindings within a pair, altered tolerance, weak comparator control, order-dependent reversal or missing evidence reopens this claim."
+  },
+  "evidence": {
+    "artifact_root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026",
+    "aggregate": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/aggregate-v1.json",
+      "sha256": "86c205f0ba58cbbb828f46ae38e9436b8ac47afa999967e3cc17012aa2d2ac6c",
+      "nbytes": 6645
+    },
+    "integrity_replay": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/closure-integrity-v1.json",
+      "sha256": "f028776699699cdae201882b1620133724b2872ec271e0efb20f1432a23f0df3",
+      "nbytes": 44794
+    },
+    "native_reports": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/reserve-forward-v1.json",
+        "sha256": "934041851aca826ab2977e8367f811a236fe535a1f16508adb76c9180e54293f",
+        "nbytes": 69662
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/reserve-reverse-v1.json",
+        "sha256": "2cf90f4dba70823614910a19e198dd3af336a0eb45cdf83a87dc0b5050b7fd7e",
+        "nbytes": 69650
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/dense-forward-v1.json",
+        "sha256": "f297e62a81480c2fba873223daee6f1941d386326bb6820c9352d6421da212db",
+        "nbytes": 51410
+      }
+    ],
+    "real_byte_replays": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/verify-dense-v1-final.json",
+        "sha256": "5b88e0a701845a5e74264a9b1bd6db074efe512e500aef1a0c574f0b135fd172",
+        "nbytes": 47078
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/verify-forward-v2.json",
+        "sha256": "330ccee63289aa40b5c81b0d231f10964315d251b679e9a92bd60509ce764d6c",
+        "nbytes": 60368
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/verify-reverse-v2.json",
+        "sha256": "9c95498e0f8730a35c7299f1e303e18e6d91eb02b8a1ba828a22946772182924",
+        "nbytes": 60367
+      }
+    ],
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "weight_offset": 61441024,
+      "weight_bytes": 9437184,
+      "bias_offset": 61436928
+    },
+    "baseline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/reports/dense-m1280-forward-v1.json",
+      "sha256": "af8d416961c1a7a982b5e67826422d911974a0ae510ca4db2f3b9208295caee3",
+      "m1280_hashes_checked": 20
+    },
+    "lineages": {
+      "native-v1": {
+        "receipt": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/native-v1-receipt.json",
+          "sha256": "6a07fd63edeb46e53e2525325faf84f58aaa93151ad3f5383cb489afce8f921e",
+          "nbytes": 3041
+        },
+        "binary": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/build/hy_nomas_q4_shared_reserve_benchmark-v1",
+          "sha256": "57a5ea1654b1ef9bab1e18239c9b8f77783aa550962ea7f5a4cfca7c10f01d4e",
+          "nbytes": 1836904
+        },
+        "source_manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/native-v1.json",
+          "sha256": "e94e1efb50de4ab59d454b5a5a50321c611b5f5f66c559a542466f258f887a83",
+          "nbytes": 5590
+        },
+        "selected_source_files": 31,
+        "linked_objects": 10,
+        "limitation": "Selected source and linked object identities; not a hermetic build or driver attestation."
+      },
+      "native-v2": {
+        "receipt": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/native-v2-receipt.json",
+          "sha256": "4b6ded575cc25581a19bbcaca282edd13993e9b76f69260bcbeab27d8a32ec9e",
+          "nbytes": 3041
+        },
+        "binary": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/build/hy_nomas_q4_shared_reserve_benchmark-v2",
+          "sha256": "b645f556f93f6af5ab6983ecb9a1b6e6761aa9940eb7ca4578764bbafddcc285",
+          "nbytes": 1836984
+        },
+        "source_manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/native-v2.json",
+          "sha256": "a0c243f27b101503034e3046234c7a0249989eecf7c1376043833ad6813d7617",
+          "nbytes": 5590
+        },
+        "selected_source_files": 31,
+        "linked_objects": 10,
+        "limitation": "Selected source and linked object identities; not a hermetic build or driver attestation."
+      }
+    },
+    "checker_and_test_sources": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/verify_shared_reserve_v1.py",
+        "sha256": "19cc305d98c619030dc8b2c7aac7782f674c68c8d6a0788648d39007c60086e6",
+        "nbytes": 61971
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/test_verify_shared_reserve_v1.py",
+        "sha256": "99b34ef33483cbe36ee586c6dfe075bf83d40880c635059787e72f82871ca555",
+        "nbytes": 33614
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/verify_shared_reserve_v2.py",
+        "sha256": "52af1e98ca48b64a0cb7f9b86b73d2cbeeb863f804c572d94eee6579b4d025c6",
+        "nbytes": 63314
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/test_verify_shared_reserve_v2.py",
+        "sha256": "5a06fb624e6f65e24d351524d19d163ca5823e5bed59253968345ec3434df7b9",
+        "nbytes": 36052
+      }
+    ],
+    "admission": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/reports/admission-v2.json",
+      "sha256": "9d6716204692d5c57fa04e0214fabd20e77342870cbebaea868faff275bb5e82",
+      "nbytes": 1252
+    },
+    "device_query": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/logs/device-limits-v1.out",
+      "sha256": "de2aaa921505b2e021eddc70606099447676b9c48c59b410e7555376bbbfa2b5",
+      "nbytes": 56
+    },
+    "exact_argv_and_guard_logs": {
+      "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/logs",
+      "passed_run_names": [
+        "device-limits-v1",
+        "build-dense-v1",
+        "freeze-dense-v1",
+        "dense-forward-v1",
+        "tests-final-v1",
+        "verify-dense-v1-final",
+        "build-reserve-v2",
+        "freeze-reserve-v2",
+        "admission-v2",
+        "reserve-forward-v1",
+        "reserve-reverse-v1",
+        "verify-forward-v2",
+        "verify-reverse-v2",
+        "aggregate-v1",
+        "closure-integrity-v1",
+        "format-v1"
+      ],
+      "suffixes": [
+        ".argv.json",
+        ".guard.jsonl",
+        ".out"
+      ]
+    },
+    "helpers": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/admission_v2.py",
+        "sha256": "752db701a9f54ff66401fa39b5641b588319927d409f2e40977404c3896837fc",
+        "nbytes": 2544
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/aggregate_v1.py",
+        "sha256": "62ecc13f01181c5ee805ca2c2a99b8c2f83b90e0add08b9854bc375bf8886787",
+        "nbytes": 3809
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/closure_integrity_v1.py",
+        "sha256": "c517777bce24630409398d87f83c347f4017d2224bd2d276ce96f674b7645918",
+        "nbytes": 8593
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-shared-reserve-20261026/source/write_packet_v1.py",
+        "sha256": "32a8fb26c6c3bd442560e7be7dab4a7c498224df90ee372561159f58d689b36e",
+        "nbytes": 12123
+      }
+    ],
+    "superseded_helper_attempt": "admission-v1 expected an obsolete existing-report error label; native rejection occurred before Metal. Guard exit 1 and exact output retained. admission-v2 corrected only the test expectation and used fresh sentinel/report names; all eleven cases pass.",
+    "superseded_early_replays": "tests-v1 and verify-dense-v1 are excluded from final checker provenance; tests-final-v1 and verify-dense-v1-final authenticate the frozen hashes.",
+    "integrity_boundary": "Curated index, not proof by field presence, hermetic build or driver/physical allocation attestation. Original 34.2 GB source weights not rehashed in this task."
+  },
+  "allowed_paths": [
+    "Makefile",
+    "examples/hy_nomas_q4_shared_reserve_benchmark.cr",
+    "examples/support/hy_nomas_q4_shared_reserve_benchmark.cr",
+    "docs/hy-nomas-q4-reduction-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/2026-10-26-hy-nomas-q4-shared-reserve.json"
+  ],
+  "decision": "Keep the existing 16 KiB K32 path at this geometry. Reservation-only regression is established; production unchanged.",
+  "next_falsifier": "Unimplemented: compare K16/8 KiB against K32/16 KiB while retaining M64/N64/256 threads and the ascending K8 sequence; additional handoffs may outweigh lower reservation.",
+  "decay_trigger": "Source/cache/fixture, geometry/schedule, precision/ownership, compiler/SDK/OS/device/MPS change or missing external artifacts.",
+  "refresh": "Rebuild and freeze selected sources/binary, repeat dense-first qualification and opposite-order guarded schedules, replay bytes and guards with frozen tested checkers.",
+  "failure_policy": "Reopen dependent timing/exactness claims on failed controls or stale evidence. Keep unqualified candidates opt-in.",
+  "open_boundaries": [
+    "Original-BF16 Q4 quality remains failed",
+    "No new full upstream model run",
+    "No occupancy counters or causal attribution",
+    "No cross-experiment K64 subtraction",
+    "No full-prefix activation distribution",
+    "No full-block/model/capture/generation or video-throughput claim"
+  ]
+}

@@ -1,0 +1,875 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-whisper-reference",
+  "created_at_utc": "2026-10-15T23:22:38.047301+00:00",
+  "base_revision": "7ad03c3cc9a79e5b819b8794677d9ce3c8762a54",
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "The measured eight-WAV bilingual reference/no-reference matrix with identical actual F32 sampler inputs; unchanged encoder, exact code/prompt and first-prefill gates at depths 0/2; scoped token/quiet observations. This is a diagnostic result, not a silence fix.",
+    "excluded": [
+      "A universal reference remedy or a language-only/audio-only causal inference",
+      "Verified spoken words, laughter delivery or speaker identity",
+      "Full generation token parity in the two divergent conditions",
+      "Full DAC or generation-intermediate floating-point parity",
+      "Original Fish full text generation",
+      "Zero host control reads, uploads or existing GPU waits",
+      "Performance promotion or an LTP/WBA certificate"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Different conditioning or sampler inputs, capped output treated as EOS, or amplitude/ASR used to certify words.",
+    "guards": "Actual per-run sampler digest; source/checkpoint/binary binding; exact code/prompt and unchanged numeric probes; cap/count/shape validators with negative tests; unprompted ASR source-positive and digital-zero controls.",
+    "rollback": "Revert this single tooling/report commit; production arithmetic is unchanged. Preserve cached receipts/WAVs."
+  },
+  "runtime": {
+    "device": "Apple M2 Max 64 GB",
+    "os": "macOS 26.6.2 arm64",
+    "crystal": "1.21",
+    "python": "3.12.2",
+    "mlx": "0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "model": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "generation_graph_depth": 2,
+    "probe_graph_depths": [
+      0,
+      2
+    ],
+    "minimum_free_memory_percent": 15,
+    "quiet_host_required": false,
+    "binary_scope": "Reused binaries matched against current production files and embedded shaders; no new build claimed.",
+    "timing_scope": "Exploratory phase times on shared host; WAV duration is not generation latency."
+  },
+  "configuration": {
+    "settings": {
+      "seed": 1,
+      "max_frames": 512,
+      "temperature": 0.8,
+      "top_k": 30,
+      "top_p": 0.9,
+      "graph_depths": [
+        0,
+        2
+      ],
+      "generation_graph_depth": 2,
+      "mmap_shared": false
+    },
+    "texts": {
+      "ru": {
+        "text": "<whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.",
+        "sha256": "2fc15bc52126b289d355d7cf9876a753229096233cd41acabee16ea4ebb8fe77",
+        "utf8_bytes": 360,
+        "provenance": "historical exact whisper30 prompt"
+      },
+      "en": {
+        "text": "<whisper>Quiet, I think there's a rustle behind the door again. Let's wait a little and listen to see what's happening.</whisper> [laughs] Oh, it was just our cat knocking over a box! He really startled us today, the little rascal.",
+        "sha256": "cf81a0e664c1d68f069edb92de6c25b54021dfe7ecfab6020bd126ef8f0dbdfa",
+        "utf8_bytes": 231,
+        "provenance": "new English translation with the same XML/bracket tag family and order"
+      }
+    },
+    "reference": {
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/input/en0-44100-pcm16.wav",
+      "sha256": "a24ee1bf75c1a2bbe414e4ee9d41151b1e13bdff663c35434e8f86baa9b0a0c3",
+      "transcript": "We asked over twenty different people, and they all said it was his."
+    },
+    "sampler_prefix_count": 5632,
+    "sampler_prefix_sha256": "63e955c00512b965c17303e4c2517ed4eeb093193af6c881542045c0c7ece7a1",
+    "sampler_control": "Same native-produced F32 uniforms, with the established MLX inverse-CDF shadow sampler; not stock MLX RNG."
+  },
+  "results": [
+    {
+      "language": "ru",
+      "conditioning": "reference",
+      "frames": {
+        "native": 347,
+        "mlx": 347
+      },
+      "native_termination": "eos",
+      "mlx_termination": "eos",
+      "exact_leading_all_id_frames": 347,
+      "all_returned_ids_equal": true,
+      "first_codebook_mismatch_zero_based": null,
+      "first_main_mismatch_zero_based": null,
+      "waveforms": {
+        "native-ru-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/native-ru-reference.wav",
+            "bytes": 1421356,
+            "sha256": "b32dc259afac2b1e7c3d44b4b8e7c9991cd8660585a864a40810177e6e76dfbe"
+          },
+          "seconds": 16.114648526077097,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [],
+          "partial_tail": {
+            "start_seconds": 16.0,
+            "duration_seconds": 0.114649,
+            "peak_pcm16": 2113.0,
+            "rms_pcm16": 142.44186401367188,
+            "peak_threshold_met": false,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx-ru-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/mlx-ru-reference.wav",
+            "bytes": 1421356,
+            "sha256": "36833711b2362743282a4b83ca62de84c8030ada598af34ced8bf8003e2bc945"
+          },
+          "seconds": 16.114648526077097,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [],
+          "partial_tail": {
+            "start_seconds": 16.0,
+            "duration_seconds": 0.114649,
+            "peak_pcm16": 2113.0,
+            "rms_pcm16": 142.44818115234375,
+            "peak_threshold_met": false,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    },
+    {
+      "language": "ru",
+      "conditioning": "no_reference",
+      "frames": {
+        "native": 489,
+        "mlx": 512
+      },
+      "native_termination": "eos",
+      "mlx_termination": "max_frames",
+      "exact_leading_all_id_frames": 448,
+      "all_returned_ids_equal": false,
+      "first_codebook_mismatch_zero_based": 448,
+      "first_main_mismatch_zero_based": 448,
+      "waveforms": {
+        "native-ru-no-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/native-ru-no-reference.wav",
+            "bytes": 2002988,
+            "sha256": "d7f0295b35d82d82b6e32e941a8106445c0a598f4f3f87ff2018ba6e5ce4109e"
+          },
+          "seconds": 22.709115646258503,
+          "internal_quiet_runs": [
+            {
+              "start_window": 1,
+              "end_window_exclusive": 3,
+              "start_seconds": 0.5,
+              "end_seconds": 1.5,
+              "duration_seconds": 1.0,
+              "window_count": 2
+            },
+            {
+              "start_window": 7,
+              "end_window_exclusive": 10,
+              "start_seconds": 3.5,
+              "end_seconds": 5.0,
+              "duration_seconds": 1.5,
+              "window_count": 3
+            }
+          ],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 19,
+              "end_window_exclusive": 45,
+              "start_seconds": 9.5,
+              "end_seconds": 22.5,
+              "duration_seconds": 13.0,
+              "window_count": 26
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 22.5,
+            "duration_seconds": 0.209116,
+            "peak_pcm16": 2.0,
+            "rms_pcm16": 0.7030311822891235,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx-ru-no-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/mlx-ru-no-reference.wav",
+            "bytes": 2097196,
+            "sha256": "97b6ed2696bf44a44c5af01245383daf243ed4354524fff41ba45422840c52ae"
+          },
+          "seconds": 23.777233560090703,
+          "internal_quiet_runs": [
+            {
+              "start_window": 1,
+              "end_window_exclusive": 3,
+              "start_seconds": 0.5,
+              "end_seconds": 1.5,
+              "duration_seconds": 1.0,
+              "window_count": 2
+            },
+            {
+              "start_window": 7,
+              "end_window_exclusive": 10,
+              "start_seconds": 3.5,
+              "end_seconds": 5.0,
+              "duration_seconds": 1.5,
+              "window_count": 3
+            }
+          ],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 19,
+              "end_window_exclusive": 47,
+              "start_seconds": 9.5,
+              "end_seconds": 23.5,
+              "duration_seconds": 14.0,
+              "window_count": 28
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 23.5,
+            "duration_seconds": 0.277234,
+            "peak_pcm16": 2.0,
+            "rms_pcm16": 0.7302668690681458,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    },
+    {
+      "language": "en",
+      "conditioning": "reference",
+      "frames": {
+        "native": 512,
+        "mlx": 512
+      },
+      "native_termination": "frame_cap",
+      "mlx_termination": "max_frames",
+      "exact_leading_all_id_frames": 28,
+      "all_returned_ids_equal": false,
+      "first_codebook_mismatch_zero_based": 28,
+      "first_main_mismatch_zero_based": 30,
+      "waveforms": {
+        "native-en-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/native-en-reference.wav",
+            "bytes": 2097196,
+            "sha256": "aafe81bdf3a4726f4d8507adb3020b56b8cc99f13492c16e0553b3fe6776fe14"
+          },
+          "seconds": 23.777233560090703,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 15,
+              "end_window_exclusive": 47,
+              "start_seconds": 7.5,
+              "end_seconds": 23.5,
+              "duration_seconds": 16.0,
+              "window_count": 32
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 23.5,
+            "duration_seconds": 0.277234,
+            "peak_pcm16": 24.0,
+            "rms_pcm16": 7.643421173095703,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx-en-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/mlx-en-reference.wav",
+            "bytes": 2097196,
+            "sha256": "9b82ebf29e00d1e5de84b5f9d38ee2df4a989f0a99bc2c31452413f3a054d179"
+          },
+          "seconds": 23.777233560090703,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 15,
+              "end_window_exclusive": 47,
+              "start_seconds": 7.5,
+              "end_seconds": 23.5,
+              "duration_seconds": 16.0,
+              "window_count": 32
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 23.5,
+            "duration_seconds": 0.277234,
+            "peak_pcm16": 15.0,
+            "rms_pcm16": 3.7455246448516846,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    },
+    {
+      "language": "en",
+      "conditioning": "no_reference",
+      "frames": {
+        "native": 390,
+        "mlx": 390
+      },
+      "native_termination": "eos",
+      "mlx_termination": "eos",
+      "exact_leading_all_id_frames": 390,
+      "all_returned_ids_equal": true,
+      "first_codebook_mismatch_zero_based": null,
+      "first_main_mismatch_zero_based": null,
+      "waveforms": {
+        "native-en-no-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/native-en-no-reference.wav",
+            "bytes": 1597484,
+            "sha256": "a9a637754e45941d1800bb5145b4220f67abacce9cc8e668e4605f32a08171dd"
+          },
+          "seconds": 18.11156462585034,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 14,
+              "end_window_exclusive": 36,
+              "start_seconds": 7.0,
+              "end_seconds": 18.0,
+              "duration_seconds": 11.0,
+              "window_count": 22
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 18.0,
+            "duration_seconds": 0.111565,
+            "peak_pcm16": 7.0,
+            "rms_pcm16": 1.8037337064743042,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx-en-no-reference": {
+          "artifact": {
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/mlx-en-no-reference.wav",
+            "bytes": 1597484,
+            "sha256": "71172cf84468589f7bfd1bb8590ee1fd225c70dfc8eea610e3b1f8faf48191d2"
+          },
+          "seconds": 18.11156462585034,
+          "internal_quiet_runs": [],
+          "terminal_quiet_runs": [
+            {
+              "start_window": 14,
+              "end_window_exclusive": 36,
+              "start_seconds": 7.0,
+              "end_seconds": 18.0,
+              "duration_seconds": 11.0,
+              "window_count": 22
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 18.0,
+            "duration_seconds": 0.111565,
+            "peak_pcm16": 7.0,
+            "rms_pcm16": 1.8036209344863892,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    }
+  ],
+  "encoder_prefill": {
+    "ru": {
+      "depth_metrics_equal": true,
+      "depths": {
+        "0": {
+          "stages": 102,
+          "all_stage_gates": true,
+          "full_gate_passes": true,
+          "code_ids_exact": true,
+          "prompt_exact": true,
+          "prompt_shape": [
+            207,
+            11
+          ],
+          "gates": {
+            "max_abs": 0.001,
+            "rms": 0.0002,
+            "normalized_rms": 0.0002,
+            "code_ids": "elementwise exact",
+            "prompt_rows": "elementwise exact"
+          },
+          "maximum_stage_absolute_error": 0.00062561035,
+          "prefill_pointwise_failures": [
+            0,
+            0
+          ],
+          "terminal_reads_add_no_graph_work": true
+        },
+        "2": {
+          "stages": 102,
+          "all_stage_gates": true,
+          "full_gate_passes": true,
+          "code_ids_exact": true,
+          "prompt_exact": true,
+          "prompt_shape": [
+            207,
+            11
+          ],
+          "gates": {
+            "max_abs": 0.001,
+            "rms": 0.0002,
+            "normalized_rms": 0.0002,
+            "code_ids": "elementwise exact",
+            "prompt_rows": "elementwise exact"
+          },
+          "maximum_stage_absolute_error": 0.00062561035,
+          "prefill_pointwise_failures": [
+            0,
+            0
+          ],
+          "terminal_reads_add_no_graph_work": true
+        }
+      }
+    },
+    "en": {
+      "depth_metrics_equal": true,
+      "depths": {
+        "0": {
+          "stages": 102,
+          "all_stage_gates": true,
+          "full_gate_passes": true,
+          "code_ids_exact": true,
+          "prompt_exact": true,
+          "prompt_shape": [
+            201,
+            11
+          ],
+          "gates": {
+            "max_abs": 0.001,
+            "rms": 0.0002,
+            "normalized_rms": 0.0002,
+            "code_ids": "elementwise exact",
+            "prompt_rows": "elementwise exact"
+          },
+          "maximum_stage_absolute_error": 0.00062561035,
+          "prefill_pointwise_failures": [
+            0,
+            0
+          ],
+          "terminal_reads_add_no_graph_work": true
+        },
+        "2": {
+          "stages": 102,
+          "all_stage_gates": true,
+          "full_gate_passes": true,
+          "code_ids_exact": true,
+          "prompt_exact": true,
+          "prompt_shape": [
+            201,
+            11
+          ],
+          "gates": {
+            "max_abs": 0.001,
+            "rms": 0.0002,
+            "normalized_rms": 0.0002,
+            "code_ids": "elementwise exact",
+            "prompt_rows": "elementwise exact"
+          },
+          "maximum_stage_absolute_error": 0.00062561035,
+          "prefill_pointwise_failures": [
+            0,
+            0
+          ],
+          "terminal_reads_add_no_graph_work": true
+        }
+      }
+    }
+  },
+  "asr": {
+    "model": "mlx-community/whisper-large-v3-turbo-asr-fp16",
+    "revision": "624c19c9af5603fa73b83bce14d4aeea96156d18",
+    "device": "Device(gpu, 0)",
+    "options": {
+      "temperature": 0.0,
+      "language": null,
+      "task": "transcribe",
+      "condition_on_previous_text": false,
+      "initial_prompt": null,
+      "hotwords": null,
+      "return_timestamps": true,
+      "word_timestamps": false,
+      "verbose": null
+    },
+    "scope": "Unprompted whole-clip ASR with recognizer text/language hints withheld, operator not blinded; fallible corroboration only.",
+    "observed_controls": {
+      "source_positive": "Expected reference words recognized without supplying them.",
+      "exact_zero_negative": "Thank you. with 29.98s segment on 10s zeros; not a reliable speech gate."
+    },
+    "resampler_scope": "Five synthetic Metal edge/impulse/ramp cases against pinned SciPy oracle, not full-WAV or universal equivalence.",
+    "resolved_compile_failure": {
+      "failed_command": "asr-gpu-resampler-oracle",
+      "failed_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-gpu-resampler-oracle.log",
+        "bytes": 1471,
+        "sha256": "96c880506ff8905a4a6a4e95fa3cd81e420f849da7593ae1319deb923f64b06e"
+      },
+      "reason": "Metal reserves half as a type name; diagnostic resampler library failed before any model or WAV execution.",
+      "repair": "Only Metal local identifier half renamed to half_len; reconstructed prior helper hash matches the failed receipt.",
+      "replacement_command": "asr-gpu-resampler-oracle-v2",
+      "replacement_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-gpu-resampler-oracle-v2.log",
+        "bytes": 1655,
+        "sha256": "9babbeecb81a9435739368350e995fe61e2f6fd587211ecd0d235e3dc95da0f1"
+      },
+      "gpu_resampler_oracle": {
+        "self_test": "passed",
+        "scope": "synthetic inputs only; no WAV parsing or Whisper model load",
+        "device": "Device(gpu, 0)",
+        "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+        "resample_ratio": "160/441",
+        "comparison": "MLX Metal F32 against pinned SciPy resample_poly F32 output",
+        "max_abs_error": 4.172325134277344e-07,
+        "thresholds": {
+          "rtol": 2e-05,
+          "atol": 2e-06
+        },
+        "cases": [
+          {
+            "name": "single-sample-left-edge",
+            "input_samples": 1,
+            "output_samples": 1,
+            "finite": true,
+            "max_abs_error": 3.5762786865234375e-07,
+            "rtol": 2e-05,
+            "atol": 2e-06,
+            "passed": true
+          },
+          {
+            "name": "two-sample-both-edges",
+            "input_samples": 2,
+            "output_samples": 1,
+            "finite": true,
+            "max_abs_error": 0.0,
+            "rtol": 2e-05,
+            "atol": 2e-06,
+            "passed": true
+          },
+          {
+            "name": "first-sample-impulse",
+            "input_samples": 23,
+            "output_samples": 9,
+            "finite": true,
+            "max_abs_error": 3.725290298461914e-09,
+            "rtol": 2e-05,
+            "atol": 2e-06,
+            "passed": true
+          },
+          {
+            "name": "last-sample-impulse",
+            "input_samples": 23,
+            "output_samples": 9,
+            "finite": true,
+            "max_abs_error": 2.9802322387695312e-08,
+            "rtol": 2e-05,
+            "atol": 2e-06,
+            "passed": true
+          },
+          {
+            "name": "short-ramp-both-edges",
+            "input_samples": 23,
+            "output_samples": 9,
+            "finite": true,
+            "max_abs_error": 4.172325134277344e-07,
+            "rtol": 2e-05,
+            "atol": 2e-06,
+            "passed": true
+          }
+        ]
+      }
+    }
+  },
+  "dod": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 $PYTHON -m unittest spec.drama3_voice_control_spec spec.drama3_reference_voice_spec spec.drama3_prefill_reference_spec spec.drama3_reference_pauses_spec",
+      "expected": "51 tests OK",
+      "observed": "51 tests OK",
+      "receipt": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/cpu-contracts-final.log",
+        "bytes": 150,
+        "sha256": "32f3915a8300de95dfafac233e382758669b7a7ee84f4a79bc8070a11f314920"
+      }
+    },
+    {
+      "command": "Exact source/checkpoint, eight generation, four encoder/prefill probe and two GPU comparison commands in commands.json",
+      "observed": "22 exit-zero receipts; one resolved diagnostic shader compile failure retained",
+      "receipt": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/commands.json",
+        "bytes": 230068,
+        "sha256": "b055238b19a6e76df1a4c869029c48b00bac03d88bf13e912ad639d6654e9f26"
+      }
+    },
+    {
+      "command": "$PYTHON -B asr_probe.py --self-test-gpu-resampler",
+      "observed": "5 cases pass at fixed rtol2e-5/atol2e-6; maxAbs4.172325134277344e-7",
+      "receipt": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-gpu-resampler-oracle-v2.log",
+        "bytes": 1655,
+        "sha256": "9babbeecb81a9435739368350e995fe61e2f6fd587211ecd0d235e3dc95da0f1"
+      }
+    },
+    {
+      "command": "$PYTHON -B asr_probe.py --output asr.json",
+      "observed": "8 WAV-bound cases plus source-positive and exact-zero-negative; GPU; no expected text/language hints",
+      "receipt": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr.json",
+        "bytes": 38719,
+        "sha256": "c375718d21362b7846ad337fd8911e66317b843d35f67e072ff8097c5a778666"
+      }
+    },
+    {
+      "command": "$PYTHON -B summarize.py",
+      "observed": "Actual texts, WAVs, logs, ASR helper and narrowly resolved prior failure checked; measurements.json created",
+      "receipt": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/measurements.json",
+        "bytes": 51422,
+        "sha256": "560cf82aefc4c3b4b9c9db9ae948616a8466b0b1762a4143c74a09d585e96547"
+      }
+    }
+  ],
+  "mini_quadrumvirate": {
+    "prediction": "A fixed reference pair could remove the whisper continuation tail, or the tail could persist independently of native code divergence.",
+    "discriminator": "Matched actual sampler inputs, complete tokens and waveform windows, pinned intermediate probes, unprompted ASR with controls.",
+    "refuted_route": "Reference removes the quiet continuation for both tested languages.",
+    "surviving_observation": "RU reference has no qualifying long quiet run and ASR includes continuation; EN reference retains a long quiet tail.",
+    "adversary_verdict": "ROBUST",
+    "review": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/adversary-review.json",
+      "bytes": 2140,
+      "sha256": "ca04db1f76f2aecf43f970fb94f4392f8a978e0864c1787990f56de81de92648"
+    },
+    "independence": "Correlated same-lineage review; actual command evidence checked by the primary agent."
+  },
+  "trust": {
+    "F": "Executed typed validation and GPU numeric/integer reductions; no formal proof of all model arithmetic.",
+    "G": "Two exact targets, one English reference pair, one seed, one pinned model/runtime/device.",
+    "R": "Source-bound measured results and negative controls; no independent replication or word/identity certification."
+  },
+  "evidence": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/measurements.json",
+      "bytes": 51422,
+      "sha256": "560cf82aefc4c3b4b9c9db9ae948616a8466b0b1762a4143c74a09d585e96547"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/plan.json",
+      "bytes": 3646,
+      "sha256": "98195b60ee1c88667ccefba9a39b6c7b45fad73cc27e79436bb3a22bc0a69d72"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/commands.json",
+      "bytes": 230068,
+      "sha256": "b055238b19a6e76df1a4c869029c48b00bac03d88bf13e912ad639d6654e9f26"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/source-binding.json",
+      "bytes": 6358,
+      "sha256": "f47ec7f216289a645936c72d8644001d246888494fd7f7f5972a16ce080e1116"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/checkpoint-manifest.json",
+      "bytes": 2197,
+      "sha256": "2c3b9f0f4822f914a5d5495614c6f658eb393ff9df0072ec8b030031a0983f07"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/random-tape-prefix.json",
+      "bytes": 578,
+      "sha256": "54ed442f741ad9115a80baf181b7aac081155ac5882c90f7a5aab485c12ee04d"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr.json",
+      "bytes": 38719,
+      "sha256": "c375718d21362b7846ad337fd8911e66317b843d35f67e072ff8097c5a778666"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/cpu-contracts-final.log",
+      "bytes": 150,
+      "sha256": "32f3915a8300de95dfafac233e382758669b7a7ee84f4a79bc8070a11f314920"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-gpu-resampler-oracle.log",
+      "bytes": 1471,
+      "sha256": "96c880506ff8905a4a6a4e95fa3cd81e420f849da7593ae1319deb923f64b06e"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-gpu-resampler-oracle-v2.log",
+      "bytes": 1655,
+      "sha256": "9babbeecb81a9435739368350e995fe61e2f6fd587211ecd0d235e3dc95da0f1"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr-unprompted-controls-v2.log",
+      "bytes": 3067,
+      "sha256": "570d5b74377ad7f71c8a197d7f4de087ee976e0f17462bd11143ae6098074eb1"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/asr_probe.py",
+      "bytes": 27572,
+      "sha256": "be587159e24f16074bb5a4da0c210d1ed89fc3983486d267e7d314fb3223d0fe"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/run.py",
+      "bytes": 2805,
+      "sha256": "40e539c7395913d9bc1ac77b52f925fe34f570966cd2d25787d0eba1bf169bb1"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/pipeline.py",
+      "bytes": 3730,
+      "sha256": "bcfe4351a6b71a719ee75d463efec203588bdda6ca21aca9885068a6a0b97355"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/postprocess.py",
+      "bytes": 1439,
+      "sha256": "51006fc548ad2debcdac471da85ee985070eb147ef0264c64bfcac7d1c7ecea4"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/summarize.py",
+      "bytes": 8366,
+      "sha256": "e735197511c4f01e491a88de68eff075974eddb31384ac9e1c1a05f03f6baf27"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/checkpoint.py",
+      "bytes": 848,
+      "sha256": "dde332633ec139ab24ca25a16d9b66228258716edcdc7653c33b1fb030165319"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/build_index.py",
+      "bytes": 12465,
+      "sha256": "75adb5bd53cfd4554fe397fcda78031415bc81aea11743e4dbec14b5b9e83e22"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/validate_index.py",
+      "bytes": 4207,
+      "sha256": "e78b14f1fe3baae1408af669c670b90afe65ebf9de715278adf781a5a2209298"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/adversary-review.json",
+      "bytes": 2140,
+      "sha256": "ca04db1f76f2aecf43f970fb94f4392f8a978e0864c1787990f56de81de92648"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/pause-comparison.json",
+      "bytes": 27127,
+      "sha256": "1ea457b66395f8bf877b728f219137187ab804d5710bcf4010073fc41d80628c"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/native-encoder-depth0.json",
+      "bytes": 51321,
+      "sha256": "a4cd71c25ea971f4487a1a8a3f1414e2dca559764152041f662f2ac6dcd387c3"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/native-encoder-depth2.json",
+      "bytes": 51340,
+      "sha256": "9e363bf3862ab35a102d5aea4d67ef7b84f3e132d34490389fa33f90f82ab7b8"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/mlx-encoder/manifest.json",
+      "bytes": 37820,
+      "sha256": "505a7ea10b542e2e26051ea6e2a272607af1ad64153032b8ef9cd416a9da8f2f"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/ru/mlx-prefill/manifest.json",
+      "bytes": 6636,
+      "sha256": "5755e7abf989e9723f64d271173b24661e6a35d7779d33a7fee4711a23d892dd"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/pause-comparison.json",
+      "bytes": 27017,
+      "sha256": "104ffb209725e8c4ea621e70da8c36f2c75a50b4716ced87bffcfd222850ed23"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/native-encoder-depth0.json",
+      "bytes": 51320,
+      "sha256": "4d217017ad4c4b394127196d724f9847733e19b7986fda895dd859853628f2ea"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/native-encoder-depth2.json",
+      "bytes": 51340,
+      "sha256": "5e995f40c34c5cd16b1ca657a911d1ca8aa88b7fe3920b70e92442d748979994"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/mlx-encoder/manifest.json",
+      "bytes": 37820,
+      "sha256": "6327933651b0261d13097639d3f170e4c12514eaea4ed21c569daafd218cd0d9"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/whisper-reference-20261015/en/mlx-prefill/manifest.json",
+      "bytes": 7144,
+      "sha256": "38128fb4efbe4ae169ee9c26a0b9792c079ef83ab4748df6eb37effe8d450e3e"
+    }
+  ],
+  "repository_sources": [
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_reference_pauses.py",
+      "bytes": 58415,
+      "sha256": "9194914c8fe529ae86b02a002693b10abfa10db7f066810a93bda257d04bf0bb"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/prefill_reference.py",
+      "bytes": 25916,
+      "sha256": "8931d0c3e500083eccbb5dc83dbada84e44ff6d4bc8bd6087147b92304be6517"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_reference_pauses_spec.py",
+      "bytes": 30260,
+      "sha256": "ffd60c313552b5cac7cc99ac9b4a97c3cd9315e651dd913244b64990bf4e3025"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_prefill_reference_spec.py",
+      "bytes": 16558,
+      "sha256": "a5bbcf8405a76f859f8e97b6ce5e6db8a5661c76583b705cef241c970bfe9533"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-reference-voice.md",
+      "bytes": 10932,
+      "sha256": "aa7cfd2ed2ba7999ff084537e8920d1f7253e8216e3dd628eebf3deac0f9e926"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-whisper-reference.md",
+      "bytes": 13058,
+      "sha256": "7bce176636b62bd02b4bee35762947b72628b31846e8370b907814abaf5b995e"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/LANDMARKS.md",
+      "bytes": 4250128,
+      "sha256": "35ad35f42343ac48d5da8346936e511088880b96ee203b0cc95aca38c7f4ab5d"
+    }
+  ],
+  "allowed_changed_paths": [
+    "scripts/drama3/compare_reference_pauses.py",
+    "scripts/drama3/prefill_reference.py",
+    "spec/drama3_reference_pauses_spec.py",
+    "spec/drama3_prefill_reference_spec.py",
+    "docs/drama3-reference-voice.md",
+    "docs/drama3-whisper-reference.md",
+    ".landmark/evidence/drama3-whisper-reference.json",
+    "LANDMARKS.md"
+  ],
+  "continuation": {
+    "next_numeric_falsifier": "Common EN-reference prefix replay: first codebook divergence28, then main30, same uniforms and unchanged gates.",
+    "next_causal_falsifier": "Change only whisper-cue placement/syntax on fixed reference conditioning and target body.",
+    "open_frontiers": [
+      "Silence cause",
+      "MoE-39 arithmetic",
+      "DAC intermediate parity"
+    ],
+    "decay_trigger": "Any source, checkpoint, target/cue, sampler, reference pair, artifact, runtime, device/OS, gate or bound listening-evidence drift.",
+    "refresh": "Rerun source binding, relevant tests/probes and paired matrix in a new output directory; reopen dependent claims on failure.",
+    "standing_authority": "Serial run_safe jobs with >=15% free memory, unrelated processes untouched, local atomic commit, no push."
+  }
+}

@@ -1,7 +1,7 @@
 require "spec"
 
 private def sg4_kernel(name : String) : String
-  source = File.read(Path[__DIR__] / "../src/ml/gguf/kernels/fullattn_qwen35.metal")
+  source = File.read(Path[__DIR__] / "../src/ml/metal/kernels/qwen35/fullattn_qwen35.metal")
   start = source.index("kernel void #{name}(").not_nil!
   finish = source.index("\nkernel void ", start + 1) || source.size
   source[start...finish].gsub(/\/\/[^\n]*/, "")
@@ -9,7 +9,7 @@ end
 
 describe "Qwen35 SG4 partial-row synchronization" do
   it "pins the register tail and paired-command diagnostic boundaries" do
-    source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
+    source = File.read(Path[__DIR__] / "../experiments/qwen35/qwen35_sg4_tail_probe.cr")
     source.should contain("REGISTER_TAIL_ROWS = {1, 2, 3, 58}")
     source.should contain("previous = actual[0, completed * HEADS * DIM]")
     source.should contain("validate_slice_output!(actual, fixture.expected, completed * HEADS * DIM, previous)")
@@ -33,7 +33,7 @@ describe "Qwen35 SG4 partial-row synchronization" do
   end
 
   it "keeps pipeline inspection on a terminating compile-only branch" do
-    source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
+    source = File.read(Path[__DIR__] / "../experiments/qwen35/qwen35_sg4_tail_probe.cr")
     start = source.index(%(  if ARGV == ["--pipeline-info"])).not_nil!
     finish = source.index("\n  if ARGV.any?", start).not_nil!
     branch = source[start...finish]

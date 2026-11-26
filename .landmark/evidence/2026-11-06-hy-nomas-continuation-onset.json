@@ -1,0 +1,311 @@
+{
+  "schema": "cogni_ml.hy_nomas_continuation_onset_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "d3ec7b78ccb3298cfe383e19a7f17199bcf31fcd",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "A bounded saved-input PixelUMM context-and-overlap intervention reproduces standalone onset pixels bitwise and removes observed initial blur/ringing in inspected crops. No pure-context ablation, full cumulative neural decode, stock noise/attention parity, native fix, actor-control or performance claim.",
+    "adversary": "ROBUST for the two-window intervention and declared artifact lineage. Stronger stock-cause attribution is VULNERABLE: blending changes together with context; T1 noise remains local-index frozen; gathered attention is an MPS adaptation. Same-lineage review is correlated, not independent replication.",
+    "refresh_on": [
+      "source/runtime or decoder weight changes",
+      "T0/T1 latent or saved noise changes",
+      "geometry, precision or temporal blend changes",
+      "missing or mutated bound artifact"
+    ],
+    "rollback": "Omit the external probe and assembled display. Native defaults and frozen standalone decoder source are unchanged."
+  },
+  "reason": "User reported first frames around Alex head; defect exists before video encoding. Standalone T1 differs from the pinned continuation context contract.",
+  "source_contract": {
+    "pinned_tencent_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "causal_ar": "hymm/pipeline/causal_ar.py:3014-3019 passes output_latents[:,:,:chunk_latent_end] to decode",
+    "streaming": "hymm/models/vae/pixelumm_decoder/streaming.py:520-529 appends latent pushes",
+    "plain_decode": "Decode consumes the supplied tensor; standalone tensor decode is valid but not a context-complete continuation.",
+    "sources": {
+      "hymm/pipeline/causal_ar.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/pipeline/causal_ar.py",
+        "bytes": 173066,
+        "sha256": "f9aae49b14becb87d958665f763e510c28eeaaad9292f00ac511d1146202949f"
+      },
+      "hymm/pipeline/base.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/pipeline/base.py",
+        "bytes": 32126,
+        "sha256": "77a039514ff494cb496a194c60ca3270f09c15b194bda25448a036a6fcc79582"
+      },
+      "hymm/models/vae/pixelumm_decoder/autoencoder.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/pixelumm_decoder/autoencoder.py",
+        "bytes": 29506,
+        "sha256": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf"
+      },
+      "hymm/models/vae/pixelumm_decoder/streaming.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/pixelumm_decoder/streaming.py",
+        "bytes": 28489,
+        "sha256": "ae88a4ad1903ac5db3c96d2e171cead07279f60a89180dae8cd83ed45da63c7b"
+      },
+      "hymm/models/vae/pixelumm_decoder/model.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/pixelumm_decoder/model.py",
+        "bytes": 16226,
+        "sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
+      },
+      "hymm/models/vae/autoencoder_dcae_v.py": {
+        "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/autoencoder_dcae_v.py",
+        "bytes": 63218,
+        "sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+      }
+    },
+    "frozen_decode_helper": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_upstream_trace_decode.py",
+      "bytes": 64255,
+      "sha256": "e61214b000c999d9e92649ff38a1bbbc75d03e6c2bf6985444222f3e2a26abb6"
+    }
+  },
+  "intervention": {
+    "risk": "CAUTION: bounded diagnostic MPS decode, one streamed model block, terminal exports.",
+    "production_runtime_changed": false,
+    "dit_rerun": false,
+    "full_generation_rerun": false,
+    "resident_decoder_blocks": 1,
+    "pixelumm_blocks": 36,
+    "window_latent_starts_construction_order": [
+      30,
+      25
+    ],
+    "window_latent_starts_blender_order": [
+      25,
+      30
+    ],
+    "latent_frames_per_window": 10,
+    "pixel_frames_per_window": 40,
+    "affected_T1_pixel_frames": [
+      0,
+      20
+    ],
+    "prefix_latents": "Authenticated T0 clean latent frames[25:30] followed by saved T1 frames[0:5].",
+    "prefix_noise": "No separately recorded T0 noise. Reuse authenticated T1 noise frames[100:120], index-aligned under the pinned per-latent seed method; T1 noise is unchanged. Not stock full-clip-noise replay.",
+    "all_model_math": "MPS with PYTORCH_ENABLE_MPS_FALLBACK=0; existing gathered-attention adaptation.",
+    "explicit_terminal_synchronizations": 1,
+    "diagnostic_exports_and_assembly": "CPU exports and FFmpeg are outside the inference path.",
+    "display_assembly": "Recompute T1 frames[0:20], reuse archived RGB[20:120]; no trimming, repeated frames or interpolation."
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "tolerances_widened": false,
+    "standalone_first20": {
+      "bitwise_equal": true,
+      "outside_atol_rtol": 0,
+      "max_abs": 0.0
+    },
+    "streamed_weight_ranges_hashed": 468,
+    "full_activation_trace_rehashed": false,
+    "selected_final_trace_record_only": true,
+    "cpu_checks": [
+      "same_T1_latents",
+      "same_T1_noise",
+      "two_window_crop_bitexact_full_timeline",
+      "tail_after20_unchanged"
+    ],
+    "cpu_command": [
+      "/opt/mldata_ssd/runtimes/cogni-ml/hy-nomas-oracle-torch2.8.0/bin/python",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/check_context_probe.py"
+    ],
+    "guarded_probe_command": {
+      "argv": [
+        "python3",
+        "-B",
+        "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "10240",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "900",
+        "--log",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1.guard.jsonl",
+        "--",
+        "/opt/mldata_ssd/runtimes/cogni-ml/hy-nomas-oracle-torch2.8.0/bin/python",
+        "-B",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context_probe.py",
+        "--execute",
+        "--output-dir",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1"
+      ],
+      "cwd": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "env_overrides": {
+        "PYTORCH_ENABLE_MPS_FALLBACK": "0",
+        "PYTHONPYCACHEPREFIX": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/pycache",
+        "TMPDIR": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/tmp"
+      }
+    },
+    "dod_signal": "CPU input authentication and BF16 upstream-blender checks pass; guarded GPU probe exits zero with exact standalone control; output hashes/media metadata validate; selected head/full-frame comparisons inspected.",
+    "artifact_validation_command": [
+      "python3",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/qualify_context.py"
+    ],
+    "scope_note": "Hash qualification does not rerun model math or establish semantic quality. Full corpus/cache was not independently rescanned."
+  },
+  "memory": {
+    "accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_bytes": 10737418240,
+    "max_swap_growth_bytes": 67108864,
+    "samples": 132,
+    "sampled_peak_group_bytes": 3972229632,
+    "minimum_headroom_bytes": 25320177664,
+    "minimum_pressure_free_pct": 79,
+    "observed_swap_growth_bytes": 0,
+    "final_live_processes": 0,
+    "guard_returncode": 0,
+    "limitation": "Sampled guard, not a hard reservation or bound on between-poll spikes; file-cache reclaimability is estimated."
+  },
+  "receipt_input_bindings": {
+    "index_sha256": "8ac3d13e23defce8183722b4b0769dbe6a4755149da80192702699bce3467e93",
+    "replay_sha256": "d4f9ad1212814a7f1105b697b17e19c043437b20368000257bd6426988f3a062",
+    "t0_manifest_sha256": "ee7a830eb287cffd5d4ee2297d1ce5bd99e7f26a3dcc36442358c12f6ba72dd8",
+    "t0_sha256": "b08e8b61580ee611e65a5acb3e73716b6f653fe41e94b601fadfb28e77d230b0",
+    "t1_sha256": "12e8c8349ab840bce85ffd8710edf13eac9bb76f1a83bacdc2e570d255f7623b",
+    "t1_trace_record": "step4.A1_high.head.after_euler",
+    "decoder_noise_sha256": "064167f7d75c79a72f2896c61c988cebd6f71f7586f1f2177276b7ada69009b3",
+    "baseline_raw_sha256": "54bd4477e6e6c870ba901c4e5925b3139bf5f89586e26127ea0a1dcb2ba60308"
+  },
+  "observations": {
+    "visual": "Inspected Alex head and full-frame comparisons at onset show no prior f0 blur or f1-3 ringing pattern after context-and-blend intervention. Not a full-playback quality certification.",
+    "descriptive_head_f0_f1_MAE_0_255": {
+      "standalone": 24.580270767211914,
+      "with_context": 2.1774840354919434
+    },
+    "metrics_are_semantic_quality": false
+  },
+  "media": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/display.mp4",
+    "sha256": "f39772bfd8a1ae8f2c2ac889fa63854bb47511b0edca7189dd68aeaf26758e7a",
+    "frames": 120,
+    "fps": 24,
+    "cached_original_RGB_frames": [
+      20,
+      120
+    ],
+    "rgb_sha256": "2ea8be8ddab20c98a05d129bf19613ddbef45cfd0ffe71e632e21cfda7f70f49"
+  },
+  "external_artifacts": {
+    "context_probe.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context_probe.py",
+      "bytes": 10462,
+      "sha256": "984079fde6d03a375410f703d1864a999c7d8b0d73790bf50dbc179c23d870af"
+    },
+    "check_context_probe.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/check_context_probe.py",
+      "bytes": 2070,
+      "sha256": "87590c456dc8f01c36b5a4ae656704d843b925de67fd68733cf73a8c988b876a"
+    },
+    "inspect_first_frames.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/inspect_first_frames.py",
+      "bytes": 4514,
+      "sha256": "1c0291fea5c43f2a00de996e8949dba1c69f53d0b15324437d115824ffafb3e7"
+    },
+    "inspect_context.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/inspect_context.py",
+      "bytes": 4516,
+      "sha256": "28b74a40bd05be1e5cb8ceb0c4e9811af78fd039b3c424ecb79eccf90142c0cb"
+    },
+    "context-cpu-checks.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-cpu-checks.json",
+      "bytes": 519,
+      "sha256": "594885378c0121057e134750a2665ad6fe39ffbe5526b5e205104945015cbc05"
+    },
+    "report.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/report.json",
+      "bytes": 11985,
+      "sha256": "0dd0440e43978454185e19f9fe27eae26bc059b5f1d0e660fdebd61d9dacebb2"
+    },
+    "context-inspection.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-inspection.json",
+      "bytes": 3781,
+      "sha256": "df50a7392fd87623f1ec03f1a50dc379dfea9d9f82f28820af040ac2775f2eb5"
+    },
+    "context-v1.argv.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1.argv.json",
+      "bytes": 1136,
+      "sha256": "bb021778ae95ef61caf2020d67158315554813f1b546833065bb0e69a0846dc8"
+    },
+    "context-v1.log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1.log",
+      "bytes": 2151,
+      "sha256": "3f94f796b7e2a3d19ea95d61b15508df3f3cccfd25f5d8d5325a911ea4e069c8"
+    },
+    "context-v1.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1.guard.jsonl",
+      "bytes": 41553,
+      "sha256": "d231cffce4360bd5253c28fd8bccd766b0618130ac1c0fce072dcbcf415c92ba"
+    },
+    "context-v1.exit.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1.exit.json",
+      "bytes": 17,
+      "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17"
+    },
+    "context-v1/receipt.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/receipt.json",
+      "bytes": 3611,
+      "sha256": "10951e477f66815f06729c35c2b3d7396ac59dc371b07ff64cfdf2dbdbebe05d"
+    },
+    "context-v1/control-window.f32le": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/control-window.f32le",
+      "bytes": 70778880,
+      "sha256": "82d8349f0514fc2cf419b4a501f1c2ffad3ba01b286d29315468af3165e5ead3"
+    },
+    "context-v1/prefix-window.f32le": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/prefix-window.f32le",
+      "bytes": 70778880,
+      "sha256": "af7b24e33dda42c3ed61e87a1ab2709d22932bafc5a4bb630288052a788be8f1"
+    },
+    "context-v1/context-crop.f32le": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/context-crop.f32le",
+      "bytes": 35389440,
+      "sha256": "ff82da4dc5455aaa9e7f2be4d9c9e50d810ada144b8675bd83b2834cbf4e4c37"
+    },
+    "context-v1/display.rgb24": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/display.rgb24",
+      "bytes": 53084160,
+      "sha256": "2ea8be8ddab20c98a05d129bf19613ddbef45cfd0ffe71e632e21cfda7f70f49"
+    },
+    "context-v1/display.mp4": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/context-v1/display.mp4",
+      "bytes": 262248,
+      "sha256": "f39772bfd8a1ae8f2c2ac889fa63854bb47511b0edca7189dd68aeaf26758e7a"
+    },
+    "onset-context-head.png": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/onset-context-head.png",
+      "bytes": 296344,
+      "sha256": "b708803c19dc6486ea5268cb77d7810c08088d4a52304eb4ffb2ce68fe9eaa44"
+    },
+    "onset-context-full.png": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/onset-context-full.png",
+      "bytes": 907298,
+      "sha256": "6ebab6f4a38837051015c671807b10ca12d4b46f5819e127449a712cad68b8fb"
+    },
+    "qualify_context.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v/qualify_context.py",
+      "bytes": 3709,
+      "sha256": "9d992f897d26281f5a2d1bf89794413b5b98d081d3fbb7821d4374804a7f2e92"
+    }
+  },
+  "prior_evidence": ".landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json",
+  "return_frontier": "Selected-query attention/action control with context-complete continuation decoding; keep onset display quality separate from actor-motion and native parity.",
+  "baseline_display": {
+    "receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/decode-v2/receipt.json",
+      "bytes": 5052,
+      "sha256": "3ba69966690b20d822fd2f28f29509004a403fd315669087dc52b864f72d16a0"
+    },
+    "rgb": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/decode-v2/display.rgb24",
+      "bytes": 53084160,
+      "sha256": "9acb4bbd8f5785d2b9bd9cb296804835c975f0b79cf22813423c8832a8784b99"
+    }
+  }
+}

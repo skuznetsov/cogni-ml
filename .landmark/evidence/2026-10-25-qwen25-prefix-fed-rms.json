@@ -1,0 +1,224 @@
+{
+  "format": "Local compact evidence index; no official packet-validator claim",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The opt-in GPU-fed RMS path reproduces embedding plus all 26 retained pretrained S1280 hidden states raw-bit exactly against the authenticated saved upstream MPS BF16 capture.",
+    "scope": "Saved right-padded repeated-token S1280 text-only input; authenticated retained upstream MPS BF16 oracle",
+    "excluded": [
+      "all-input parity",
+      "natural-prompt/tokenizer/cropping integration",
+      "multimodal positions or batching",
+      "52 independently captured RMS intermediates",
+      "production-default promotion",
+      "isolated prefix-level causal proof",
+      "speedup",
+      "full generation"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/gguf/qwen25_hy_nomas.cr",
+      "examples/qwen25_pretrained_prefix.cr",
+      "spec/qwen25_prefix_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-prefix-fed-rms.json"
+    ],
+    "changed_paths": [
+      "src/ml/gguf/qwen25_hy_nomas.cr",
+      "examples/qwen25_pretrained_prefix.cr",
+      "spec/qwen25_prefix_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-prefix-fed-rms.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-fed-rms-receipt-v1.json",
+      "nbytes": 14460,
+      "sha256": "4b3a39991d8a5d9167fd75a7e354f688b7b134d51938b49f284ec99bbf1214e3"
+    },
+    "base_commit": "f6b23b4103dd84fa6fea488f61aff75cbf64dcfe",
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_hy_nomas.cr",
+        "nbytes": 24030,
+        "sha256": "fd4cd8da426bad257b6528c653d4aba31bdf3be168e82c8f1a5ba02d1027bfb0"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_pretrained_prefix.cr",
+        "nbytes": 8591,
+        "sha256": "dc1fc87732ec43a120fa85dd7582d088513147ca604224a7402a8a8f2bd130e6"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_prefix_spec.cr",
+        "nbytes": 3642,
+        "sha256": "8aef33f94f23794974fd0901c55116fc4a93cfb57fd3123e06d210fca93299cd"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 62259,
+        "sha256": "8ebd63aca364b6ce9b7380cf9ed191b9cfee60afb1356788221fe87a6a881af9"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4540381,
+        "sha256": "ceff7b2961e2c1841c35afa4eb165ae377a4a72ae8cfca4fe47a5d29da0b3bd9"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_mps_bridge.mm",
+        "nbytes": 131358,
+        "sha256": "cb36804bbd87a7216f0783f1ada9c2ff6a33b4ffb6877b30843858dac66833d0"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_vl_weights.cr",
+        "nbytes": 27022,
+        "sha256": "7b48f7f302ea9c61593ce4ba9a4cbb480f5e75d89468702bb9a899cb736eb040"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_vl_embedding.cr",
+        "nbytes": 9828,
+        "sha256": "3e79a39defafc934b29003141abd607c2ada12f3c303cb34724ee96ba30b7d97"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_mps_command_chain.cr",
+        "nbytes": 22968,
+        "sha256": "b606cc0645a54e95c008be3c615adadd29fe97d6804347147737ab25d473b645"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_mps_command_chain.mm",
+        "nbytes": 63544,
+        "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_prefix_probe.cr",
+        "nbytes": 15168,
+        "sha256": "9ed8c80b4996122bbe4f5315c33113351bc1f9705a909fee7a7859de99082b6d"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "nbytes": 37589,
+        "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+      }
+    ],
+    "review": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-fed-rms-review-v1.json",
+      "nbytes": 1433,
+      "sha256": "646ce2d767d14e08de2b723ff21bd0a11cd69bd26bf177ee3796973c953b340b"
+    },
+    "availability": "Local SSD; invalidate on loss or digest mismatch"
+  },
+  "verification": {
+    "observed_dod": "27 retained hidden boundaries, 123863040 BF16 words raw exact; unchanged finite tolerance; all 26 fed plans.",
+    "dod_command": [
+      "python3",
+      "-B",
+      "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "15360",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "600",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-prefix-s1280-rms-fed-v1.guard.jsonl",
+      "--",
+      "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/build/prefix-fed-rms-v1/qwen25_pretrained_prefix",
+      "--checkpoint-root",
+      "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/model",
+      "--reference",
+      "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/prefix-s1280-repeat-s32-o7-v1.json",
+      "--reference-sha256",
+      "b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a",
+      "--report",
+      "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-prefix-s1280-rms-fed-v1.json",
+      "--max-named-bytes",
+      "12681448808",
+      "--rms-power-fed"
+    ],
+    "cpu": "36 focused Crystal examples pass; default accounting, +104 bytes, unchanged shared workspace and exact-fit/one-byte-short admission covered.",
+    "native_build": "Normal/cpu-only no-codegen, strict Clang, release link and final format/diff pass; exact argv and return codes retained.",
+    "execution": {
+      "rms_power_fed": true,
+      "rms_fed_block_count": 26,
+      "rms_statistics_sites_using_fed_exponent": 52,
+      "rms_exponent_named_bytes": 104,
+      "named_bytes": 12681448808,
+      "shared_workspace_bytes": 549852160,
+      "shared_stage_scratch_bytes": 311301120,
+      "retained_hidden_output_bytes": 238551040,
+      "named_allocations_during_encode": 0,
+      "terminal_wait_count": 1,
+      "early_release_rejected": true,
+      "diagnostic_readbacks_after_terminal_wait": 27,
+      "activation_readbacks_before_terminal_wait": 0,
+      "encode_seconds": 1.8557975,
+      "terminal_wait_seconds": 0.90766875,
+      "gpu_elapsed_seconds": 2.6503404267132282,
+      "command_segments": 183,
+      "tolerance": {
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "guard": {
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 16106127360,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 4606053.382248791,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 600
+      },
+      "sampled_peak_bytes": 13596551152,
+      "minimum_headroom_bytes": 17448779776,
+      "minimum_pressure_free_pct": 58,
+      "observed_swap_growth_bytes": 0,
+      "sample_count": 60,
+      "finished_returncode": 0
+    },
+    "structural_validation": "Local JSON/path-scope/dereferenced SHA256/report/source-boundary assertions; unavailable official packet validator is not claimed."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "correlated_review": true,
+    "scope": "Saved S1280 embedding and 26 retained hidden-state boundaries; opt-in GPU-fed RMS, unchanged atol=rtol=2e-5",
+    "limits": [
+      "52 RMS sites are configured by source/plan, not individually captured",
+      "Historical legacy negative is an older binary, not a fresh same-binary paired prefix test",
+      "Retained upstream fixture only, no new capture or all-input/natural-prompt/tokenizer/cropping/multimodal/batching/full-generation qualification",
+      "Pinned reused companion objects have opaque source ancestry; not a hermetic build",
+      "Same-lineage agent review is correlated; numerical evidence is the authenticated upstream capture and fresh native report"
+    ]
+  },
+  "refresh": {
+    "decay_triggers": [
+      "scoped source",
+      "fixture/input",
+      "precision/geometry",
+      "toolchain/SDK/OS/device",
+      "execution/lifecycle",
+      "artifact loss or hash mismatch"
+    ],
+    "operation": "Reauthenticate oracle, checkpoint/selected tensors and source/build pins; rebuild changed code and repeat the bounded fed S1280 prefix under the same guard. Use a fresh same-binary legacy pair if asserting a prefix-level isolated causal effect.",
+    "failure_policy": "Reopen dependent qualification and keep fed mode opt-in; do not widen tolerances."
+  },
+  "next_falsifier": "A distinct natural text-only prompt with authenticated upstream tokenization, mask/positions and cropping semantics before connecting Hy-Nomas text conditioning; no full generation.",
+  "rollback": "Disable rms_power_fed; legacy defaults preserved.",
+  "links": {
+    "frontier": "docs/qwen25-hy-nomas-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}

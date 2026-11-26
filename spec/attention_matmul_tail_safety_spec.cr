@@ -1,7 +1,7 @@
 require "spec"
 
-ATTENTION_MATMUL_SOURCE = File.read(Path[__DIR__] / "../src/ml/gguf/kernels/attention_matmul.metal")
-METAL_BACKEND_SOURCE    = File.read(Path[__DIR__] / "../src/ml/gguf/metal_backend.cr")
+ATTENTION_MATMUL_SOURCE = File.read(Path[__DIR__] / "../src/ml/metal/kernels/nomic_bert/attention_matmul.metal")
+METAL_BACKEND_SOURCE    = File.read(Path[__DIR__] / "../src/ml/models/nomic_bert/metal/backend.cr")
 
 def kernel_source(source : String, name : String) : String
   start_marker = "kernel void #{name}("

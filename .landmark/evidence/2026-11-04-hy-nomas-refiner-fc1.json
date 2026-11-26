@@ -1,0 +1,307 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_fc1_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "99245f10550638a127caab4f9e5e4f91d99f580d",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected block0 FC1 on one finite frozen T0 input, B1/V263/processed1280/H16/D128.",
+    "oracle": "Inherited caller-pinned Hy-Nomas 911cea6458a89c2663513ff7099561ec190dd491 on the PyTorch 2.8.0 MPS adapter.",
+    "adversary": "ROBUST within scope. Independent byte checks of the authenticated payloads, disabled preservation, fresh repeat and GPU sensitivity controls. Same-lineage review is correlated.",
+    "next_boundary": "block0.mlp_silu. Separate GPU output rounding alone matches upstream on the identical FC1 tensor. Connected FC2, second residual and block1 still differ.",
+    "refresh": "Rerun on source, binary, runtime, input, weights, layout, precision or evidence changes.",
+    "rollback": "Omit --refiner-source-fc1-control, which defaults false."
+  },
+  "run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9",
+  "execution": {
+    "mixed_atol": 2e-05,
+    "mixed_rtol": 2e-05,
+    "exact_tolerance": 0,
+    "full_generation_executed": false,
+    "diagnostic_terminal_exports_per_gpu_compare_or_replay": 1,
+    "crystal_examples": 31,
+    "python_tests": 85,
+    "named_bytes": 944620612,
+    "native_instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    }
+  },
+  "first_divergence": {
+    "control": {
+      "full": "block0.mlp_fc1",
+      "valid": "block0.mlp_fc1",
+      "padding": "block0.mlp_fc1"
+    },
+    "enabled": {
+      "full": "block0.mlp_silu",
+      "valid": "block0.mlp_silu",
+      "padding": "block0.mlp_silu"
+    }
+  },
+  "metric_fields": [
+    "count",
+    "mismatch_count",
+    "max_abs"
+  ],
+  "fc1_full_exact": {
+    "block0.mlp_fc1": [
+      10485760,
+      0,
+      0.0
+    ],
+    "block1.mlp_fc1": [
+      10485760,
+      1907855,
+      0.125
+    ]
+  },
+  "valid_raw": {
+    "control": {
+      "block0.mlp_fc1": [
+        2154496,
+        2115687,
+        0.054958343505859375
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        2037275,
+        0.032357215881347656
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        535025,
+        0.13375091552734375
+      ],
+      "block0.output": [
+        538624,
+        528927,
+        0.3983154296875
+      ],
+      "block1.input": [
+        538624,
+        528927,
+        0.3983154296875
+      ],
+      "block1.output": [
+        538624,
+        531654,
+        1.29730224609375
+      ]
+    },
+    "enabled": {
+      "block0.mlp_fc1": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        1846900,
+        0.015624523162841797
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        534233,
+        0.12755203247070312
+      ],
+      "block0.output": [
+        538624,
+        528856,
+        0.39825439453125
+      ],
+      "block1.input": [
+        538624,
+        528856,
+        0.39825439453125
+      ],
+      "block1.output": [
+        538624,
+        531638,
+        1.2974395751953125
+      ]
+    }
+  },
+  "silu_replay": {
+    "fc1_exact": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    },
+    "silu_raw": {
+      "full": [
+        10485760,
+        8852457,
+        0.015624523162841797
+      ],
+      "valid": [
+        2154496,
+        1846900,
+        0.015624523162841797
+      ],
+      "padding": [
+        8331264,
+        7005557,
+        0.015624523162841797
+      ]
+    },
+    "silu_native_rne": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    },
+    "silu_eager_f32": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    },
+    "silu_eager_f32_rne": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    },
+    "silu_eager_bf16": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    }
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "control",
+      "enabled",
+      "enabled-repeat",
+      "preservation",
+      "silu-replay",
+      "python",
+      "control-compare",
+      "enabled-compare"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 20062388224,
+    "peak_sampled_process_group_bytes": 2337261896,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/build/hy_nomas_reference_cache_probe",
+      "bytes": 2401792,
+      "sha256": "ff907d8d1971fdfa4256257d7fd27d2a974ba3a794b35f305c9f76346cc3a86d"
+    },
+    "native_enabled_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/enabled-blocks.json",
+      "bytes": 15445,
+      "sha256": "5c2279653ba2b711e90b50b10d603e6038c55bae7938a5d020535f6c6509a4b4"
+    },
+    "native_enabled_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/enabled-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "a0a64ce1af803edf6b8e94217b3d06033fbfcd24fdd8a451adabc0f61f37d575"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/control-compare.json",
+      "bytes": 63783,
+      "sha256": "f4ce1743d6f742592072dad6b4a85d3e026a3b09f1e911abcf0d6a87bcab76c0"
+    },
+    "enabled_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/enabled-compare.json",
+      "bytes": 63958,
+      "sha256": "45edef21710ad9ac0b57efc6a2862783efd4518eb50b2edf126a2734339cdb2c"
+    },
+    "silu_replay_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/silu-replay.py",
+      "bytes": 3160,
+      "sha256": "ad0f12e0cc0ad4e5e18db1b4ad20c920fe5825bd6808a63f9e688d509441e6f5"
+    },
+    "silu_replay_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/logs/silu-replay.out",
+      "bytes": 10190,
+      "sha256": "b75814d1ae9d9fb947fca5699b1201726aa1cea3c5f45f51fec1c0dea95f7050"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/logs/preservation.out",
+      "bytes": 1087,
+      "sha256": "5766abec19a6f173a7ecd3d571532f3eedaca9d1fea7ee210cd174cb074faaf7"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

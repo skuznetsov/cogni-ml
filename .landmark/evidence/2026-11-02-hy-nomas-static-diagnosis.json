@@ -1,0 +1,423 @@
+{
+  "schema": "cogni_ml.hy_nomas_static_reference_diagnosis/v1",
+  "date": "2026-11-02",
+  "parent_revision": "969bd5b0ed85de6483a31a199cda26191b5b0ff5",
+  "claim_scope": "Full 60-latent PixelUMM same-input display comparison is byte-exact; explicit T1 wording restores visible turns in source BF16 mask-off/mask-on and native mask-on controls. Reliable holds, complete acting and full native DiT parity are not established.",
+  "risk": "CAUTION: offline diagnostic boundaries and motion attribution; no production inference code changes",
+  "rollback": "Remove the optional diagnostic script/tests; production inference and previous prompts are unchanged.",
+  "local_artifacts": "/Volumes/Nata's Data/MLData/cogni-ml/rolewright-static-diagnosis-20261102.grp_w5zj",
+  "source_files": {
+    "spec/support/hy_nomas_decoder_continuation_control.py": "d852ed2de6b6e88ad21a39b060f0eb7c69fda3bb70a961404bd5b8900f61d415",
+    "spec/hy_nomas_decoder_continuation_control_spec.py": "f6f9c0061f1120689f500927ef9d85a66224cf2b5a877768f89cd3c1f915cb84"
+  },
+  "pinned_scope": {
+    "source_model_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "source_prompt_app_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "decoder_torch_version": "2.6.0",
+    "dit_control_torch_version": "2.8.0",
+    "native_decode_binary_sha256": "99385cc63bc536c02553ea5fe32ffff8d8aeff95407f89e12540376e62282f80",
+    "native_sequence_binary_sha256": "1076bdbd40cad2d62b8d918587b6de8345d9d37a5e499b5b291ef571d4346911",
+    "geometry": {
+      "latent_shape": [
+        1,
+        32,
+        60,
+        9,
+        16
+      ],
+      "display_shape": [
+        1,
+        3,
+        240,
+        288,
+        512
+      ],
+      "window_starts": [
+        0,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50
+      ],
+      "decoder_blocks": 36
+    },
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "observed_checks": [
+    {
+      "command": [
+        "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "spec.hy_nomas_continuation_inputs_test",
+        "spec.hy_nomas_decoder_same_latent_test",
+        "spec.hy_nomas_decoder_continuation_control_spec",
+        "spec.hy_nomas_decoder_boundary_test",
+        "spec.hy_nomas_continuation_reference_test"
+      ],
+      "expected": "57 CPU admission, representation and boundary tests pass",
+      "observed": "57 tests, OK; exit 0",
+      "artifact": {
+        "path": "decoder-v2-final-cpu-checks.result.json",
+        "sha256": "b8ce3db3890dd3d8ba3eb2d661022026f331abd115452036ef59edb81aa72c65"
+      }
+    },
+    {
+      "stage": "decoder-v2-plan",
+      "expected": "Authenticate final script, executable, postprocess, source/cache, geometry/noise and fresh output plan",
+      "observed": "exit 0, plan only; not a model rerun",
+      "artifact": {
+        "path": "decoder-v2-plan.result.json",
+        "sha256": "5d245ca9177cc08e6c25e96f9545ae7eb820825d7fed785289c036f90d41fd1f"
+      }
+    },
+    {
+      "stage": "decoder-v2-display",
+      "expected": "Actual final GPU comparison helper agrees on complete saved source raw/native display tensor",
+      "observed": "exit 0; all 106168320 display values byte-exact, max/mean 0; one explicit terminal drain",
+      "artifact": {
+        "path": "masked-steps8-decoded/final-v2-core-display.json",
+        "sha256": "1a7847cb3164e67ad1b9a50e02a6ab33adec81f9d0d686c1cbd92bea9a7833a3"
+      }
+    }
+  ],
+  "decoder_representation_correction": {
+    "invalid_original_script": {
+      "path": "decoder-source-original-control.py",
+      "sha256": "ef5ea118cd7986ccb3a580ae9b08f88a24d330d319eca237f66bf6a7f42781ea"
+    },
+    "invalid_raw_comparison_result": {
+      "path": "masked-steps8-decoded/upstream-pixelumm-control.json",
+      "sha256": "48888ef66ae05e25c99c5b080e848c3a8c23909ce3666381ed5127eb6d44219e"
+    },
+    "invalidation_note": {
+      "path": "decoder-source-comparison-invalidation.json",
+      "sha256": "55517e4a6f8f5449bfb83e40a99602f098c7325a1f56ecaac833ca8f340d2ea3"
+    },
+    "reason": "Source BF16 pre-display [-1,1] was incorrectly compared to native finalized display [0,1]; mismatch is invalid as model error evidence.",
+    "valid_source_raw_sha256": "7291be4dcdee0411a9d5f03711ef9d8fc99ef039d2d662009ee9283624e35f0f",
+    "source_cache_bf16_word_checks": 468,
+    "valid_display_sha256": "41c96e5806f244d042cd0ebba0ace6ca230c1352e7d980281fc0607c2631092c",
+    "source_raw_is_exact_bf16_expansion": true,
+    "raw_native_parity": false,
+    "full_model_rerun_with_final_comparison_script": false,
+    "qualification": "The source decoder body executed all 36 blocks across all 11 windows before the invalid comparison. Saved raw output is authenticated; the actual corrected repository GPU helper independently postprocesses/compares it. Native raw was not captured."
+  },
+  "motion_controls": [
+    {
+      "name": "Matched new action mask ON/OFF",
+      "outcome": "Both effectively static; mask-off alone does not restore a substantial head turn.",
+      "receipts": [
+        {
+          "path": "unmasked-v2-source.json",
+          "sha256": "1344847d3d22b578ae04a698be57a92fe9de88ef193062165000699f68dc469f"
+        }
+      ]
+    },
+    {
+      "name": "New T0 caption with old whole-scene T1 at original D576",
+      "outcome": "Small late Resume gesture survives; Alex stays fixed. Does not isolate T1 wording from D320/D576.",
+      "receipts": [
+        {
+          "path": "caption-swap-source.json",
+          "sha256": "b3315c0e54537205b8489b17ba112f0b7627791734c9b09001d6da3d430d6119"
+        }
+      ]
+    },
+    {
+      "name": "New masked source eight versus four steps",
+      "outcome": "T0 exact, T1 changed, no appreciable head turn in ordered T1 frames.",
+      "receipts": [
+        {
+          "path": "masked-steps8-source.json",
+          "sha256": "e3e072aee48adc758aa6532e8a97689ae14d8afe9e1232eb6b179262b587ddeb"
+        },
+        {
+          "path": "steps4-8-pairing-audit.json",
+          "sha256": "350a30af87c1338e7c37123079c70faf0480c610c7599914a74fb5346b69cb6a"
+        },
+        {
+          "path": "masked-steps8-receipt-note.json",
+          "sha256": "2bf4fb4bdfd80bea15fecf5166c943cb42ce227a39a87ed869e6affd0d792217"
+        }
+      ]
+    },
+    {
+      "name": "Matched strong-action wording at D320/four steps/mask OFF",
+      "outcome": "Visible Alex head/upper-body turn then return toward laptop; requested hold absent, Resume static. Direction/amplitude/released body constraints change together.",
+      "receipts": [
+        {
+          "path": "strong-action-pairing-audit.json",
+          "sha256": "78576e744fe494ebeddafd20da9a3ef54d90b42f5ce575e00aa0672d8384e698"
+        },
+        {
+          "path": "strong-compact-source.json",
+          "sha256": "2b03eb07968b6bbc9ead19d109c9ab0bf3e5b989126b6c608e91e38a8c357034"
+        },
+        {
+          "path": "strong-compact-decoded/receipt.json",
+          "sha256": "6a9e60dfa68aff47de2a32130905a5fb864b9e7dcacd02944f54d743a1216024"
+        },
+        {
+          "path": "strong-action-media.json",
+          "sha256": "bbd4ddc32d486c7aa5dbeb2d769f8ca9bc04cb4a6dbf33acc050da86d221b79a"
+        }
+      ],
+      "t0_axis2_prefix_sha256": "b08e8b61580ee611e65a5acb3e73716b6f653fe41e94b601fadfb28e77d230b0",
+      "prompt": {
+        "path": "strong-action-compact.json",
+        "sha256": "68d839648f5d53ca6e7b93dd2b5b09ac44060c2b7d0a5b2bce3d70a8bd93a20c"
+      },
+      "profile": {
+        "path": "strong-action-compact-profile.json",
+        "sha256": "3caa53a419f895ee26189b6bc1f92b08d06c055599125a930bfd4fd9a2872ebb"
+      },
+      "visual_sheet": {
+        "path": "strong-action-generated-25-frames.png",
+        "sha256": "768f448aa0531c22cd4cad9d4a248a143e5c5e1c16fbbcef2f2ec7a40fbca148"
+      },
+      "generated_t1_clip": {
+        "path": "strong-action-source-5s.mp4",
+        "sha256": "3c90d6bd1c5397582aa53684e50f7585fe212d37aa6380557a21ef900f4168a5"
+      },
+      "raw_receipt_scope_caveat": "The inherited diagnostic.change string is stale for the wording change; companion pairing note corrects scope without rewriting raw result."
+    }
+  ],
+  "pre_model_rejections": [
+    {
+      "stages": [
+        "decoder-source",
+        "strong-profile",
+        "strong-compact-source-plan"
+      ],
+      "causes": [
+        "Torch 2.8 rejected by the pinned decoder version gate",
+        "Indented JSON disagreed with source default json.dumps offset prefixes; empty action head rejected",
+        "Output argument with plan-only rejected by CLI"
+      ],
+      "policy": "Rejected attempts retained; no version gate, tolerance, action admission or guard relaxed."
+    }
+  ],
+  "source_audits": {
+    "history_retention": {
+      "path": "history-retention-default-vs-lowmem-audit.json",
+      "sha256": "d09fb77f77356475d14030635d7f0f0c890728f178f758bb02285062a24d1ffa"
+    },
+    "reference_preprocessing": {
+      "path": "upstream-reference-preprocessing-audit.json",
+      "sha256": "c6560b68710098aa92dacf8accefbb7edef410c2dbe283db546a10e1d3c85743"
+    },
+    "scope": "Default pinned source configuration only, not authenticated historical live UI request or stock Magi/CUDA result. No default history/writer/CFG mismatch found. App 1280x720 JPEG preprocessing differs from direct PNG; not established as motion cause. No production prompt-builder body-lock injection found."
+  },
+  "guard_policy": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "model_cap_gib": 25.5,
+    "max_swap_growth_mib": 64,
+    "limitation": "Sampled footprints/headroom do not bound between-poll peaks or opaque MPS resources."
+  },
+  "adversary": {
+    "decoder_display_boundary": "ROBUST within exact same-input finalized-display scope; correlated review plus executed GPU recovery and CPU guards",
+    "source_unmasked_motion_pair": "ROBUST within matched wording control; head turn observed, hold absent; correlated review",
+    "complete_animation": "Not claimed",
+    "native_masked_motion": "ROBUST for visible turn then return in authenticated T1-only sheet; correlated review, not full acting or numerical parity.",
+    "source_masked_motion": "ROBUST for visible turn then return in authenticated T1-only sheet; correlated review, not full acting or numerical parity."
+  },
+  "native_masked_followup": {
+    "status": "VISUAL_CONTROLS_COMPLETED_NUMERIC_DIT_GATE_FAILS",
+    "plan_result": {
+      "path": "strong-native-masked-plan.result.json",
+      "sha256": "68f3b17995823545ab4351c4f79e58b2a4f5e45cf58598a8c3be359aab325bd7"
+    },
+    "source_masked_result": {
+      "path": "strong-masked-source.json",
+      "sha256": "3f1c1df0a4d30ef911d55be6cdeb18211b10f853b19fb66a77d9f162ada0e19c"
+    },
+    "native_result": {
+      "path": "strong-native-masked.result.json",
+      "sha256": "e1e41dfb129de8e979794f4acf60c7920b8f01436b576e29798faefa129086a1"
+    },
+    "native_receipt": {
+      "path": "strong-native-masked/receipt.json",
+      "sha256": "86f52483c27c43bbb9761d3da05033dc4698d694ba577582365b32776ee03cb5"
+    },
+    "native_latent_bank_sha256": "49e3d47976308a54b1aa1c7223a00d4912205fee36b82891fedec714ad8128f6",
+    "native_display_sha256": "080a9e0d715f629ee0e5232a5ad779de19b3ec492a947d703f43a4d5e0c34e78",
+    "visual_sheet": {
+      "path": "strong-native-masked-25-frames.png",
+      "sha256": "7b159478150eaf498f675c460ac4af8defb15e72dcd9c8b088a061e229645555"
+    },
+    "generated_t1_clip": {
+      "path": "strong-native-masked-5s.mp4",
+      "sha256": "b58692285f04e5e1caceaca257ff9d7384ac283853620c9585d2a73e129d48a5"
+    },
+    "media": {
+      "path": "strong-native-masked-media.json",
+      "sha256": "6d594fa6ed2ce72693de5c20ea55e5c5c442aef7f4a6e00bcea9f8ec00162c82"
+    },
+    "observed_motion": "Alex turns head and upper body toward camera, remains frontal briefly, then returns toward laptop; Resume still and requested end hold absent.",
+    "native_timings": {
+      "preflight_seconds": 7.273577375,
+      "reference_encoder_setup_seconds": 1.06601425,
+      "reference_encoder_wall_seconds": 377.285425084,
+      "reference_encoder_gpu_seconds": 377.2428305824287,
+      "dit_setup_seconds": 25.669674041,
+      "dit_wall_seconds": 43.246280208,
+      "dit_gpu_seconds": 43.02294404513668,
+      "decoder_setup_seconds": 24.533555125,
+      "decoder_wall_seconds": 175.14356975,
+      "decoder_gpu_seconds": 175.0838827022817,
+      "request_seconds": 658.20604375
+    },
+    "native_instrumented_metrics": {
+      "reference_encoder_encode_allocations": 0,
+      "reference_encoder_encode_readbacks": 0,
+      "reference_encoder_preterminal_waits": 0,
+      "reference_encoder_segments": 903,
+      "reference_encoder_waits": 1,
+      "dit_encode_allocations": 0,
+      "dit_encode_readbacks": 0,
+      "dit_preterminal_waits": 0,
+      "dit_segments": 9297,
+      "dit_waits": 1,
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 13509,
+      "decoder_waits": 1
+    },
+    "native_guard": {
+      "peak_footprint_gib": 25.367125287652016,
+      "minimum_cache_aware_headroom_gib": 16.221633911132812,
+      "maximum_observed_swap_growth_mib": 0.0,
+      "artifact": {
+        "path": "logs/strong-native-masked.guard.jsonl",
+        "sha256": "c41d6b0e887cabb8637ecdc5ed16bb7994851fd3b325bad3ffb7cf119007d135"
+      }
+    },
+    "numeric_comparison": {
+      "script": {
+        "path": "strong-native-latent-compare.py",
+        "sha256": "0acad90a588b1d0ac8a70ae0220ed0f898ea63bff29f9d44ce937002005386bb"
+      },
+      "stage_result": {
+        "path": "strong-native-compare.result.json",
+        "sha256": "220896ab0b0ff08d25e5d9949970efbb775c0ea20e299645d5707429d391a596"
+      },
+      "report": {
+        "path": "logs/strong-native-compare.out",
+        "sha256": "e94625201e37e81d0e774fade01a4fccf29561b274c1d52376b13b0a96d0e21d"
+      },
+      "stage_exit_scope": "Exit 0 means an authenticated report was produced; the T1 tolerance gate FAILS.",
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "metrics": {
+        "T0": {
+          "axis2": [
+            0,
+            30
+          ],
+          "finite_pairs": 138240,
+          "mae": 0.0,
+          "max_abs_error": 0.0,
+          "mismatches": 0,
+          "nonfinite_native": 0,
+          "nonfinite_source": 0,
+          "rms": 0.0,
+          "values": 138240,
+          "within_tolerance": true
+        },
+        "T1": {
+          "axis2": [
+            30,
+            60
+          ],
+          "finite_pairs": 138240,
+          "mae": 0.0594724602997303,
+          "max_abs_error": 3.20703125,
+          "mismatches": 126770,
+          "nonfinite_native": 0,
+          "nonfinite_source": 0,
+          "rms": 0.14341218769550323,
+          "values": 138240,
+          "within_tolerance": false
+        }
+      },
+      "gate": "FAIL",
+      "scope": "numeric comparison only: native T0 is DCAE image-reference initialization; source T0 is supplied upstream clean latent; native K/V is F32 while source cache is BF16",
+      "guard": {
+        "peak_footprint_gib": 0.21168649941682816,
+        "minimum_cache_aware_headroom_gib": 45.10539245605469,
+        "maximum_observed_swap_growth_mib": 0.0,
+        "artifact": {
+          "path": "logs/strong-native-compare.guard.jsonl",
+          "sha256": "212e8f73a5e52abbd5d2207c38c1c317a7e592eab13c2e3feeca76d8a740e9c7"
+        }
+      }
+    },
+    "source_decode_stage": {
+      "path": "strong-masked-source-decode.result.json",
+      "sha256": "74eb4ab36c99de04f5a7adcc8106f14a5ba83ce741e80a03f81388f5524999ec"
+    },
+    "source_decode_receipt": {
+      "path": "strong-masked-source-decoded/receipt.json",
+      "sha256": "cbf711073f93a1d21bc7b09a33ef2180c3c798ce474380c8ac67a29b40c536ac"
+    },
+    "source_visual_sheet": {
+      "path": "strong-masked-source-25-frames.png",
+      "sha256": "841809b4449e18276211a88277d699c74503609d471b6554c3ca38a84a0e642f"
+    },
+    "source_generated_t1_clip": {
+      "path": "strong-masked-source-5s.mp4",
+      "sha256": "92f086da7b56e8ce7ad7ddded1e4e52de79dab9b55b76e7b4728b0e7bc4a0c1e"
+    },
+    "source_media": {
+      "path": "strong-masked-source-media.json",
+      "sha256": "3c8fbf5172279e54144c16e23228e71d6d43fc3e0a584495db00ea6801c9147a"
+    },
+    "paired_native_left_source_right_clip": {
+      "path": "strong-masked-native-left-source-right-5s.mp4",
+      "sha256": "d4b52ac4c1401ffe678d9d13bf26efbe53a6f526ac21a6860721914b12b1fd06"
+    },
+    "source_masked_observed_motion": "Alex turns toward camera then returns toward laptop; Resume still and requested end hold absent.",
+    "source_masked_guard": {
+      "peak_footprint_gib": 19.591996915638447,
+      "minimum_cache_aware_headroom_gib": 22.638595581054688,
+      "maximum_observed_swap_growth_mib": 0.0,
+      "artifact": {
+        "path": "logs/strong-masked-source.guard.jsonl",
+        "sha256": "2d5956cb9c190fbd772d37c4b2f6d6de594409783496533502b51a163125312e"
+      }
+    },
+    "source_decode_guard": {
+      "peak_footprint_gib": 18.405651450157166,
+      "minimum_cache_aware_headroom_gib": 21.2215576171875,
+      "maximum_observed_swap_growth_mib": 0.0,
+      "artifact": {
+        "path": "logs/strong-masked-source-decode.guard.jsonl",
+        "sha256": "67462f948e470eba7914822e7a060fd514e54d615d9e4ec217cf57efabc2788a"
+      }
+    }
+  },
+  "residuals": [
+    "Full native DiT BF16 T1 gate fails again; T0 is exact on this run, first T1 divergence remains unlocalized.",
+    "Stock CUDA/Magi parity and an authenticated effective app request/checkpoint are unqualified.",
+    "No complete advertisement, reliable hold, Resume acting or general reference-animation capability claim."
+  ],
+  "decay_trigger": "Refresh on source/binary/input/noise/weight/geometry/precision/backend/compiler/runtime/device changes or loss of authenticated local artifacts.",
+  "return_pointer": "docs/hy-nomas-drafter-frontier.md",
+  "definition_of_done": {
+    "diagnostic_implementation": "Executed 57 CPU tests, final plan-only admission and actual final GPU saved-output display helper; retain full-source-run v1 invalidation and no-final-model-rerun limitation.",
+    "motion_diagnosis": "Inspect ordered generated-only frames for matched strong-action native/source mask-on controls; record turn, absent hold and unchanged Resume.",
+    "numeric_comparison": "Authenticate matched source/native inputs and T0/T1 extents; measure original 2e-5 gate and record failure without relaxing it.",
+    "not_required_or_claimed": "Production animation fix, complete advertisement, full DiT or stock CUDA parity."
+  }
+}

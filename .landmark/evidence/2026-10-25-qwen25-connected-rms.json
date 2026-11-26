@@ -1,0 +1,158 @@
+{
+  "format": "Local compact evidence index; repository template unavailable",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "A prepared GPU-buffer F32 exponent 2.0 reproduces the authenticated upstream connected RMS statistics, precise normalization and BF16 gain bits on the saved S1280 input, including the production-style scalar alias and nontrace normalize kernel.",
+    "scope": "One saved BF16 block-0 post-attention residual [1,1280,3584] and the authenticated BF16 gain, native precompiled MPSGraph plus Metal; atol=rtol=2e-5 unchanged.",
+    "excluded": [
+      "production-default repair",
+      "all-input equivalence",
+      "full-block or S1280-prefix qualification",
+      "closed compiler mechanism",
+      "speedup",
+      "full generation"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "examples/qwen25_connected_rms_probe.cr",
+      "examples/support/qwen25_connected_rms_probe.cr",
+      "spec/qwen25_connected_rms_probe_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-connected-rms.json"
+    ],
+    "changed_paths": [
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "examples/qwen25_connected_rms_probe.cr",
+      "examples/support/qwen25_connected_rms_probe.cr",
+      "spec/qwen25_connected_rms_probe_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-connected-rms.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json",
+      "nbytes": 20811,
+      "sha256": "2a472b75a3885140778d099825c0a667128344d0dfd67777e619cf2394d18df4"
+    },
+    "base_commit": "9cee57ac364534524999034be6c15273e0f41e8c",
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_mps_bridge.mm",
+        "nbytes": 126890,
+        "sha256": "dfc9e34c05e3615e5d95586ed6bad6ea7850a23dc34fd3df0517501b68654b69"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_connected_rms_probe.cr",
+        "nbytes": 10719,
+        "sha256": "2da77b4dfd14a59ef70715733603ca70ee013a89d9574420b3ed120989fa2759"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_connected_rms_probe.cr",
+        "nbytes": 6691,
+        "sha256": "ca57b440085aebf1ca61545113937c3b5e595e039140cb437336fc45277bf244"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_connected_rms_probe_spec.cr",
+        "nbytes": 4291,
+        "sha256": "78af71eb8d16586af8e981284c4ea26710e747057e249d6308c0364c4d741792"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 52079,
+        "sha256": "250e5ea793653eb50285864860666b457eb7bf9f874a7e5a372140eb109fdc1d"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4534669,
+        "sha256": "28a31f6702febb1d529a7591e3cd3d57aa38f18b4208efb9cc8dd2cebc462e49"
+      }
+    ],
+    "availability": "Local SSD; invalidate on loss/digest mismatch"
+  },
+  "verification": {
+    "observed_dod": "B five outputs and C three outputs are raw exact upstream; C/B common outputs exact; old square path remains a negative.",
+    "cpu": "14 focused Crystal examples pass.",
+    "native_build": "Normal/cpu-only no-codegen, strict Clang, release link, formatting and diff checks pass; exact argv retained.",
+    "execution": {
+      "named_bytes": 100958212,
+      "terminal_wait_count": 1,
+      "named_allocations_during_encode": 0,
+      "diagnostic_readbacks_before_terminal_wait": 0,
+      "diagnostic_readbacks_after_terminal_wait": 13,
+      "prepared_step_count": 12,
+      "tolerance": {
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "guard": {
+      "exit_code": 0,
+      "sampled_peak_process_bytes": 393217104,
+      "minimum_cache_aware_headroom_bytes": 19062308864,
+      "observed_swap_growth_bytes": 0,
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 4602052.558247208,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 180
+      }
+    },
+    "structural_validation": "Local JSON/path whitelist/dereferenced SHA256/report assertions only; no unavailable official packet-validator success claimed."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Authenticated saved block-0 post-attention BF16 residual [1,1280,3584], connected native RMS/gain and bounded lifecycle only.",
+    "reviewers": [
+      "root",
+      "qwen25_contract_audit"
+    ],
+    "basis": "Source inspection, root-executed CPU/build/native guard checks, observed report comparisons, reviewer report/source/launch pin inspection.",
+    "correlated_review": true,
+    "strongest_attacks": [
+      "Extra statistics targets can change fusion: all three statistics producers have only the final +epsilon target.",
+      "Observer stores can change normalization: production-style nontrace/in-place arm is independently exact and compared with trace arm.",
+      "Legacy failure can hide candidate outcome: per-arm gates separate the retained negative from candidate gates.",
+      "Gain metadata is not gain bytes: exact selected BF16 bytes are copied, authenticated against both fixture metadata links and uploaded without shard mapping.",
+      "Cleanup must not add a physical wait or release in-flight resources: terminal drain is idempotent and buffers remain retained through completion."
+    ],
+    "limits": [
+      "F32 exponent matches effective post-cast operand; Int64 feed/cast topology and closed compiler mechanism are not reproduced.",
+      "No production-default change, all-input equivalence, full-block/prefix qualification, or performance claim.",
+      "RMS reference trust root is caller supplied and its exact digest is preserved in pinned launch args.",
+      "Guard is sampled and file-cache headroom is a reclaimability estimate, not a memory reservation.",
+      "Reused companion objects have pinned bytes and opaque prior source ancestry."
+    ]
+  },
+  "refresh": {
+    "decay_triggers": [
+      "scoped source",
+      "fixture/input",
+      "geometry/precision",
+      "toolchain/SDK/OS/device",
+      "execution/lifecycle",
+      "artifact loss/hash mismatch"
+    ],
+    "operation": "Reauthenticate scoped inputs and build/run pins, rebuild changed source and repeat bounded connected probe under fresh admission.",
+    "failure_policy": "Reopen dependent claims without widening tolerances."
+  },
+  "next_falsifier": "Wire the retained exponent into both RMS sites of an opt-in block plan with accounted shared lifetime/bytes, then separately admit block0 before 26-block prefix.",
+  "rollback": "Remove new opt-in diagnostic; existing production arithmetic is unchanged.",
+  "links": {
+    "frontier": "docs/qwen25-hy-nomas-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}

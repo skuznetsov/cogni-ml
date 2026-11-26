@@ -224,17 +224,17 @@ A cache restore is valid only if these pass:
    - convert `State` to typed byte records
    - restore records into a new `State`
    - spec: live prefill vs snapshot restore next-token equality
-   - status: implemented in `src/ml/gguf/qwen35_state_snapshot.cr`
+   - status: implemented in `src/ml/models/qwen35/state_snapshot.cr`
 
 2. File artifact:
    - write/read `.qkv` with header and SHA-256
    - spec: round-trip artifact equality and fail-closed corrupt artifact
-   - status: implemented in `src/ml/gguf/qwen35_state_snapshot.cr`
+   - status: implemented in `src/ml/models/qwen35/state_snapshot.cr`
 
 3. Local index without PG:
    - JSONL or SQLite-style manifest for development
    - avoids coupling correctness work to DB setup
-   - status: implemented in `src/ml/gguf/qwen35_prompt_cache.cr`
+   - status: implemented in `src/ml/models/qwen35/prompt_cache.cr`
 
 4. PostgreSQL adapter:
    - optional shard or CLI adapter controlled by env DSN

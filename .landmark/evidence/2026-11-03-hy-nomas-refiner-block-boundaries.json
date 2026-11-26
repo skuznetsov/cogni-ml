@@ -1,0 +1,486 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_block_boundaries_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "4432f0ae",
+  "status": "bounded_implementation_qualified_full_refiner_gate_failed",
+  "goal": "Qualify connected BF16 condition SiLU, adaLN and norm1 boundaries in the two text-refiner blocks on one finite T0 input; do not infer motion correctness.",
+  "scope": {
+    "video_rows": 4320,
+    "valid_text_tokens": 263,
+    "stored_text_rows": 1280,
+    "padding_tokens": 1017,
+    "block_count": 2,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_and_representation_atol": 0,
+    "exact_and_representation_rtol": 0,
+    "full_generation_executed": false,
+    "dit_blocks_executed": 0,
+    "cache_kv_written": false,
+    "gpu_neural_arithmetic": "Native Metal/MPS chain; diagnostic replay/metrics on Torch MPS with fallback disabled. CPU exports follow existing terminal boundaries."
+  },
+  "change": {
+    "flag": "--refiner-block-boundaries-bf16-control",
+    "default": false,
+    "requires": "All five cumulative prelude controls, execute, block trace and linked prelude trace",
+    "implementation": "Existing BF16-typed condition SiLU plan; existing adaLN post-bias epilogue and norm1 post-affine epilogue round to BF16 then expand to F32 storage. Both blocks. Norm2 and QKV unchanged.",
+    "no_extra_explicit_dispatch_named_buffer_readback_wait": true,
+    "opaque_mps_internals_excluded": true,
+    "source_sha256": {
+      "examples/hy_nomas_reference_cache_probe.cr": "952c1e262148fd17e32190f0ba6c647419bc9df106023a4604ac01f486491df5",
+      "examples/support/hy_nomas_reference_refiner_blocks_trace.cr": "aa0a1f7de3a72dfc5d2a3a619833af0e48d3186d4e0da65bf0ef052b5316812b",
+      "spec/hy_nomas_reference_refiner_blocks_compare_spec.py": "60747b46c18f589a074b7f9049a0f0f9f9265e9d09d37c8583ba9a78b07eb4e6",
+      "spec/hy_nomas_text_refiner_spec.cr": "e2264c8d81379aa2bc78211dff145f9e77c07546431066864689977ffb6b21ba",
+      "spec/support/hy_nomas_reference_refiner_blocks_compare.py": "4f0c48e5b5b93521254855ee882c395ae97c6e7de1541b71610996d87d545a7c",
+      "src/ml/video/hy_nomas_text_refiner.cr": "bc4ba778fb18c4305e0360286523a7100a704e4de7c7fcde1b8191c5067ff1b4",
+      "src/ml/video/kernels/hy_nomas_text_refiner.metal": "95b4bbaef7a57488bcc809c84a6a7297b09d7625750d0e1ffcb860a359f4101e",
+      "spec/hy_nomas_reference_refiner_adaln_replay_spec.py": "4f8add6a20c719f6cd34826f282459bb29ac6128a8150f53c8c423ee812477eb",
+      "spec/support/hy_nomas_reference_refiner_adaln_replay.py": "ed6460f1e8ebdf82c940edaefb572a4fa2cd0c5f88819ded98cface1648d7d89"
+    }
+  },
+  "lineage": {
+    "external_run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv",
+    "qualified_artifact_index": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/qualified-artifacts-final.json",
+      "bytes": 48046,
+      "sha256": "5c6612b15e08e9cbc81d33da017d93b27c2e9cdb518e0663fcd262870073159f"
+    },
+    "source_snapshot_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/qualified-sources",
+    "final_source_pin_count": 87,
+    "compiled_source_pins": {
+      "block_trace": 16,
+      "prelude_trace": 14
+    },
+    "final_comparator_only_changes_after_native_capture": [
+      "spec/hy_nomas_reference_refiner_blocks_compare_spec.py",
+      "spec/support/hy_nomas_reference_refiner_blocks_compare.py"
+    ],
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Archived observational PyTorch 2.8 source BF16 trace with unpadded MPS attention adaptation; not stock FlashAttention/Magi/CUDA parity. Full upstream forward not rerun in this experiment.",
+    "source_trace": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_prelude_trace": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.json",
+      "bytes": 13573,
+      "sha256": "cdfa93533c10a5e16859619200fecf75432365fa87be429d438d90540de029a7"
+    },
+    "previous_evidence": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/.landmark/evidence/2026-11-03-hy-nomas-refiner-blocks.json",
+      "bytes": 34733,
+      "sha256": "6a84033ceb179135af45578f03bd5f341e5e49e245f33a112fffb27f5515f23c"
+    },
+    "timeline_manifest_sha256": "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43",
+    "reference_latent_sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+    "replay_global_weights_sha256": "2fcc2ae6f976732606f6f80ffa69e8c5def40844625f23b8d69a47f1a3c29104",
+    "official_pytorch_linear_source": {
+      "url": "https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/aten/src/ATen/native/mps/operations/Linear.mm",
+      "sha256": "ea4a193ef2d80e63b10bd400a26a6349cd468dc2b9160b33738e30960d684fa4",
+      "bytes": 17392,
+      "scope": "External source semantics only; not covered by adapted upstream trace source pins or proof of GPU internal rounding"
+    },
+    "qualified_torch_version": "2.8.0"
+  },
+  "discriminator": {
+    "observed_native_f32_linear_replay_exact": true,
+    "raw_condition_passes_mixed_tolerance_but_hash_differs": true,
+    "condition_bf16_rounded_source_exact": true,
+    "output_only_adaLN_unequal_values": 13,
+    "rounded_condition_f32_linear_and_rounded_output_unequal_values": 0,
+    "interpretation": "Output-only rounding is refuted on this input. Operand/output boundary alignment is sufficient for this adaLN replay. This does not prove internal backend accumulation rules.",
+    "report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/adaln-replay-current-final.json",
+      "bytes": 9911,
+      "sha256": "06ef3f6ffc82bd845b10b4d19fc86dd933af815d8b0818d691a9893f099e0680"
+    }
+  },
+  "connected_result": {
+    "controlled_count": 10,
+    "source_exact_count": 9,
+    "source_exact_tensor_hashes": [
+      {
+        "tensor": "block0.condition_silu",
+        "native_sha256": "559d4eb0ecc58998e27c93e43ae0e043f9364eec5eb17bd50c7e9acfe5a7661e",
+        "source_sha256": "559d4eb0ecc58998e27c93e43ae0e043f9364eec5eb17bd50c7e9acfe5a7661e",
+        "equal": true
+      },
+      {
+        "tensor": "block0.adaLN",
+        "native_sha256": "c3072f8c5b7aa695b480e75559bf7202616d0a7ff6acc433ff1ec7446137bc96",
+        "source_sha256": "c3072f8c5b7aa695b480e75559bf7202616d0a7ff6acc433ff1ec7446137bc96",
+        "equal": true
+      },
+      {
+        "tensor": "block0.gate_msa",
+        "native_sha256": "93f2595b73370fdf5bcb6f028e8020fbb1d9da4de33f5c1623f9dfdb909ebf29",
+        "source_sha256": "93f2595b73370fdf5bcb6f028e8020fbb1d9da4de33f5c1623f9dfdb909ebf29",
+        "equal": true
+      },
+      {
+        "tensor": "block0.gate_mlp",
+        "native_sha256": "215b247bceccd72df4209b2f16ca473f49195ef21ec65a3144b08a330324b992",
+        "source_sha256": "215b247bceccd72df4209b2f16ca473f49195ef21ec65a3144b08a330324b992",
+        "equal": true
+      },
+      {
+        "tensor": "block0.norm1",
+        "native_sha256": "1ce41ff26fb0edb3906c2f0a9bda550338efa0f07aeccaf6836c32aacf911080",
+        "source_sha256": "1ce41ff26fb0edb3906c2f0a9bda550338efa0f07aeccaf6836c32aacf911080",
+        "equal": true
+      },
+      {
+        "tensor": "block1.condition_silu",
+        "native_sha256": "559d4eb0ecc58998e27c93e43ae0e043f9364eec5eb17bd50c7e9acfe5a7661e",
+        "source_sha256": "559d4eb0ecc58998e27c93e43ae0e043f9364eec5eb17bd50c7e9acfe5a7661e",
+        "equal": true
+      },
+      {
+        "tensor": "block1.adaLN",
+        "native_sha256": "57fa0847df93515108010aadb3a55a39869d4b2da60e83b86291291dfe469d0e",
+        "source_sha256": "57fa0847df93515108010aadb3a55a39869d4b2da60e83b86291291dfe469d0e",
+        "equal": true
+      },
+      {
+        "tensor": "block1.gate_msa",
+        "native_sha256": "9f0bc1cc7befb2da1c72531a660cbdcbf27cff3846bad9fcd00e723ebd912f07",
+        "source_sha256": "9f0bc1cc7befb2da1c72531a660cbdcbf27cff3846bad9fcd00e723ebd912f07",
+        "equal": true
+      },
+      {
+        "tensor": "block1.gate_mlp",
+        "native_sha256": "04d8ca15b1bac4f57704d406716798f6b7557ed01559492cf66d5bf408a5e977",
+        "source_sha256": "04d8ca15b1bac4f57704d406716798f6b7557ed01559492cf66d5bf408a5e977",
+        "equal": true
+      },
+      {
+        "tensor": "block1.norm1",
+        "native_sha256": "d17f699a48f012611a03a08ac066b2949c26b2d6e25ca578480662e1ac388b80",
+        "source_sha256": "ae50ad6d1e8ec57e16ba9bed1a44df929f0d3d66b820019c79a4241c92370d32",
+        "equal": false
+      }
+    ],
+    "all_controlled_actual_outputs_bf16_representable": true,
+    "controlled_source_exact_aggregate": false,
+    "coverage_guard": "Both representation and exact-source checks require the entire selected ordered tensor list; missing, duplicate and reordered rows reject. No-control aggregates null.",
+    "first_failed_raw_checkpoint": {
+      "full": "block0.qkv",
+      "valid": "block0.qkv",
+      "padding": "block0.qkv"
+    },
+    "full_numeric_gate_passed": false,
+    "source_bf16_representation_passed": true,
+    "same_full_block0_input_and_c_bytes": true,
+    "terminal_metrics_exports_per_report": 1,
+    "sensitivity_controls_passed": true,
+    "reports": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-default-final.json",
+        "bytes": 55278,
+        "sha256": "75e7bd1d80f0cf9b3e9d95b018fc9e62294939f40c473e7e9ffb93b41a1d5edb"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-control-final.json",
+        "bytes": 58199,
+        "sha256": "9eb70b228886b8649f2fd8f0835b0acde5c214813e122daef579ab423c291e52"
+      }
+    ],
+    "selected_rows": [
+      {
+        "kind": "raw",
+        "tensor": "block0.qkv",
+        "region": "full",
+        "count": 7864320,
+        "finite_count": 7864320,
+        "max_abs": 0.031248092651367188,
+        "mae": 0.0021312071476131678,
+        "rms": 0.003287296509370208,
+        "mismatch_count": 7636942,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block0.output",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 0.617034912109375,
+        "mae": 0.014288554899394512,
+        "rms": 0.023722587153315544,
+        "mismatch_count": 2582985,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "controlled_boundary_source_exact",
+        "tensor": "block1.norm1",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 0.03125,
+        "mae": 0.0008292265119962394,
+        "rms": 0.0021288904827088118,
+        "mismatch_count": 710895,
+        "passed": false,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "raw",
+        "tensor": "block1.output",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 1.2042083740234375,
+        "mae": 0.019984716549515724,
+        "rms": 0.03398029878735542,
+        "mismatch_count": 2597846,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "limitations": "Block1 input differs after block0; its norm1 discrepancy is not an isolated norm1 defect. Rounded QKV view is diagnostic only. Full refiner, DiT/KV, T1 and reference-driven motion remain open."
+  },
+  "preservation": {
+    "scope": "New block flag OFF, all five existing prelude controls ON",
+    "previous_62_tensor_records_and_3_payloads_identical": [
+      {
+        "part": "preblock",
+        "tensors": 9,
+        "all_tensor_records_and_payload_equal": true
+      },
+      {
+        "part": "refiner",
+        "tensors": 16,
+        "all_tensor_records_and_payload_equal": true
+      },
+      {
+        "part": "blocks",
+        "tensors": 37,
+        "all_tensor_records_and_payload_equal": true
+      }
+    ],
+    "both_modes_all_16_prelude_hashes_source_exact": true,
+    "named_bytes_per_mode": 944620612,
+    "native_encode_counters": {
+      "allocations": 0,
+      "readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "no_control_aggregates": {
+      "representation": null,
+      "source_exact": null
+    }
+  },
+  "definition_of_done": [
+    {
+      "stage": "native-build",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-build.command.json",
+        "bytes": 10826,
+        "sha256": "c911f06b85296cca1a1890ec382973e558220d4d3e77a27b6ecb5804dcf4dd5b"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-build.result.json",
+        "bytes": 11465,
+        "sha256": "3e5d1d2c37c4b363622a865adfe9e872715c8e78b4f953817f6b727bcba1575e"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Fresh executable and bridge objects"
+    },
+    {
+      "stage": "native-specs",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-specs.command.json",
+        "bytes": 12029,
+        "sha256": "67109bcd01ef9f07cb62180bff074c70ca0d7ce414b1f0acd87ebc05cc4c8018"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-specs.result.json",
+        "bytes": 12668,
+        "sha256": "84d86621995534aedd39740a5cca72b9b4fb5887dc90c347f224995bcb1c75a7"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "26 examples, zero failures/errors"
+    },
+    {
+      "stage": "python-specs-final",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/python-specs-final.command.json",
+        "bytes": 11092,
+        "sha256": "b4a78290252aeb9ace91417bfcc697f1fdefcbe04254866d160da3ee52dbb757"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/python-specs-final.result.json",
+        "bytes": 11744,
+        "sha256": "15f5188fb2179135e28873ed39457943fda1a0e589f8baff5add90d07f63ed4a"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "48 tests, OK"
+    },
+    {
+      "stage": "native-default",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-default.command.json",
+        "bytes": 11947,
+        "sha256": "b2b86e23ddfa5fdb72e227e5add1207f95710d292afacb482e5596e204427ef0"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-default.result.json",
+        "bytes": 12590,
+        "sha256": "7b09c937aff8a9fb42564b3e91f847e5f8f993c7c5acf07f092223ec1aa44c94"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Native encode [0,0,0,1]; 944620612 named bytes"
+    },
+    {
+      "stage": "native-control",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-control.command.json",
+        "bytes": 11994,
+        "sha256": "3dbb1214e4d7d39a20934d7798a9df3b995fae0d560291568b41e7282bb441a3"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/native-control.result.json",
+        "bytes": 12636,
+        "sha256": "3a13a68d0a2ba826183315a0e7e5e30f804aed315d39c05ccf4d6a6d796b090a"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Native encode [0,0,0,1]; 944620612 named bytes"
+    },
+    {
+      "stage": "compare-default-final",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-default-final.command.json",
+        "bytes": 12529,
+        "sha256": "56889826edad6f7b6489808eacb50a0d42d46a1cca1d4dade2cc3aec21693046"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-default-final.result.json",
+        "bytes": 13187,
+        "sha256": "187f8a6afd5e74a9d516bec806707d4af2d773a57768a95257481c025b96382a"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Previous raw failure preserved; new selected-check aggregates null"
+    },
+    {
+      "stage": "compare-control-final",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-control-final.command.json",
+        "bytes": 12529,
+        "sha256": "2371cd01c8d92d45954d6224c2f0d80b3e8aab5a7ea51c376462cbb1dc756640"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/compare-control-final.result.json",
+        "bytes": 13187,
+        "sha256": "4ff9736f2bef210d67053b6e0de97dc8802f224ac571095f64074c52538737ee"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Ten actual BF16-representable outputs; nine source-exact hashes; raw first failure block0.qkv; full gate false"
+    },
+    {
+      "stage": "adaln-replay-current-final",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/adaln-replay-current-final.command.json",
+        "bytes": 12883,
+        "sha256": "409c7fa3764e83a3c7549309d2ad2752b82afd24e02befd7e06c0a452d3ae221"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/adaln-replay-current-final.result.json",
+        "bytes": 13551,
+        "sha256": "b45cdf8111a3d442ed3d2df82b29effdbc942ef3600b8d0cff5f435557ffca9d"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "Output-only 13 unequal values; rounded input/output source-exact; sensitivity passes"
+    },
+    {
+      "stage": "cli-negatives-qualified",
+      "command_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/cli-negatives-qualified.command.json",
+        "bytes": 10802,
+        "sha256": "715c7f16694ab4563a90833f8a3566f807c03bfe2253081f4db48b5d1091b4e4"
+      },
+      "result_record": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/cli-negatives-qualified.result.json",
+        "bytes": 11458,
+        "sha256": "1a85ef1a04cd51bbbeb884104e09a28f5fdb1ece415a147700a1599685286f62"
+      },
+      "returncode": 0,
+      "source_pins_matched_before_after": true,
+      "expected_signal": "All nine malformed/invalid CLI cases rejected"
+    }
+  ],
+  "guard": {
+    "stage_count": 9,
+    "sampled_peak_group_bytes": 2332182736,
+    "minimum_sampled_headroom_bytes": 25513803776,
+    "maximum_observed_stage_swap_growth_bytes": 0,
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "limitation": "Sampled limits do not bound between-poll spikes or opaque Metal/MPS resources.",
+    "summary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/guard-summary-final.json",
+      "bytes": 2652,
+      "sha256": "a7c4793c3194e748a5a0edcfd848390d46b05d5784d1117c8059adf2d47bf562"
+    }
+  },
+  "retained_failures": {
+    "records": [
+      {
+        "stage": "cli-negatives-final",
+        "returncode": 1
+      },
+      {
+        "stage": "replay-specs",
+        "returncode": 1
+      }
+    ],
+    "reason": "Assertion-text mismatches in the initial replay test and external CLI rejection harness; corrected reruns qualified. No failed numerical gate is promoted to parity."
+  },
+  "review": {
+    "schema": "cogni_ml.bounded_adversary_review/v1",
+    "reviewer": "/root/refiner_block_boundary_final_adversary",
+    "mode": "read-only; no tests/builds/GPU work",
+    "lineage": "Same-lineage review; correlated, not independent replication",
+    "verdict": "ROBUST",
+    "scope": "One finite T0 V263/stored1280 captured boundary alignment and default preservation only",
+    "observations": [
+      "Complete ordered coverage required for representation and source-exact rows",
+      "10/10 actual BF16 representation remains distinct from9/10 source-exact hashes",
+      "Full raw refiner gate false; block1.norm1 input differs, QKV rounded view diagnostic only",
+      "Source/weight admission, implementation call sites, reports and docs stay within this scope"
+    ],
+    "residual_hardening": "Replay permits any2.8.x while supplementary official Linear.mm source is v2.8.0. Actual qualified report records2.8.0. Future patch-version admission does not extend this certificate; runtime changes require refresh.",
+    "record": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/adversary-final.json",
+      "bytes": 1001,
+      "sha256": "415b480c494b4e35158b808136231d6c325328a30b72395cf5512fc4650443fe"
+    },
+    "claim_boundary": "Captured boundary alignment and preservation only; no motion fix, generation or speedup claim."
+  },
+  "rollback": "Omit --refiner-block-boundaries-bf16-control; leave existing five prelude controls unchanged. Atomic code commit can be reverted separately from earlier work.",
+  "decay_trigger": "Changes to bound sources/binary/runtime/weights/input/noise/caption/mask/layout/precision, or missing/mutated artifacts.",
+  "refresh": "Rebuild from pinned sources; rerun both connected captures, final comparison and replay under the same guard; reauthenticate source/payload hashes and sensitivity controls.",
+  "next_falsifier": "Connect a QKV BF16 output boundary on the exact block0 norm1 input. If mismatches survive, isolate projection reduction on that same input. Keep full raw gate as the only full-chain criterion.",
+  "final_hygiene": {
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv/hygiene-final.json",
+    "bytes": 901,
+    "sha256": "e5c875226395dff8a0226b20613dff7ac88b68d261ef9e186910e253cb1b73c8"
+  }
+}

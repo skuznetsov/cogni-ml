@@ -2,7 +2,7 @@
 
 Document status: GEMM/MoE verified on M5 Max; attention-tail repair verified on M2 and pending on M5
 Current frontier: repaired b9960 comparator, race-free M5 Max GEMM/MoE, and guarded matrix-attention tails
-Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
+Bounded context: `src/ml/llm` bindings used by `experiments/nomic/profile_nomic_vs_llama.cr`
 
 ## Admitted surface
 
@@ -38,7 +38,7 @@ Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
 
 - `spec/llama_ffi_abi_spec.cr`: b9960 context/model parameter sizes.
 - `spec/nomic_metal_policy_spec.cr`: hardware default and explicit override policy.
-- `bin/profile_nomic_vs_llama.cr`: model/context smoke plus ABBA timing; every
+- `experiments/nomic/profile_nomic_vs_llama.cr`: model/context smoke plus ABBA timing; every
   measured vector is checked and the command fails on token or cosine mismatch.
 - Metal/F32/llama.cpp cosine matrix: minimum accepted cosine is defined by the parity test added with the Metal fix.
 - M2 forced-fallback Metal/F32 cosine: `0.999999547`, `0.999999640`,
@@ -64,14 +64,14 @@ Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
   - Falsifiers: exact struct sizes plus comparator runtime smoke
   - Boundary: b9960 layout only; future llama.cpp layout changes reopen this seal
 - Slice: M5 Max matrix-corridor repair
-  - Source/spec: `src/ml/gguf/nomic_metal_policy.cr`, `src/ml/gguf/metal_backend.cr`, `spec/nomic_metal_policy_spec.cr`
+  - Source/spec: `src/ml/models/nomic_bert/metal/policy.cr`, `src/ml/models/nomic_bert/metal/backend.cr`, `spec/nomic_metal_policy_spec.cr`
   - Root cause: matrix kernels reused shared staging memory for output before
     every simdgroup had completed its final tile read
   - Falsifiers: 144 depth/repetition comparisons, 15-run llama.cpp ABBA, and
     136 boundary/mixed-batch comparisons on M5 Max
   - Boundary: matrix attention remains fail-closed on M5 Max
 - Slice: matrix-attention tail repair
-  - Source/spec: `src/ml/gguf/kernels/attention_matmul.metal`,
+  - Source/spec: `src/ml/metal/kernels/nomic_bert/attention_matmul.metal`,
     `spec/attention_matmul_tail_safety_spec.cr`
   - Root cause: the last 8-row K/V matrix load could cross the logical sequence
     allocation; guarded per-simdgroup scratch now zero-pads partial rows

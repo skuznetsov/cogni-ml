@@ -1,0 +1,295 @@
+# Dequantization routines for GGUF quantized tensors.
+# Ported from llama.cpp ggml-quants.c
+#
+# Supports: F32, F16, BF16, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL.
+# QK_K = 256 elements per super-block; QK4_NL = 32 elements per IQ4_NL block.
+
+module ML::GGUF::Dequant
+  QK_K         = 256
+  QK4_NL       =  32
+  K_SCALE_SIZE =  12
+  IQ4_NL_VALUES = StaticArray[
+    -127_i8, -104_i8, -83_i8, -65_i8,
+     -49_i8,  -35_i8, -22_i8, -10_i8,
+       1_i8,   13_i8,  25_i8,  38_i8,
+      53_i8,   69_i8,  89_i8, 113_i8,
+  ]
+
+  # Main entry: dequantize raw bytes to Float32 array
+  def self.dequantize(data : Bytes, type : TensorType, n_elements : Int32) : Array(Float32)
+    case type
+    when .f32?  then dequantize_f32(data, n_elements)
+    when .f16?  then dequantize_f16(data, n_elements)
+    when .bf16? then dequantize_bf16(data, n_elements)
+    when .q4_k? then dequantize_q4_k(data, n_elements)
+    when .q5_k? then dequantize_q5_k(data, n_elements)
+    when .q6_k? then dequantize_q6_k(data, n_elements)
+    when .q8_0? then dequantize_q8_0(data, n_elements)
+    when .iq4_nl? then dequantize_iq4_nl(data, n_elements)
+    else
+      raise "Unsupported dequantization type: #{type.name}"
+    end
+  end
+
+  # F32: direct copy
+  def self.dequantize_f32(data : Bytes, n : Int32) : Array(Float32)
+    result = Array(Float32).new(n, 0.0_f32)
+    n.times do |i|
+      result[i] = IO::ByteFormat::LittleEndian.decode(Float32, data[i * 4, 4])
+    end
+    result
+  end
+
+  # F16: convert half-float to float32
+  def self.dequantize_f16(data : Bytes, n : Int32) : Array(Float32)
+    result = Array(Float32).new(n, 0.0_f32)
+    n.times do |i|
+      result[i] = fp16_to_f32(data[i * 2, 2])
+    end
+    result
+  end
+
+  # BF16: the stored 16 bits are the high half of an IEEE-754 Float32.
+  def self.dequantize_bf16(data : Bytes, n : Int32) : Array(Float32)
+    result = Array(Float32).new(n, 0.0_f32)
+    n.times do |i|
+      high = IO::ByteFormat::LittleEndian.decode(UInt16, data[i * 2, 2])
+      result[i] = (high.to_u32 << 16).unsafe_as(Float32)
+    end
+    result
+  end
+
+  # Q8_0: symmetric 8-bit quantization, 32 elements per block.
+  # Block layout: [d:f16][qs:int8[32]] = 34 bytes.
+  def self.dequantize_q8_0(data : Bytes, n : Int32) : Array(Float32)
+    block_size = 34
+    block_elems = 32
+    nb = (n + block_elems - 1) // block_elems
+    result = Array(Float32).new(n, 0.0_f32)
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      qs_ptr = data.to_unsafe + off + 2
+      base = i * block_elems
+      count = Math.min(block_elems, n - base)
+      count.times do |j|
+        result[base + j] = d * qs_ptr[j].unsafe_as(Int8).to_f32
+      end
+    end
+
+    result
+  end
+
+  # IQ4_NL: non-linear 4-bit quantization, 32 elements per block.
+  # Block layout: [d:f16][qs:u8[16]]. Low nibbles encode elements 0..15,
+  # high nibbles encode elements 16..31, matching llama.cpp dequantize_row_iq4_nl.
+  def self.dequantize_iq4_nl(data : Bytes, n : Int32) : Array(Float32)
+    block_size = 18
+    nb = (n + QK4_NL - 1) // QK4_NL
+    result = Array(Float32).new(n, 0.0_f32)
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      qs_ptr = data.to_unsafe + off + 2
+      base = i * QK4_NL
+      first_count = Math.min(QK4_NL // 2, n - base)
+      first_count.times do |j|
+        q = qs_ptr[j] & 0x0F
+        result[base + j] = d * IQ4_NL_VALUES[q].to_f32
+      end
+
+      second_base = base + QK4_NL // 2
+      second_count = Math.min(QK4_NL // 2, n - second_base)
+      second_count.times do |j|
+        q = qs_ptr[j] >> 4
+        result[second_base + j] = d * IQ4_NL_VALUES[q].to_f32
+      end
+    end
+
+    result
+  end
+
+  # Q4_K: 4.5 bits per weight, QK_K=256 block, 144 bytes/block
+  # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B]
+  # Ported from llama.cpp dequantize_row_q4_K (ggml-quants.c).
+  def self.dequantize_q4_k(data : Bytes, n : Int32) : Array(Float32)
+    nb = n // QK_K
+    result = Array(Float32).new(n, 0.0_f32)
+    block_size = 144 # 2 + 2 + 12 + 128
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      dmin = fp16_to_f32(data[off + 2, 2])
+      scales_ptr = data.to_unsafe + off + 4  # 12 bytes
+      qs_ptr = data.to_unsafe + off + 4 + 12 # 128 bytes
+
+      is = 0
+      yi = i * QK_K
+      4.times do |_j| # 4 iterations × 64 elements = 256 (QK_K)
+        sc, m = get_scale_min_k4(is, scales_ptr)
+        d1 = d * sc
+        m1 = dmin * m
+        sc2, m2 = get_scale_min_k4(is + 1, scales_ptr)
+        d2 = d * sc2
+        m2f = dmin * m2
+
+        32.times do |l|
+          result[yi + l] = d1 * (qs_ptr[l] & 0x0F).to_f32 - m1
+        end
+        32.times do |l|
+          result[yi + 32 + l] = d2 * (qs_ptr[l].to_u32 >> 4).to_f32 - m2f
+        end
+
+        qs_ptr += 32
+        is += 2
+        yi += 64
+      end
+    end
+
+    result
+  end
+
+  # Q5_K: 5.5 bits per weight, QK_K=256 block, 176 bytes/block
+  # Block layout: [d:f16][dmin:f16][scales:12B][qh:32B][qs:128B]
+  def self.dequantize_q5_k(data : Bytes, n : Int32) : Array(Float32)
+    nb = n // QK_K
+    result = Array(Float32).new(n, 0.0_f32)
+    block_size = 176 # 2+2+12+32+128
+    yi = 0
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      dmin = fp16_to_f32(data[off + 2, 2])
+      scales_ptr = (data.to_unsafe + off + 4)       # 12 bytes
+      qh_ptr = (data.to_unsafe + off + 4 + 12)      # 32 bytes
+      ql_ptr = (data.to_unsafe + off + 4 + 12 + 32) # 128 bytes
+
+      u1 = 1_u8
+      u2 = 2_u8
+      is = 0
+
+      4.times do |_j| # 4 iterations × 64 elements = 256
+        sc, m = get_scale_min_k4(is, scales_ptr)
+        d1 = d * sc
+        m1 = dmin * m
+        sc2, m2_val = get_scale_min_k4(is + 1, scales_ptr)
+        d2 = d * sc2
+        m2 = dmin * m2_val
+
+        32.times do |l|
+          q_low = ql_ptr[l] & 0x0F
+          q_high = (qh_ptr[l] & u1) != 0 ? 16 : 0
+          result[yi] = d1 * (q_low + q_high) - m1
+          yi += 1
+        end
+        32.times do |l|
+          q_low = (ql_ptr[l] >> 4) & 0x0F
+          q_high = (qh_ptr[l] & u2) != 0 ? 16 : 0
+          result[yi] = d2 * (q_low + q_high) - m2
+          yi += 1
+        end
+
+        ql_ptr += 32
+        is += 2
+        u1 = u1 << 2
+        u2 = u2 << 2
+      end
+    end
+
+    result
+  end
+
+  # Q6_K: 6.5625 bits per weight, QK_K=256 block, 210 bytes/block
+  # Block layout: [ql:128B][qh:64B][scales:16B][d:f16]
+  def self.dequantize_q6_k(data : Bytes, n : Int32) : Array(Float32)
+    nb = n // QK_K
+    result = Array(Float32).new(n, 0.0_f32)
+    block_size = 210 # 128+64+16+2
+    yi = 0
+
+    nb.times do |i|
+      off = i * block_size
+      ql_ptr = data.to_unsafe + off            # 128 bytes (QK_K/2)
+      qh_ptr = data.to_unsafe + off + 128      # 64 bytes (QK_K/4)
+      sc_ptr = data.to_unsafe + off + 128 + 64 # 16 bytes (QK_K/16) — signed int8
+      d = fp16_to_f32(data[off + 128 + 64 + 16, 2])
+
+      2.times do |_n| # 2 iterations × 128 elements = 256
+        32.times do |l|
+          is = l // 16
+          q1 = ((ql_ptr[l].to_i32 & 0xF) | (((qh_ptr[l].to_i32 >> 0) & 3) << 4)) - 32
+          q2 = ((ql_ptr[l + 32].to_i32 & 0xF) | (((qh_ptr[l].to_i32 >> 2) & 3) << 4)) - 32
+          q3 = ((ql_ptr[l].to_i32 >> 4) | (((qh_ptr[l].to_i32 >> 4) & 3) << 4)) - 32
+          q4 = ((ql_ptr[l + 32].to_i32 >> 4) | (((qh_ptr[l].to_i32 >> 6) & 3) << 4)) - 32
+
+          sc0 = sc_ptr[is].unsafe_as(Int8).to_f32
+          sc2 = sc_ptr[is + 2].unsafe_as(Int8).to_f32
+          sc4 = sc_ptr[is + 4].unsafe_as(Int8).to_f32
+          sc6 = sc_ptr[is + 6].unsafe_as(Int8).to_f32
+
+          result[yi + l] = d * sc0 * q1
+          result[yi + l + 32] = d * sc2 * q2
+          result[yi + l + 64] = d * sc4 * q3
+          result[yi + l + 96] = d * sc6 * q4
+        end
+        yi += 128
+        ql_ptr += 64
+        qh_ptr += 32
+        sc_ptr += 8
+      end
+    end
+
+    result
+  end
+
+  # Extract 6-bit scale and min from packed scales array (K_SCALE_SIZE=12 bytes)
+  # Ported from get_scale_min_k4() in ggml-quants.c
+  def self.get_scale_min_k4(j : Int32, scales : Pointer(UInt8)) : {Float32, Float32}
+    if j < 4
+      sc = (scales[j] & 63).to_f32
+      m = (scales[j + 4] & 63).to_f32
+    else
+      sc = ((scales[j + 4] & 0x0F) | ((scales[j - 4] >> 6) << 4)).to_f32
+      m = ((scales[j + 4] >> 4) | ((scales[j] >> 6) << 4)).to_f32
+    end
+    {sc, m}
+  end
+
+  # Convert IEEE 754 half-precision (2 bytes LE) to Float32
+  def self.fp16_to_f32(bytes : Bytes) : Float32
+    h = IO::ByteFormat::LittleEndian.decode(UInt16, bytes)
+    fp16_to_f32(h)
+  end
+
+  def self.fp16_to_f32(h : UInt16) : Float32
+    sign = (h >> 15) & 1
+    exp = (h >> 10) & 0x1F
+    mant = h & 0x03FF
+
+    if exp == 0
+      # Subnormal or zero
+      if mant == 0
+        return sign == 1 ? -0.0_f32 : 0.0_f32
+      end
+      # Subnormal
+      f = mant.to_f32 / 1024.0_f32
+      f *= (2.0_f32 ** -14)
+      return sign == 1 ? -f : f
+    elsif exp == 31
+      # Inf or NaN
+      if mant == 0
+        return sign == 1 ? Float32::INFINITY * -1 : Float32::INFINITY
+      else
+        return Float32::NAN
+      end
+    end
+
+    # Normal
+    f = (1.0_f32 + mant.to_f32 / 1024.0_f32) * (2.0_f32 ** (exp.to_i32 - 15))
+    sign == 1 ? -f : f
+  end
+end

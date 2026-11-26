@@ -7,13 +7,13 @@ require "../src/ml/gguf/qwen3vl_text_reference"
 require "../src/ml/gguf/qwen3vl_text_weights"
 require "../src/ml/gguf/qwen3vl_text_block"
 
-private PINNED_PROMPT         = "red cube"
-private PINNED_PAYLOAD_SHA256 = "3edcd7bf7964237d649a43c35cd82f6d6bd7b15835fddec2b1fe42f3a89b1e07"
-private TOKEN_COUNT           = 2
-private PREFIX_DROP_COUNT     = 14
-private MAX_RAW_TOKEN_COUNT   = 256
-private MAX_REFERENCE_BYTES   = MAX_RAW_TOKEN_COUNT.to_i64 * ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE * 4_i64 * 38_i64 + MAX_RAW_TOKEN_COUNT.to_i64 * 24_i64
-private SHA256_RE             = /\A[0-9a-fA-F]{64}\z/
+private PINNED_PROMPT           = "red cube"
+private PINNED_PAYLOAD_SHA256   = "3edcd7bf7964237d649a43c35cd82f6d6bd7b15835fddec2b1fe42f3a89b1e07"
+private TOKEN_COUNT             =   2
+private PREFIX_DROP_COUNT       =  14
+private MAX_RAW_TOKEN_COUNT     = 256
+private MAX_REFERENCE_BYTES     = MAX_RAW_TOKEN_COUNT.to_i64 * ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE * 4_i64 * 38_i64 + MAX_RAW_TOKEN_COUNT.to_i64 * 24_i64
+private SHA256_RE               = /\A[0-9a-fA-F]{64}\z/
 private PINNED_DIFFUSERS_COMMIT = "8b3c707ebd3ec4881f4190cf42931da07eaf3b65"
 
 private def qwen3vl_prefix(values : Array(Float32), scalar_count : Int32) : Array(Float32)
@@ -124,6 +124,7 @@ private def qwen3vl_write_layer0_trace(
   prompt : String,
   model_revision : String,
   fixture_payload_sha256 : String,
+  qkv_projection_backend_label : String,
 ) : Nil
   raise ArgumentError.new("native layer-0 trace is empty") if trace.empty?
   Dir.mkdir(directory)
@@ -150,6 +151,7 @@ private def qwen3vl_write_layer0_trace(
       json.field "prompt", prompt
       json.field "model_revision", model_revision
       json.field "fixture_payload_sha256", fixture_payload_sha256
+      json.field "qkv_projection_backend", qkv_projection_backend_label
       json.field "dtype", "bfloat16-le"
       json.field "stages" do
         json.object do
@@ -178,6 +180,7 @@ private def qwen3vl_write_retained_bf16(
   model_revision : String,
   fixture_payload_sha256 : String,
   fixture_manifest_sha256 : String,
+  qkv_projection_backend_label : String,
   drop_idx : Int32,
   row_count : Int32,
   hidden_dim : Int32,
@@ -196,6 +199,7 @@ private def qwen3vl_write_retained_bf16(
       json.field "model_revision", model_revision
       json.field "fixture_payload_sha256", fixture_payload_sha256
       json.field "fixture_manifest_sha256", fixture_manifest_sha256
+      json.field "qkv_projection_backend", qkv_projection_backend_label
       json.field "drop_idx", drop_idx
       json.field "shape", [row_count, hidden_dim]
       json.field "dtype", "bfloat16-le"
@@ -233,13 +237,15 @@ composed_only = false
 reference_sha256 : String? = nil
 projection_backend = ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Scalar
 projection_backend_label = "scalar"
+qkv_projection_backend : ML::GGUF::Qwen3VLTextBlockConfig::QKVProjectionBackend? = nil
+qkv_projection_backend_label = "none"
 encoder_dir = ENV["QWEN3VL_TEXT_ENCODER_DIR"]?
 reference_dir = ENV["QWEN3VL_TEXT_REFERENCE_DIR"]?
 retained_bf16_out : String? = nil
 layer0_trace_dir : String? = nil
 
 OptionParser.parse do |parser|
-  parser.banner = "Usage: crystal run scripts/qwen3vl_text_layer_sweep.cr -- [--layers N] [--full-prompt [--composed-only]] [--reference-sha256 SHA256] [--projection-backend scalar|accelerate] [--retained-bf16-out PATH] [--layer0-trace-dir DIR] --text-encoder-dir DIR --reference-dir DIR"
+  parser.banner = "Usage: crystal run scripts/qwen3vl_text_layer_sweep.cr -- [--layers N] [--full-prompt [--composed-only]] [--reference-sha256 SHA256] [--projection-backend scalar|accelerate] [--qkv-projection-backend torch26-arm64-bf16] [--retained-bf16-out PATH] [--layer0-trace-dir DIR] --text-encoder-dir DIR --reference-dir DIR"
   parser.on("--layers=N", "Number of leading decoder layers to sweep (1..36, default 2)") { |value| layers = value.to_i? || abort("--layers must be an integer") }
   parser.on("--full-prompt", "Use all raw prompt tokens (default uses the first two)") { full_prompt = true }
   parser.on("--composed-only", "Skip isolated block runs; requires --full-prompt") { composed_only = true }
@@ -254,6 +260,15 @@ OptionParser.parse do |parser|
       projection_backend_label = "accelerate"
     else
       abort("--projection-backend must be scalar or accelerate")
+    end
+  end
+  parser.on("--qkv-projection-backend=BACKEND", "Opt in to PyTorch 2.6 arm64 BF16 Q/K/V projections (omitted means none)") do |value|
+    case value.downcase
+    when "torch26-arm64-bf16"
+      qkv_projection_backend = ML::GGUF::Qwen3VLTextBlockConfig::QKVProjectionBackend::Torch26Arm64Bf16
+      qkv_projection_backend_label = "torch26-arm64-bf16"
+    else
+      abort("--qkv-projection-backend must be torch26-arm64-bf16")
     end
   end
   parser.on("--retained-bf16-out=PATH", "Write final retained BF16 rows (requires --full-prompt and --layers=36)") { |value| retained_bf16_out = value }
@@ -313,8 +328,8 @@ begin
   embedding_metadata = manifest["embedding"]
   runtime_metadata = manifest["runtime"]
   expected_template = "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n" \
-                     "<|im_start|>user\n#{manifest["prompt"].as_s}<|im_end|>\n" \
-                     "<|im_start|>assistant\n"
+                      "<|im_start|>user\n#{manifest["prompt"].as_s}<|im_end|>\n" \
+                      "<|im_start|>assistant\n"
   processor_kwargs = tokenization_metadata["processor_kwargs"]
   unless tokenization_metadata["raw_template_text"].as_s == expected_template &&
          tokenization_metadata["tokenizer_truncation"].as_bool == false &&
@@ -417,9 +432,10 @@ begin
     intermediate_dim: ML::GGUF::Qwen3VLTextWeights::INTERMEDIATE_SIZE,
     attention_arithmetic: ML::GGUF::Qwen3VLTextBlockConfig::AttentionArithmetic::SdpaF32,
     projection_backend: projection_backend,
+    qkv_projection_backend: qkv_projection_backend,
   )
 
-  puts "reference_validation=passed model_revision=#{reference.model_revision} prompt=#{reference.prompt.inspect} payload_sha256=#{payload_sha256} manifest_sha256=#{reference_manifest_sha256} raw_tokens=#{reference.raw_sequence_length} retained_tokens=#{reference.actual_sequence_length} drop_idx=#{reference.drop_idx} retained_rows=#{retained_raw_rows.inspect} layers=#{layers} tokens=#{token_count} attention_mask=#{attention_mask.count(true)}/#{token_count} attention_arithmetic=SdpaF32 projection_backend=#{projection_backend_label} composed_only=#{composed_only}"
+  puts "reference_validation=passed model_revision=#{reference.model_revision} prompt=#{reference.prompt.inspect} payload_sha256=#{payload_sha256} manifest_sha256=#{reference_manifest_sha256} raw_tokens=#{reference.raw_sequence_length} retained_tokens=#{reference.actual_sequence_length} drop_idx=#{reference.drop_idx} retained_rows=#{retained_raw_rows.inspect} layers=#{layers} tokens=#{token_count} attention_mask=#{attention_mask.count(true)}/#{token_count} attention_arithmetic=SdpaF32 projection_backend=#{projection_backend_label} qkv_projection_backend=#{qkv_projection_backend_label} composed_only=#{composed_only}"
   weights = ML::GGUF::Qwen3VLTextWeights.from_directory(encoder_path)
   begin
     composed_input = qwen3vl_prefix(reference.hidden_state(0), scalar_count)
@@ -430,7 +446,10 @@ begin
         trace = layer0_trace_dir ? {} of String => Array(Float32) : nil
         actual = ML::GGUF::Qwen3VLTextBlock.forward(composed_input, attention_mask, weights.block_weights(layer_index), config, trace: trace)
         if trace_dir = layer0_trace_dir
-          qwen3vl_write_layer0_trace(trace_dir, trace.not_nil!, token_count, reference.prompt, reference.model_revision, payload_sha256)
+          qwen3vl_write_layer0_trace(
+            trace_dir, trace.not_nil!, token_count, reference.prompt, reference.model_revision,
+            payload_sha256, qkv_projection_backend_label
+          )
           puts "native_layer0_trace=#{trace_dir} stages=#{trace.not_nil!.size} dtype=bfloat16-le"
         end
         metrics = qwen3vl_metrics(actual, expected, hidden_dim)
@@ -475,7 +494,7 @@ begin
         if output_path = retained_bf16_out
           artifact = qwen3vl_write_retained_bf16(
             output_path, retained_actual, reference.prompt, reference.model_revision,
-            payload_sha256, reference_manifest_sha256, reference.drop_idx,
+            payload_sha256, reference_manifest_sha256, qkv_projection_backend_label, reference.drop_idx,
             retained_raw_rows.size.to_i32, hidden_dim
           )
           puts "retained_bf16_out=#{output_path} dtype=bfloat16-le shape=#{retained_raw_rows.size}x#{hidden_dim} nbytes=#{artifact[:nbytes]} sha256=#{artifact[:sha256]} manifest=#{artifact[:manifest_path]}"

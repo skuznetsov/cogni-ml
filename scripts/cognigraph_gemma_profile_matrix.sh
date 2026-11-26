@@ -62,7 +62,7 @@ if [[ ! -x "$PROFILE_BIN" ]]; then
   echo "building profile binary: $PROFILE_BIN" >&2
   CRYSTAL_CACHE_DIR="${CRYSTAL_CACHE_DIR:-/tmp/cogni_ml_cognigraph_gemma_matrix_build}" \
     "$RUN_SAFE" "$CRYSTAL_BIN" "$TIMEOUT_SEC" "$MAX_RSS_MB" \
-    build "$ROOT/bin/gemma4_metal_decode_profile.cr" \
+    build "$ROOT/experiments/gemma4/gemma4_metal_decode_profile.cr" \
     -o "$PROFILE_BIN" \
     --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
 fi

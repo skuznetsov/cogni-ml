@@ -5,6 +5,10 @@
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #include <mach/mach_time.h>
+#include <mach/mach.h>
+#include <libproc.h>
+#include <sys/resource.h>
+#include <sys/sysctl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -23,6 +27,38 @@ static id<MTLCommandQueue> gs_command_queue = nil;
 static NSMutableDictionary<NSString*, id<MTLLibrary>>* gs_libraries = nil;
 static id<MTLLibrary> gs_default_library = nil;
 
+// Host telemetry only: this does not submit or wait for GPU work. Inactive
+// pages are potentially reclaimable, not reserved for this process. Unknown
+// fields stay zero so admission can fail closed rather than invent headroom.
+extern "C" int32_t gs_drama3_memory_snapshot(uint64_t* physical,
+                                             uint64_t* free_reclaimable,
+                                             uint64_t* footprint,
+                                             uint64_t* peak_footprint) {
+    if (!physical || !free_reclaimable || !footprint || !peak_footprint) return 0;
+    *physical = *free_reclaimable = *footprint = *peak_footprint = 0;
+    size_t length = sizeof(*physical);
+    if (sysctlbyname("hw.memsize", physical, &length, nullptr, 0) != 0) return 0;
+    mach_port_t host = mach_host_self();
+    vm_size_t page_size = 0;
+    vm_statistics64_data_t stats = {};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    const bool ok = host_page_size(host, &page_size) == KERN_SUCCESS &&
+        host_statistics64(host, HOST_VM_INFO64,
+            reinterpret_cast<host_info64_t>(&stats), &count) == KERN_SUCCESS;
+    mach_port_deallocate(mach_task_self(), host);
+    if (!ok || page_size == 0) return 0;
+    // speculative_count is already included in free_count; purgeable pages
+    // overlap other VM states. Neither is added again.
+    *free_reclaimable = (uint64_t(stats.free_count) + stats.inactive_count) * page_size;
+    rusage_info_v4 usage = {};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4,
+            reinterpret_cast<rusage_info_t*>(&usage)) == 0) {
+        *footprint = usage.ri_phys_footprint;
+        *peak_footprint = usage.ri_lifetime_max_phys_footprint;
+    }
+    return *physical > 0 && *free_reclaimable <= *physical ? 1 : 0;
+}
+
 // Metal exposes no cancellation API for a submitted command buffer. A
 // process-wide watchdog bounds the native host-side wait; if the deadline is
 // exceeded the only safe action is to terminate the inference process without
@@ -35,8 +71,20 @@ struct GSCommandWaitRecord {
     int64_t timeout_ms;
 };
 
-static std::mutex gs_command_waits_mutex;
-static std::vector<GSCommandWaitRecord*> gs_command_waits;
+struct GSCommandWaitState {
+    std::mutex mutex;
+    std::vector<GSCommandWaitRecord*> records;
+};
+
+// The watchdog dispatch source is process-wide and may still run while C++
+// static objects are being torn down. Keep its mutex and records alive for the
+// full process lifetime so a late callback cannot lock or inspect destroyed
+// state. This intentionally retains one small state object until process exit.
+static GSCommandWaitState& command_wait_state() {
+    static GSCommandWaitState* state = new GSCommandWaitState();
+    return *state;
+}
+
 static dispatch_source_t gs_command_watchdog = nil;
 
 static int64_t command_timeout_ms() {
@@ -66,9 +114,10 @@ static uint64_t monotonic_time_ns() {
 }
 
 static void command_watchdog_tick() {
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
     uint64_t now = monotonic_time_ns();
-    for (GSCommandWaitRecord* record : gs_command_waits) {
+    for (GSCommandWaitRecord* record : state.records) {
         if (now >= record->deadline_ns) {
             std::fprintf(stderr,
                          "GS FATAL: Metal command buffer exceeded %lldms; "
@@ -104,14 +153,16 @@ static void register_command_wait(GSCommandWaitRecord* record, int64_t timeout_m
     ensure_command_watchdog();
     record->timeout_ms = timeout_ms;
     record->deadline_ns = monotonic_time_ns() + (uint64_t)timeout_ms * NSEC_PER_MSEC;
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
-    gs_command_waits.push_back(record);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.records.push_back(record);
 }
 
 static void unregister_command_wait(GSCommandWaitRecord* record) {
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
-    auto found = std::find(gs_command_waits.begin(), gs_command_waits.end(), record);
-    if (found != gs_command_waits.end()) gs_command_waits.erase(found);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    auto found = std::find(state.records.begin(), state.records.end(), record);
+    if (found != state.records.end()) state.records.erase(found);
 }
 
 struct GSCommandSubmitProfile {
@@ -132,6 +183,46 @@ static double command_mach_seconds() {
         return (double)info.numer / (double)info.denom / 1e9;
     }();
     return (double)mach_absolute_time() * seconds_per_tick;
+}
+
+// Process/task observations only. These counters do not certify Metal page
+// residency and never submit, synchronize, touch mapped weights or read buffers.
+// values: user ns, system ns, task pageins/faults/COW faults, process disk-read
+// bytes/resident bytes/physical footprint. Bits certify independent API groups.
+extern "C" int32_t gs_drama3_process_resources(uint64_t* values,
+                                               double* sample_begin,
+                                               double* sample_end) {
+    if (!values || !sample_begin || !sample_end) return 0;
+    std::fill(values, values + 8, 0);
+    *sample_begin = command_mach_seconds();
+    int32_t valid = 0;
+    rusage cpu = {};
+    if (getrusage(RUSAGE_SELF, &cpu) == 0) {
+        values[0] = uint64_t(cpu.ru_utime.tv_sec) * 1000000000ULL + uint64_t(cpu.ru_utime.tv_usec) * 1000ULL;
+        values[1] = uint64_t(cpu.ru_stime.tv_sec) * 1000000000ULL + uint64_t(cpu.ru_stime.tv_usec) * 1000ULL;
+        valid |= 1;
+    }
+    task_events_info_data_t events = {};
+    mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_EVENTS_INFO,
+                  reinterpret_cast<task_info_t>(&events), &count) == KERN_SUCCESS &&
+            count == TASK_EVENTS_INFO_COUNT && events.pageins >= 0 &&
+            events.faults >= 0 && events.cow_faults >= 0) {
+        values[2] = events.pageins;
+        values[3] = events.faults;
+        values[4] = events.cow_faults;
+        valid |= 2;
+    }
+    rusage_info_v4 usage = {};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4,
+            reinterpret_cast<rusage_info_t*>(&usage)) == 0) {
+        values[5] = usage.ri_diskio_bytesread;
+        values[6] = usage.ri_resident_size;
+        values[7] = usage.ri_phys_footprint;
+        valid |= 4;
+    }
+    *sample_end = command_mach_seconds();
+    return valid;
 }
 
 static bool pipeline_profile_enabled() {
@@ -184,7 +275,9 @@ static bool command_submit_profile_enabled() {
 }
 
 static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
-                                        GSCommandSubmitProfile* profile = nullptr) {
+                                        GSCommandSubmitProfile* profile = nullptr,
+                                        double* mach_before_wait = nullptr,
+                                        double* mach_after_wait = nullptr) {
     uint64_t entered = profile ? monotonic_time_ns() : 0;
     int64_t timeout_ms = command_timeout_ms();
     GSCommandWaitRecord record;
@@ -193,7 +286,9 @@ static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
     if (profile) profile->mach_before_commit = command_mach_seconds();
     if (commit) [cmd commit];
     uint64_t committed = profile ? monotonic_time_ns() : 0;
+    if (mach_before_wait != nullptr) *mach_before_wait = command_mach_seconds();
     [cmd waitUntilCompleted];
+    if (mach_after_wait != nullptr) *mach_after_wait = command_mach_seconds();
     if (profile) profile->mach_after_wait = command_mach_seconds();
     uint64_t completed = profile ? monotonic_time_ns() : 0;
     if (timeout_ms > 0) unregister_command_wait(&record);
@@ -235,6 +330,11 @@ extern "C" int32_t init_device_impl();
 static int32_t ensure_device() {
     if (gs_device != nil) return 0;
     return init_device_impl();
+}
+
+extern "C" int64_t gs_max_buffer_length() {
+    if (ensure_device() != 0) return 0;
+    return (int64_t)gs_device.maxBufferLength;
 }
 
 // ============================================================================
@@ -543,6 +643,22 @@ extern "C" void gs_commit_command_buffer(void* cmd_handle) {
     [cmd commit];
 }
 
+// Commit once and return host-clock bounds around the existing commit call.
+// This is optional telemetry only; it does not wait or alter queue semantics.
+extern "C" void gs_commit_command_buffer_timeline(
+    void* cmd_handle,
+    double* mach_before_commit,
+    double* mach_after_commit
+) {
+    if (mach_before_commit != nullptr) *mach_before_commit = 0.0;
+    if (mach_after_commit != nullptr) *mach_after_commit = 0.0;
+    if (cmd_handle == nullptr) return;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;
+    if (mach_before_commit != nullptr) *mach_before_commit = command_mach_seconds();
+    [cmd commit];
+    if (mach_after_commit != nullptr) *mach_after_commit = command_mach_seconds();
+}
+
 // Submit two command buffers: commit first immediately, commit second after callback
 // The first buffer starts executing on GPU while second is still being encoded
 extern "C" void gs_submit_pipeline(void* cmd1, void* cmd2) {
@@ -588,6 +704,55 @@ extern "C" int32_t gs_wait_command_buffer_status_gpu_elapsed(
     if (status != 0) return status;
     command_gpu_elapsed(cmd, elapsed_seconds);
     return 0;
+}
+
+// Wait once on an already committed command and return best-effort command,
+// wait-boundary, and GPU timestamps. Missing or invalid GPU timing is reported
+// through its validity flag and never changes completion status.
+extern "C" int32_t gs_wait_command_buffer_status_timeline(
+    void* cmd_handle,
+    double mach_before_commit,
+    double* mach_before_wait,
+    double* mach_after_wait,
+    double* gpu_start,
+    double* gpu_end,
+    int32_t* gpu_timing_valid,
+    double* kernel_start = nullptr,
+    double* kernel_end = nullptr,
+    int32_t* kernel_timing_valid = nullptr
+) {
+    if (mach_before_wait != nullptr) *mach_before_wait = 0.0;
+    if (mach_after_wait != nullptr) *mach_after_wait = 0.0;
+    if (gpu_start != nullptr) *gpu_start = 0.0;
+    if (gpu_end != nullptr) *gpu_end = 0.0;
+    if (gpu_timing_valid != nullptr) *gpu_timing_valid = 0;
+    if (kernel_start != nullptr) *kernel_start = 0.0;
+    if (kernel_end != nullptr) *kernel_end = 0.0;
+    if (kernel_timing_valid != nullptr) *kernel_timing_valid = 0;
+    if (cmd_handle == nullptr) return -1;
+
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    wait_for_command_completion(cmd, false, nullptr, mach_before_wait, mach_after_wait);
+    int32_t status = command_completion_status(cmd);
+    const double start = cmd.GPUStartTime;
+    const double end = cmd.GPUEndTime;
+    if (gpu_start != nullptr) *gpu_start = start;
+    if (gpu_end != nullptr) *gpu_end = end;
+
+    const double after_wait = mach_after_wait == nullptr ? 0.0 : *mach_after_wait;
+    const bool gpu_valid = status == 0 && command_timeline_valid(
+        mach_before_commit, start, end, after_wait);
+    if (gpu_timing_valid != nullptr) *gpu_timing_valid = gpu_valid ? 1 : 0;
+    // Passive CPU driver scheduling timestamps; only read after the same wait.
+    // A long interval is not a page-in-duration or a pure GPU-queue certificate.
+    const double kstart = cmd.kernelStartTime;
+    const double kend = cmd.kernelEndTime;
+    if (kernel_start != nullptr) *kernel_start = kstart;
+    if (kernel_end != nullptr) *kernel_end = kend;
+    if (kernel_timing_valid != nullptr) {
+        *kernel_timing_valid = status == 0 && command_schedule_valid(kstart, kend) ? 1 : 0;
+    }
+    return status;
 }
 
 extern "C" void commit_and_wait_impl(void* cmd_handle) {

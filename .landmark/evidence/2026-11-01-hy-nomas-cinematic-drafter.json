@@ -1,0 +1,377 @@
+{
+  "adversary": {
+    "attacks": [
+      "Wrong model/index/lineage and prompt/noise/input identities fail closed.",
+      "Cinematic checkpoints cannot be emitted under a base contract.",
+      "Incomplete/malformed comparison geometry and occupied output directory are rejected.",
+      "Historical baseline timing and sampled stills are excluded from speedup/general-quality claims."
+    ],
+    "scope": "Tested model/input identity, unchanged base portrait and complete paired artifacts. Same-lineage review is correlated; it is not independent quality evidence.",
+    "verdict": "ROBUST"
+  },
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 51781,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/experiment-summary.json",
+      "sha256": "7326354aac709bffab4feab797b840d5f15af90682ec03954a021cc5843092a1"
+    },
+    {
+      "bytes": 3241,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/visual-review.json",
+      "sha256": "2740855b7c25d8aab38efedd6155e7e4817f78845f3eb698f7253886019fd82a"
+    },
+    {
+      "bytes": 26257,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/comparison.json",
+      "sha256": "383d8511756252aae4bc6f1d2a4107b879251c5f87f6005ce0b6000aa56cfd3e"
+    },
+    {
+      "bytes": 16638752,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/reel-60s.mp4",
+      "sha256": "debd31307d313230f18004cd9ad2d0b7bb93b7b602f5d51b1d5302c891fde4e8"
+    },
+    {
+      "bytes": 5670,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/index.html",
+      "sha256": "80f544e90c45f539a9207aea8b7821a85420fb0570443246a8f99276ae494cbf"
+    },
+    {
+      "bytes": 1056,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/base-repeat-aa.json",
+      "sha256": "97470b09515be2567b3abd9b8e0f0e2dcce792d338bdb5581da66561139ddf3d"
+    },
+    {
+      "bytes": 178950,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/upstream-merge.json",
+      "sha256": "6b819aae79aec8646d3ae15a0ff6113a9b9d2041417efe4befc276bc71eeb2f5"
+    },
+    {
+      "bytes": 2009,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs-adversary-review.json",
+      "sha256": "0d9f14721afc4a02b362710ec4610f20a0dba2aa115020ca6ecedcf4abf2618f"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_draft.py",
+      "examples/hy_nomas_sequence_generate.cr",
+      "examples/support/hy_nomas_draft_results.py",
+      "examples/support/hy_nomas_sequence.cr",
+      "examples/support/hy_nomas_draft_inputs.py",
+      "spec/hy_nomas_draft_results_test.py",
+      "spec/hy_nomas_draft_test.py",
+      "spec/hy_nomas_sequence_admission_spec.cr",
+      "spec/hy_nomas_draft_reuse_test.py",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json"
+    ],
+    "changed_paths": [
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_draft.py",
+      "examples/hy_nomas_sequence_generate.cr",
+      "examples/support/hy_nomas_draft_results.py",
+      "examples/support/hy_nomas_sequence.cr",
+      "examples/support/hy_nomas_draft_inputs.py",
+      "spec/hy_nomas_draft_results_test.py",
+      "spec/hy_nomas_draft_test.py",
+      "spec/hy_nomas_sequence_admission_spec.cr",
+      "spec/hy_nomas_draft_reuse_test.py",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Weights, raw tensors, binaries and videos remain outside Git. Digests detect mutation but do not restore lost files.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Refresh admission, hashes and parity after producer/validator source, executable, input/conditioning/noise, model/cache, geometry/history or runtime changes; refresh timing after host/device-state changes.",
+    "level": "VERIFIED",
+    "scope": "Model/input admission, completed paired artifact integrity and one exact base-path regression control. Visual quality and full upstream trajectory parity are excluded.",
+    "text": "The drafter admits the authenticated Cinematic BF16 cache as an explicit opt-in and produced six paired ten-second scenes from exact reused conditioning and noise."
+  },
+  "created_at": "2026-11-01T21:12:40.825785+00:00",
+  "evidence": [
+    {
+      "kind": "executed_tests",
+      "ref": {
+        "bytes": 345,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/logs/python-expanded-tests.out",
+        "sha256": "f7507a2a98dafc780225612ce3c721d6d5e4ffcba8edda6957cc7a69a80cf3cc"
+      },
+      "result": "passed",
+      "signal": "60 Python tests, OK, including model/cache/input/prompt/noise mismatch rejection."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": {
+        "bytes": 87,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/logs/native-cpu-spec.out",
+        "sha256": "f25d159314bf628a6cbd8d390d740e2f6543b2bcb0f1f02bc9072106bbbcccfd"
+      },
+      "result": "passed",
+      "signal": "11 CPU-only Crystal examples, 0 failures; original default and Cinematic checkpoint/capture/restore rejection."
+    },
+    {
+      "kind": "executed_build",
+      "ref": {
+        "bytes": 12411,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/logs/build.jsonl",
+        "sha256": "57040fe14ccb02eff58bc7d9afa2959dd226b7f7ccf70bc2f34836c8e2e91ada"
+      },
+      "result": "passed",
+      "signal": "Fresh guarded Metal build exit 0; Crystal formatting exit 0."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": {
+        "bytes": 1056,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/base-repeat-aa.json",
+        "sha256": "97470b09515be2567b3abd9b8e0f0e2dcce792d338bdb5581da66561139ddf3d"
+      },
+      "result": "passed",
+      "signal": "Fresh original portrait raw pixels and latent bank are byte-exact against retained base with matching inputs."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": {
+        "bytes": 26257,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/comparison.json",
+        "sha256": "383d8511756252aae4bc6f1d2a4107b879251c5f87f6005ce0b6000aa56cfd3e"
+      },
+      "result": "passed",
+      "signal": "All six prompt/conditioning/noise identities match. Six 240-frame pairs and one 1440-frame reel validate at 24 fps and 1024x320; completed directory published atomically."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": {
+        "bytes": 51781,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/experiment-summary.json",
+        "sha256": "7326354aac709bffab4feab797b840d5f15af90682ec03954a021cc5843092a1"
+      },
+      "result": "passed",
+      "signal": "18 successful guarded stages with empty final sampled process groups, zero observed stage swap growth and unchanged 10% cache-aware floor. Every inference phase reports zero tracked encode allocations/readbacks/preterminal waits and one terminal drain."
+    },
+    {
+      "kind": "upstream_reference",
+      "ref": {
+        "bytes": 178950,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/upstream-merge.json",
+        "sha256": "6b819aae79aec8646d3ae15a0ff6113a9b9d2041417efe4befc276bc71eeb2f5"
+      },
+      "result": "passed",
+      "signal": "Fresh source-MPS official merge, blocks 0/1: 302113792 BF16 values, zero mismatches. Unchanged atol=rtol=2e-5; weight check only."
+    },
+    {
+      "kind": "prior_authenticated_evidence",
+      "ref": {
+        "bytes": 23187,
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json",
+        "sha256": "61010df4e4fca2e5f2ce22325e8403b6bfa01d048cdeb97be105752a55f3898a"
+      },
+      "result": "scope_limited",
+      "signal": "Prior all-54-block merged-weight check and same-latent PixelUMM replay authenticated. This is not a fresh Cinematic DiT trajectory or 10-second intermediate gate."
+    },
+    {
+      "kind": "executed_falsifier",
+      "ref": {
+        "bytes": 127,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/logs/pairs-incomplete-falsifier.out",
+        "sha256": "439395f2cf47570cdc4af1bb6f6bacbba110c098901731c226532d8b2741bdd4"
+      },
+      "result": "passed",
+      "signal": "Incomplete suite rejected with exit 2 and no published pairs; eight synthetic geometry/publication adversary checks subsequently passed."
+    }
+  ],
+  "guard_policy": {
+    "max_swap_growth_mib": 64,
+    "memory_accounting": "file-cache",
+    "native_cap_mib": 30720,
+    "runtime_floor_pct": 10
+  },
+  "id": "lep-20261101-hy-nomas-cinematic-drafter",
+  "limitations": [
+    "The historical baseline lacks explicit model identity. A fresh base portrait repeat is byte-exact; the other five base clips were not freshly rerendered.",
+    "No fresh six-scene paired speed benchmark or general model-quality improvement is established.",
+    "Fresh upstream qualification checks selected merged weights only. Prior same-latent PixelUMM evidence does not establish full Cinematic DiT trajectory parity.",
+    "Source-MPS qualification is not unmodified CUDA/FlexAttention qualification.",
+    "Instrumented counters exclude opaque MPS resources and terminal export; sampled guards do not bound between-sample spikes.",
+    "VACE is a proposed separate renderer, not an implemented feature.",
+    "Cinematic checkpoint/capture/restore remains explicitly unsupported.",
+    "Selected producer source snapshots and observed binary hash do not automatically prove complete build correspondence.",
+    "Referenced artifacts are local-only; missing or changed evidence must be refreshed."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-drafter-frontier.md",
+    "landmark": "LANDMARKS.md#hy-nomas-cinematic-drafter-comparison-2026-11-01",
+    "related_packets": [
+      ".landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json"
+    ]
+  },
+  "model": {
+    "cinematic_lineage": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/cinematic-cache-v1/cinematic-lineage.json",
+    "cinematic_lineage_sha256": "fb16e1322bc1ae294a381c4973af39ebb02fdd3405305c80b31c934f776625a8",
+    "dit_variant": "cinematic-active-blocks",
+    "dit_weight_index_sha256": "f1284a3a624ed9f1424a89f784571f1a0debc0ce8c83e6842c52be24341860d2"
+  },
+  "next_signal": "User playback of all six paired clips, including the five-second continuation boundary; independent prompts and seeds before considering a default change.",
+  "parent_revision": "d18577aab7c7cf435bafc9fd9fe0ff9b410ca0f2",
+  "reason": "Compare Cinematic with the retained drafter first takes without changing conditioning, noise, arithmetic, memory policy or synchronization.",
+  "refresh": "Authenticate source/binary/model/input identities, rerun focused admission tests and a fresh base control; serially render under the unchanged guard, validate media, qualify the required upstream scope and review continuous motion.",
+  "results": {
+    "max_sampled_process_group_peak_gib": 24.321392752230167,
+    "maximum_observed_stage_swap_growth_bytes": 0,
+    "median_total_seconds_per_video_second": 28.071047481294954,
+    "minimum_sampled_cache_aware_headroom_gib": 22.773635864257812,
+    "successful_guarded_stages": 18,
+    "total_scene_seconds": 1711.291201041895
+  },
+  "rollback": "Omit both Cinematic flags to retain original BF16. Sequence checkpoint/restore remains base-only.",
+  "scene_results": [
+    {
+      "conditioning_seconds": 0,
+      "id": "portrait",
+      "sampled_peak_gib": 24.221127294003963,
+      "total_scene_seconds": 283.05337770900223
+    },
+    {
+      "conditioning_seconds": 0,
+      "id": "pouring-water",
+      "sampled_peak_gib": 24.304989509284496,
+      "total_scene_seconds": 308.82874208304565
+    },
+    {
+      "conditioning_seconds": 0,
+      "id": "running-dog",
+      "sampled_peak_gib": 24.220944121479988,
+      "total_scene_seconds": 307.5781543329358
+    },
+    {
+      "conditioning_seconds": 0,
+      "id": "balloon-car",
+      "sampled_peak_gib": 24.321392752230167,
+      "total_scene_seconds": 278.36757191689685
+    },
+    {
+      "conditioning_seconds": 0,
+      "id": "coast-flight",
+      "sampled_peak_gib": 24.217190571129322,
+      "total_scene_seconds": 266.86319475003984
+    },
+    {
+      "conditioning_seconds": 0,
+      "id": "desert-donut",
+      "sampled_peak_gib": 24.31963801383972,
+      "total_scene_seconds": 266.6001602499746
+    }
+  ],
+  "shape": {
+    "fps": 24,
+    "frames_per_scene": 240,
+    "height": 288,
+    "scenes": 6,
+    "seconds_per_scene": 10,
+    "segments_per_scene": 2,
+    "steps_per_segment": 4,
+    "width": 512
+  },
+  "source_state": {
+    "base_commit": "d18577aa",
+    "binary": {
+      "bytes": 3278408,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/cinematic-drafter-20261101.CSoblFK7/build/hy_nomas_sequence_generate",
+      "sha256": "a8cd70d7b589aa49c26f49c124eb6aa3d5df02b9fb3b208417be7f4dad7490cc"
+    },
+    "producer_source_sha256": {
+      "examples/hy_nomas_draft.py": "dc96131b1d03c6d793eec2f4bf67fb2f523fe57fa8f3e6116fadfdb7d2b70ddc",
+      "examples/hy_nomas_export.py": "7f56aaa3b6e3661bd3ecc39f0241d1ca3978475f20729fa17d6a279e8621d487",
+      "examples/hy_nomas_sequence_generate.cr": "b6a35ed19254ed4f60e462428727c2fffbcd169da0ba761a89557cffb12a2568",
+      "examples/support/hy_nomas_cinematic.cr": "ac771c173b2cc5047425774f26db6727cb3a4911cf423b9512043b2af7c1c138",
+      "examples/support/hy_nomas_draft_inputs.py": "20a48114ef9f7206f32c993607d9cd24290bb2465ade46e6fd4167afb2f64fa4",
+      "examples/support/hy_nomas_draft_results.py": "1a2add4fb59baf7a81b62bc694e2bac8bb4ff6370b0679986de6d2100281d1c6",
+      "examples/support/hy_nomas_generation.cr": "cf094fe8a16dc4c09d26558dde31ca5203d8f1e41c62d6f7801ccef6c789f206",
+      "examples/support/hy_nomas_sequence.cr": "ae5b870516c019efac2bd4fdaed952ad74c1fe5792bde270a958d1e6ad9292e6",
+      "examples/support/qwen25_hy_nomas_prompt_reference.py": "8690a2ce8bdac66d70e973bb3bf46413ed1a4cddcaefda21b379a30d000f5506",
+      "examples/support/qwen25_pretrained_reference.py": "3735cb5b4d5f5c82f33f530a5bf318929c5355dfe45d2be13044520571fff2ad",
+      "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+      "examples/wan_s2v_export.py": "4d9c0385393addc255c785f4b4897b951f0d850d1879fc4bcaa1e4853bb79719",
+      "spec/support/hy_nomas_continuation_inputs.py": "714e73e7b75a9d12cfd4d6db6e8bf9e34898ed457880ffea6f18260af8d14809",
+      "spec/support/hy_nomas_generation_inputs.py": "e01287a39fdab033435ce9fe30c4cf46a2d65581230e4b23eafead5512adf349"
+    },
+    "source_scope": "Selected orchestration/producer snapshots and observed executable hash; automatic build correspondence is not proven."
+  },
+  "trust": {
+    "F": "Executed admission tests, hashes, receipt/media checks and selected source-MPS merge qualification; no formal proof.",
+    "G": "Six fixed scenes, one fixed noise set, 512x288, two segments and four steps; fresh base A/A for portrait only.",
+    "R": "One completed guarded suite and authenticated retained controls; correlated mini-Quad review, no independent perceptual assessment."
+  },
+  "upstream_scope": {
+    "active_targets_merged": 28,
+    "blocks_requested": [
+      0,
+      1
+    ],
+    "blocks_unqualified": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53
+    ],
+    "mismatch_count": 0,
+    "values_compared": 302113792
+  }
+}

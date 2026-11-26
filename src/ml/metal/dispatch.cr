@@ -9,6 +9,10 @@ module ML
     end
 
     struct ComputeEncoder
+      def initialize(command_buffer : Pointer(Void))
+        raise "Metal disabled (cpu_only)"
+      end
+
       def set_pipeline(pipeline : ComputePipeline) : self
         raise "Metal disabled (cpu_only)"
       end
@@ -62,6 +66,10 @@ module ML
       end
 
       def set_threadgroup_memory(length : Int32, index : Int32) : self
+        raise "Metal disabled (cpu_only)"
+      end
+
+      def encode_wan_t5_mps_fc2(plan : Pointer(Void)) : Nil
         raise "Metal disabled (cpu_only)"
       end
 
@@ -166,6 +174,12 @@ require "./device"
 require "../core/tensor"
 require "./pipeline_selection_trace"
 
+# Opt-in Wan UMT5 seam. Its object is linked only by the Wan target; unused
+# declarations do not add MPS dependencies to ordinary Metal callers.
+lib WanT5MPSFFI
+  fun encode = gs_wan_t5_mps_fc2_encode(plan : Void*, command : Void*, encoder : Void*) : Int32
+end
+
 module ML
   module Metal
     enum BufferAccess
@@ -179,6 +193,7 @@ module ML
       @cmd_buffer : Pointer(Void)
       @encoder : Pointer(Void)
       @pipeline : ComputePipeline?
+      @ended : Bool
 
       def initialize(command_buffer : CommandBuffer, concurrent : Bool = false)
         @cmd_buffer = command_buffer.handle
@@ -188,6 +203,27 @@ module ML
                      MetalDispatchFFI.create_compute_encoder(@cmd_buffer)
                    end
         raise "Failed to create compute encoder" if @encoder.null?
+        @pipeline = nil
+        @ended = false
+      end
+
+      # Borrow the current root of an externally owned command chain. The
+      # owner must retain it and close this encoder before continuing the root.
+      def initialize(command_buffer : Pointer(Void))
+        raise ArgumentError.new("Compute encoder requires a live command buffer") if command_buffer.null?
+        @cmd_buffer = command_buffer
+        @encoder = MetalDispatchFFI.create_compute_encoder(@cmd_buffer)
+        raise "Failed to create compute encoder" if @encoder.null?
+        @pipeline = nil
+        @ended = false
+      end
+
+      # The opaque setup plan borrows this exact command/encoder pair. It may
+      # neither submit nor close it; ordinary native dispatches can follow.
+      def encode_wan_t5_mps_fc2(plan : Pointer(Void)) : Nil
+        raise ArgumentError.new("Wan T5 MPS requires an open encoder and live plan") if @ended || plan.null?
+        status = WanT5MPSFFI.encode(plan, @cmd_buffer, @encoder)
+        raise "Wan T5 MPS encode rejected (#{status})" unless status == 0
         @pipeline = nil
       end
 
@@ -313,7 +349,9 @@ module ML
 
       # End encoding
       def end_encoding : Nil
+        raise ArgumentError.new("Compute encoder is already ended") if @ended
         MetalDispatchFFI.encoder_end_encoding(@encoder)
+        @ended = true
       end
     end
 

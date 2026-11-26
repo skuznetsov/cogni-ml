@@ -171,7 +171,7 @@ module ML::GGUF
   #   prefill(tokens):     process full sequence, build KV cache  (batch GEMM)
   #   forward_one(token):  single token, extend KV cache          (vector GEMM)
   class CausalDecoder(B)
-    CAUSAL_ATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/attention_causal.metal") }}
+    CAUSAL_ATTN_SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/legacy_decoder/attention_causal.metal") }}
 
     getter config : DecoderConfig
     getter workspace : DecoderWorkspace

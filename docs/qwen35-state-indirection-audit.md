@@ -50,7 +50,7 @@ Boundary risk: this path must preserve exact greedy parity and KV/SSM state at t
 
 ### 2. Sidecar wall harness checkpoint/replay path
 
-File: `bin/qwen35_mtp_sidecar_probe.cr`
+File: `experiments/qwen35/qwen35_mtp_sidecar_probe.cr`
 
 Current options:
 
@@ -66,7 +66,7 @@ Boundary risk: `rec_rollback_log` previously failed JSON parity when composed wi
 
 ### 3. Recurrent prefill checkpoint helpers
 
-File: `src/ml/gguf/qwen35_cpu.cr`
+File: `src/ml/models/qwen35/cpu/engine.cr`
 
 Current helpers:
 
@@ -80,7 +80,7 @@ These can capture or restore recurrent checkpoints while doing known-span verifi
 
 ### 4. Active cursor / prompt cache
 
-Files: `src/ml/gguf/qwen35_resident_session.cr`, `src/ml/gguf/qwen35_serving_route.cr`, `src/ml/gguf/qwen35_prompt_cache.cr`
+Files: `src/ml/models/qwen35/resident_session.cr`, `src/ml/models/qwen35/serving_route.cr`, `src/ml/models/qwen35/prompt_cache.cr`
 
 These are already close to the TokenSpeed prefix-cache framing: validated state artifacts and active cursors are the high-level equivalent of clean reusable slots. The gap is lifecycle and same-process product routing, not tensor math.
 
@@ -142,7 +142,7 @@ Dual frame:
 
 ## Recommended Next Experiment
 
-Do not start with product `qwen35_generate`. Start in `bin/qwen35_mtp_sidecar_probe.cr`.
+Do not start with product `qwen35_generate`. Start in `experiments/qwen35/qwen35_mtp_sidecar_probe.cr`.
 
 1. Add a default-off `--mtp-spec-wall-state-slot-probe` mode.
 2. Restrict to `stage=2`, `top2_rescue_continue=false`, `rec_rollback_log=false`.

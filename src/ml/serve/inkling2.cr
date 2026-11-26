@@ -1,7 +1,7 @@
 require "./openai"
 require "./text_output"
-require "../gguf/inkling2_greedy_decode"
-require "../gguf/inkling2_tokenizer"
+require "../models/inkling2/greedy_decode"
+require "../models/inkling2/tokenizer"
 
 module ML::Serve
   class Inkling2Backend < OpenAI::Backend

@@ -177,9 +177,9 @@ describe ML::GGUF::QwenPrefillStageSplit do
   end
 
   it "cuts only after ended encoders and allocates no final successor" do
-    source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_metal.cr"))
+    source = File.read(File.join(__DIR__, "../src/ml/models/qwen35/metal/attention.cr"))
     first = source.index("def self.full_attn_layer_chunk_project(").not_nil!
-    last = source.index("def self.rmsnorm_project_top1_rows_buffer(", first).not_nil!
+    last = source.index("def self.full_attn_layer_chunk_kv_cache_only(", first).not_nil!
     helper = source[first...last]
     helper.should contain("QwenPrefillStageSplit.build(")
     helper.should contain("append_command_buffer.nil?, adaptive_prefill_encoder.nil? && !kv_cache_f16,")

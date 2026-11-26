@@ -1,0 +1,239 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 14376,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/qualification-summary.json",
+      "sha256": "ce55627cb805b93755daa2ac8ff1e2915f4a8d1de394351815031c91cd615863"
+    },
+    {
+      "bytes": 54914,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/decode/pair-validation.json",
+      "sha256": "1196268ca6a9d5cb2780a61e17472cf0147af56a904bd5901f0b535d6a5d62f0"
+    },
+    {
+      "bytes": 57817,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/videos/raw-pixel-diagnostics.json",
+      "sha256": "deaa821ae6bed586943869fca36c4ccaf753468da7cc33b563c5dc3304ca7249"
+    },
+    {
+      "bytes": 5531,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/videos/export-validation.json",
+      "sha256": "b6bd9ed0e004b8acb2e321309911346511c9890ec4c68ec7f11c9009eb5ad331"
+    },
+    {
+      "bytes": 5433,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/videos/side-by-side-validation.json",
+      "sha256": "91d842f8fedd6f313033c91d852c48d0b201a25d73efe993d5f2341d003d8fbf"
+    },
+    {
+      "bytes": 998,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/upstream-geometry.json",
+      "sha256": "b4cf0af9d56e0b83481f5e9883eba08e73164140b91c52682d55866e81ad614e"
+    },
+    {
+      "bytes": 28337,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/native-source-pins.json",
+      "sha256": "b2208beea46de75b663e6f1b5e039abf06bb04ef669fe1a0eb2319b4bdfaa7d5"
+    },
+    {
+      "bytes": 12024,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/postprocess-source-pins.json",
+      "sha256": "8dd4a2b7e319d0bf35d84e00c9fb9a55a31cd034a19c50ce01a92d1233adb9fe"
+    },
+    {
+      "bytes": 1039,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/logs/collect-qualification-command.json",
+      "sha256": "5188e720bbc7818388cbb9cfb17767e8e439486bccf0ac37e02db27a6ee01736"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "examples/hy_nomas_decode_latent.cr",
+      "spec/pixelumm_generation_spec.cr",
+      "spec/support/hy_nomas_cache_qbit_video_compare.py",
+      "spec/hy_nomas_cache_qbit_video_compare_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-video.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_decode_latent.cr",
+      "spec/pixelumm_generation_spec.cr",
+      "spec/support/hy_nomas_cache_qbit_video_compare.py",
+      "spec/hy_nomas_cache_qbit_video_compare_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-video.json"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Large raw files, weights, binaries and videos stay outside Git; hashes detect changes and do not provide recovery.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Code/binary/input/noise/weights/codec/geometry/backend/device changes or modification/loss of referenced local artifacts.",
+    "level": "VERIFIED",
+    "scope": "Pair integrity, prefix regression checks and bounded native decoder execution. The later user visual assessment is recorded separately and limited to this tested pair.",
+    "text": "The exact and compact three-segment saved timelines produce authenticated matched 15-second native-decoder video exports."
+  },
+  "created_at": "2026-11-01T13:35:28.926883+00:00",
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/decode/pair-validation.json",
+      "result": "passed",
+      "signal": "Fresh compact matrix authentication and correct terminal exact/compact timeline links, identical decoder/weights/noise/settings, finite 637009920-byte raw outputs."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/videos/raw-pixel-diagnostics.json",
+      "result": "passed",
+      "signal": "First 100 exact/QBit pixels bitwise equal; first 220 per arm bitwise equal to prior 10-second controls. Segment losses reported without quality threshold."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/videos/export-validation.json",
+      "result": "passed",
+      "signal": "Both 512x288/24 fps originals have 360 frames/15 seconds with authenticated raw inputs and matching export settings."
+    },
+    {
+      "kind": "upstream_reference",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/upstream-geometry.json",
+      "result": "passed",
+      "signal": "Pinned upstream pure _window_starts source helper yields all 17 global starts for 90 latents; geometry only."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/logs/native-spec.out",
+      "result": "passed",
+      "signal": "39 Crystal examples, 0 failures/errors."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/logs/python-comparator-tests.out",
+      "result": "passed",
+      "signal": "19 Python tests including wrong bank/noise/shape/window/arm and CLI-mode rejection."
+    }
+  ],
+  "id": "lep-20261101-hy-nomas-compact-video",
+  "limitations": [
+    "Guard samples cannot bound between-sample spikes.",
+    "File-cache headroom estimates reclaimability.",
+    "Instrumented allocation counters exclude opaque MPS resources.",
+    "MP4 comparison is re-encoded; lossless PNG previews and raw F32 files remain.",
+    "Referenced artifacts are local-only; digests detect changes but do not provide recovery.",
+    "Single ordered decoder pair is not a speedup experiment.",
+    "QBit is lossy versus exact; unchanged exact tolerances do not pass for B/C.",
+    "Selected stills cannot establish temporal/perceptual equivalence.",
+    "No full upstream decoder numerical run in this follow-up."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-generation-frontier.md",
+    "landmark": "LANDMARKS.md#lm-hy-nomas-compact-video-2026-11-01-matched-15-second-checkpoint-videos-pass-integrity-user-sees-practically-no-visual-difference",
+    "related_packets": [
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-resume.json"
+    ]
+  },
+  "parent_revision": "ab13767100fcf6d3d636e05a761be38649018b80",
+  "reason": "Extend the matched visual comparison from one to two compact boundaries without rerunning DiT or changing decoder math.",
+  "refresh": "Use fresh paths, authenticate the saved matrix and pin sources/binary, serially decode both arms under the 26 GiB / 10% / 64 MiB / 1200 s guards, rerun prefix and export checks, then review motion.",
+  "results": {
+    "atol": 2e-05,
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "fps": 24,
+    "full_upstream_video_parity": false,
+    "height": 288,
+    "latent_frames": 90,
+    "maximum_sampled_footprint_bytes": 20196667896,
+    "minimum_cache_aware_headroom_bytes": 26994163712,
+    "pixel_error_by_segment": [
+      {
+        "frame_interval": [
+          0,
+          120
+        ],
+        "mae": 0.00014422454951721944,
+        "max_abs": 0.1328125,
+        "rmse": 0.0009228355020835818,
+        "segment": "A"
+      },
+      {
+        "frame_interval": [
+          120,
+          240
+        ],
+        "mae": 0.006521546951046697,
+        "max_abs": 0.5703125,
+        "rmse": 0.016688470857103392,
+        "segment": "B"
+      },
+      {
+        "frame_interval": [
+          240,
+          360
+        ],
+        "mae": 0.018942098705856888,
+        "max_abs": 0.984375,
+        "rmse": 0.04737840380758734,
+        "segment": "C"
+      }
+    ],
+    "pixel_frames": 360,
+    "preterminal_waits": 0,
+    "quality_verdict": "User reports practically no visual differences in the tested 15-second pair after two compact boundaries.",
+    "user_visual_review": {
+      "assessment_english_translation": "It looks good; QBit works with practically no visual differences.",
+      "comparison_video_sha256": "96012adfb51874f0ceb79ccb1f81346fc86db2a1ea406907d6dacc8740bd4d06",
+      "date": "2026-11-01",
+      "scope": "One 15-second scene, three segments and two compact save/restart boundaries; not a blind study or general perceptual-equivalence claim.",
+      "source": "User message in this chat after the exact-left / QBit-right comparison was presented. Original execution-time receipts are unchanged."
+    },
+    "raw_prefix_checks": {
+      "exact_vs_prior_first_220_frames_bitwise_equal": true,
+      "exact_vs_qbit_first_100_frames_bitwise_equal": true,
+      "qbit_vs_prior_first_220_frames_bitwise_equal": true
+    },
+    "rtol": 2e-05,
+    "segments": 3,
+    "source_checks": {
+      "native-source-pins.json": 161,
+      "orchestration-pins.json": 3,
+      "postprocess-source-pins.json": 68
+    },
+    "speedup_claim": false,
+    "swap_growth_bytes": 0,
+    "terminal_waits_per_native_process": 1,
+    "width": 512,
+    "window_count": 17
+  },
+  "risk": "CAUTION: broadened imported-latent duration and experiment provenance; no default or model-math change.",
+  "rollback": "Revert this atomic diagnostic extension; existing 30/60-frame decoding and exact checkpoint default remain available.",
+  "schema_version": 1,
+  "source": {
+    "bounded_context": "cogni-ml Hy-Nomas saved-state native PixelUMM decode",
+    "producer": "codex",
+    "task": "Matched visual-review artifacts after two compact checkpoint boundaries"
+  },
+  "verification": {
+    "adversary_scope": "Correlated same-lineage static and saved-artifact review; inspected lossless stills. This review did not establish perceptual equality; later user feedback is recorded separately.",
+    "adversary_verdict": "ROBUST",
+    "dod_commands": [
+      "make BUILD_DIR=\"$RUN_ROOT/build\" hy_nomas_decode_latent",
+      "make BUILD_DIR=\"$RUN_ROOT/build\" spec_hy_nomas_resume ARGS=spec/pixelumm_generation_spec.cr",
+      "python3 -B -m unittest spec/hy_nomas_cache_qbit_video_compare_test.py",
+      "python3 -B \"$RUN_ROOT/run_decode_pair.py\"",
+      "python3 -B \"$RUN_ROOT/postprocess.py\"",
+      "python3 -B \"$RUN_ROOT/collect_qualification.py\"",
+      "crystal tool format --check examples/hy_nomas_decode_latent.cr spec/pixelumm_generation_spec.cr",
+      "git diff --check"
+    ],
+    "dod_signal": "Build, focused tests, source pins, raw authentication/prefix checks, exports and both sampled guards pass. Exact guarded argv is retained in external command sidecars; output paths must be fresh.",
+    "structural_validation": "Repository packet template and scripts/validate-landmark-graph.sh are absent; use strict JSON, required fields and dereferenced artifact hashes. Structural validation does not execute or promote evidence."
+  }
+}

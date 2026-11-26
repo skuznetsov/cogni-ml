@@ -283,7 +283,7 @@ The real-model quality falsifier models a conservative streaming order:
    quantized and reconstructed;
 3. the next chunk or decode row observes the reconstructed older values.
 
-`bin/qwen35_qbit_kv_quality_probe.cr` implements this order without changing
+`experiments/qwen35/qwen35_qbit_kv_quality_probe.cr` implements this order without changing
 production routing. The exact oracle and QBit variants use identical explicit
 chunk boundaries, but only the QBit variants roundtrip each completed chunk
 before the next one. Decode rows retire in the same order. The probe then
@@ -538,7 +538,7 @@ throughput, and restore/checkpoint behavior remain outside this gate.
 
 ### Resident GPU held-out replay
 
-`bin/qwen35_adaptive_resident_kv_quality_probe.cr` reruns the same frozen
+`experiments/qwen35/qwen35_adaptive_resident_kv_quality_probe.cr` reruns the same frozen
 four-case corpus through the actual resident adaptive-KV corridor. The exact
 Float32 oracle state is released before a policy is evaluated. Each policy then
 uses two fresh states: one independent free run and one teacher-forced exact
@@ -1458,7 +1458,7 @@ bounded local gate, not a storage-ratio, latency, or server-sizing SLA.
 
 ### Session-scoped async barrier gate (2026-08-15)
 
-`bin/qwen35_qbit_session_barrier_probe.cr` covers the two paths the unit specs
+`experiments/qwen35/qwen35_qbit_session_barrier_probe.cr` covers the two paths the unit specs
 cannot reach: which requests the pending-checkpoint barrier stops, and what
 teardown does after a publication fails. Both need a real model and a real
 ClickHouse instance, so the probe runs under `scripts/run_safe.sh`.
@@ -3702,7 +3702,7 @@ and paired performance evidence.
 
 ### Combined P4+BF16 T8 whole-decode boundary (2026-09-01)
 
-`bin/qwen35_adaptive_t8_decode_probe.cr` measures both T8 loaders through the
+`experiments/qwen35/qwen35_adaptive_t8_decode_probe.cr` measures both T8 loaders through the
 complete Qwen3.8 decode step without reloading weights between sides. It creates
 two identically prefilled adaptive states, performs one unmeasured matched warm
 step, then advances both states over the same ten-token forced greedy

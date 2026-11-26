@@ -69,7 +69,7 @@ if [[ "${force_build}" == "1" || ! -x "${probe_bin}" ]]; then
   echo "building ${probe_bin}" >&2
   (
     cd "${repo_root}"
-    CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build bin/qwen35_warm_request_probe.cr \
+    CRYSTAL_CACHE_DIR="${crystal_cache}" crystal build experiments/qwen35/qwen35_warm_request_probe.cr \
       ${build_flags} \
       -o "${probe_bin}" \
       --link-flags="${link_flags}"

@@ -1,0 +1,558 @@
+{
+  "schema": "cogni_ml.pixelumm_shared_gate_up_evidence/v1",
+  "created_at": "2026-10-28T00:21:16.768594+00:00",
+  "base_revision": "6cce7191a474645aec55897e1a3fd69877f2e201",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in shared-input F32 gate/up parity, serial lifecycle, sampled guards and bounded prepared full36+head timing. Speedup is not admitted.",
+    "adversary_verdict": "ROBUST within authenticated parity, lifecycle, sampled guards and reported timing arithmetic. General performance and causal backend explanations remain unproved.",
+    "review_correlation": "Same-lineage Mini-Quad implementation/source/evidence review; not independent backend replication.",
+    "decay_trigger": "Scoped source, fixture, device, OS, backend, toolchain, geometry, precision, capture, lifetime, guard or clock changes, or evidence loss. Startup memory admission expires."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "src/ml/video/pixelumm_decoder_block_mps.cr",
+      "examples/pixelumm_decoder_block_probe.cr",
+      "examples/pixelumm_decoder_integrated_probe.cr",
+      "examples/support/pixelumm_block_probe.cr",
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_decoder_probe.cr",
+      "spec/pixelumm_decoder_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-gate-up.json"
+    ],
+    "changed_paths": [
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "src/ml/video/pixelumm_decoder_block_mps.cr",
+      "examples/pixelumm_decoder_block_probe.cr",
+      "examples/pixelumm_decoder_integrated_probe.cr",
+      "examples/support/pixelumm_block_probe.cr",
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_decoder_probe.cr",
+      "spec/pixelumm_decoder_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-gate-up.json"
+    ],
+    "rollback": "Omit --compare-shared-gate-up and leave prepare_shared_gate_up=false, or revert the atomic local commit. Baseline remains the default.",
+    "excluded": [
+      "full generation",
+      "diffusion",
+      "video quality",
+      "full-pipeline fit/latency",
+      "stable throughput or general regression estimate",
+      "causal physical cast/kernel attribution",
+      "fresh connected upstream run",
+      "independent neural backend",
+      "whole remote checkpoint hash",
+      "between-sample memory bounds",
+      "zero opaque Metal allocator residency",
+      "concurrent Session owners"
+    ]
+  },
+  "implementation": {
+    "graph": "One BF16 activation placeholder and F32 cast shared by two separate F32 weight casts/matmuls and BF16 outputs; no weight concatenation.",
+    "selection": "Prepared opt-in capability, changed only between drained requests; every block prevalidated before serial mode mutation.",
+    "profile_rejection": "Session preflights unsupported shared/profile combination before recording an empty chain. Native request0 rejects it and immediately reuses the Session without waiting.",
+    "default": "original separate gate/up graphs",
+    "profiling_scope": "Shared mode phase profiling is rejected; all eight timed/control arms are unprofiled. Root metadata is retrieved postterminal.",
+    "source_pins": {
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+        "sha256": "a28c198f8ed2899f5021c03db801990f8712fc39d06fa9ecb4ace706d84d9f0e",
+        "bytes": 93587
+      },
+      "src/ml/video/pixelumm_decoder_block_mps.cr": {
+        "sha256": "aebdf614dcfe99471e75fd731db81a3d2822c7f2b34d6f9cd4cbe67d371a0093",
+        "bytes": 58037
+      },
+      "examples/pixelumm_decoder_block_probe.cr": {
+        "sha256": "d149b563a63f9475c7e2ce5c506ffcf54d4a4b77220b97b4fce29f347a6e7bd3",
+        "bytes": 15313
+      },
+      "examples/pixelumm_decoder_integrated_probe.cr": {
+        "sha256": "c2d075d7a850515cf1c04a0a350436c711f447efeeabdb380982052107456a56",
+        "bytes": 19671
+      },
+      "examples/support/pixelumm_block_probe.cr": {
+        "sha256": "8a4a311b01212bdf09e870d96daaf78e2cd8099b0856e4f11e591f0dbefad0a4",
+        "bytes": 12606
+      },
+      "examples/support/pixelumm_two_block_probe.cr": {
+        "sha256": "ec66fd4d2567774ed79536d44cda6788a731baff40480fe5c53e02f247da2686",
+        "bytes": 44619
+      },
+      "examples/support/pixelumm_decoder_probe.cr": {
+        "sha256": "5143cf594b9a01700edd7c417e932e9fc76db3aed130b3ec59448ab816a744a9",
+        "bytes": 21116
+      },
+      "spec/pixelumm_decoder_probe_spec.cr": {
+        "sha256": "7f0153bfa8df71fad691c97d6b27dd4e48b2d852d76c708644d45eed960c497a",
+        "bytes": 4179
+      }
+    }
+  },
+  "geometry": {
+    "grid": [
+      6,
+      44,
+      80
+    ],
+    "J": 21120,
+    "blocks": 36,
+    "output_shape": [
+      1,
+      3,
+      24,
+      704,
+      1280
+    ],
+    "storage": "BF16 weights/handoffs, existing qualified F32 FFN math"
+  },
+  "method": {
+    "resident_models": 1,
+    "schedule": [
+      {
+        "kind": "a_warm_shared",
+        "shared_gate_up": true
+      },
+      {
+        "kind": "a_warm_baseline",
+        "shared_gate_up": false
+      },
+      {
+        "kind": "a_timed_baseline_first",
+        "shared_gate_up": false
+      },
+      {
+        "kind": "a_timed_shared_first",
+        "shared_gate_up": true
+      },
+      {
+        "kind": "a_timed_shared_second",
+        "shared_gate_up": true
+      },
+      {
+        "kind": "a_timed_baseline_second",
+        "shared_gate_up": false
+      },
+      {
+        "kind": "b_poisoned_baseline",
+        "shared_gate_up": false
+      },
+      {
+        "kind": "b_poisoned_shared",
+        "shared_gate_up": true
+      }
+    ],
+    "warmup_order": "shared then baseline, candidate first on fresh diagnostic captures",
+    "timed_order": "baseline/shared/shared/baseline on the identical A input",
+    "different_input_controls": "Both B modes are separately poisoned; excluded from speed acceptance.",
+    "timing_scope": "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
+    "preparation_seconds": 36.514694292,
+    "pair_limit": "Two observations per mode, one matrix; drift discriminator, not a stable throughput estimate."
+  },
+  "numerical": {
+    "comparisons": 500,
+    "small_comparisons": 156,
+    "full_comparisons": 344,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "all_finite": true,
+    "different_words": 0,
+    "max_abs": 0,
+    "small_scope": "All26 captures, candidate first, then baseline and both timed orders; gate/up/product/down included.",
+    "full_scope": "Attention0-35, outputs34/35 and five head stages across eight requests/two inputs. Outputs0-33 are overwritten GPU handoffs, not retained captures.",
+    "oracle": "Reused authenticated upstream MPS controls joined at an exact block35-output/head-input edge; no fresh connected upstream neural run.",
+    "fixtures": {
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/build/pixelumm_decoder_integrated_probe": {
+        "sha256": "b4182857ea6bfbcfa08a40751b3d68bede252ee05eeae52d6a6c0d5ec5d4875a",
+        "bytes": 1648160
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full42-v4.json": {
+        "sha256": "6efc8a15dc83c3e5e0d1cff824522ea8e98e3649d7178d143b8aaf35f2a0e592",
+        "bytes": 173863
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full43-v2.json": {
+        "sha256": "429c010be440de4834bf5f0a0a8d9e658579d808d5e8f4b68605ebbf088ff7c8",
+        "bytes": 173863
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full42-v1.json": {
+        "sha256": "fffe14810d335bd964919cf1dc1f890b93791541fcf638a165d2470d527cb02a",
+        "bytes": 6183
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full43-v1.json": {
+        "sha256": "1f1b1d3c271ffa96e95339797b1eeb05f83130cab6e2ed1e8e9dafca6920347f",
+        "bytes": 6183
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/source/pixelumm-thirty-six-bf16-cache.json": {
+        "sha256": "74ee5e84f2b63af0189ffd7be0e4c758b8dfa9ff925e3c9cb389d207ce546dba",
+        "bytes": 406938
+      }
+    }
+  },
+  "execution": {
+    "named_bytes": 24108145128,
+    "terminal_waits_per_request": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "named_encode_allocations": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "preterminal_activation_reads": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "postterminal_diagnostic_reads": [
+      43,
+      43,
+      43,
+      43,
+      43,
+      43,
+      43,
+      43
+    ],
+    "roots_baseline": 4579,
+    "roots_shared": 4543,
+    "graph_encode_calls_source_prediction_baseline_shared": [
+      7025,
+      6989
+    ],
+    "count_limit": "Root counts observed; Graph counts source-derived, not measured API/kernel/cast counts.",
+    "head_handoff": "block35 output is the same MetalBuffer consumed by the head on the same command chain, without CPU copy or intermediate wait",
+    "named_live_bytes_after_release": 0,
+    "named_live_count_after_release": 0
+  },
+  "guard": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_bytes": 30601641984,
+    "max_swap_growth_bytes": 67108864,
+    "timeout_seconds": 900,
+    "sample_count": 1441,
+    "sampled_peak_footprint_bytes": 30202351920,
+    "sampled_min_headroom_bytes": 14685372416,
+    "sampled_system_swap_growth_bytes": 1960837,
+    "scope": "Process-group footprint and cache-aware system headroom are sampled; counter categories overlap and cannot be added. System swap growth is not attributed to this process."
+  },
+  "timing": {
+    "requests": [
+      {
+        "kind": "a_warm_shared",
+        "shared_gate_up": true,
+        "total_seconds": 42.70075175,
+        "encode_seconds": 41.811626875,
+        "terminal_wait_seconds": 0.888902375,
+        "command_segments": 4543,
+        "root_duration_sum_seconds": 42.72369166475255,
+        "root_interval_union_seconds": 42.66094112308929,
+        "root_interval_envelope_seconds": 42.66400700001395
+      },
+      {
+        "kind": "a_warm_baseline",
+        "shared_gate_up": false,
+        "total_seconds": 45.149046333,
+        "encode_seconds": 44.170524875,
+        "terminal_wait_seconds": 0.978248041,
+        "command_segments": 4579,
+        "root_duration_sum_seconds": 45.17353583392105,
+        "root_interval_union_seconds": 45.13961208393448,
+        "root_interval_envelope_seconds": 45.14224095834652
+      },
+      {
+        "kind": "a_timed_baseline_first",
+        "shared_gate_up": false,
+        "total_seconds": 43.925611916,
+        "encode_seconds": 42.995360292,
+        "terminal_wait_seconds": 0.930050042,
+        "command_segments": 4579,
+        "root_duration_sum_seconds": 43.952554915769724,
+        "root_interval_union_seconds": 43.916783874243265,
+        "root_interval_envelope_seconds": 43.91937937500188
+      },
+      {
+        "kind": "a_timed_shared_first",
+        "shared_gate_up": true,
+        "total_seconds": 54.646035834,
+        "encode_seconds": 53.540015584,
+        "terminal_wait_seconds": 1.104596625,
+        "command_segments": 4543,
+        "root_duration_sum_seconds": 54.70474374960759,
+        "root_interval_union_seconds": 54.63727908290457,
+        "root_interval_envelope_seconds": 54.64007275001495
+      },
+      {
+        "kind": "a_timed_shared_second",
+        "shared_gate_up": true,
+        "total_seconds": 50.970565125,
+        "encode_seconds": 49.938505958,
+        "terminal_wait_seconds": 1.031909917,
+        "command_segments": 4543,
+        "root_duration_sum_seconds": 51.02940616797423,
+        "root_interval_union_seconds": 50.96146975128795,
+        "root_interval_envelope_seconds": 50.96423783330829
+      },
+      {
+        "kind": "a_timed_baseline_second",
+        "shared_gate_up": false,
+        "total_seconds": 47.495677833,
+        "encode_seconds": 46.527549376,
+        "terminal_wait_seconds": 0.966538166,
+        "command_segments": 4579,
+        "root_duration_sum_seconds": 47.51996120836702,
+        "root_interval_union_seconds": 47.48691033333307,
+        "root_interval_envelope_seconds": 47.489555208332604
+      },
+      {
+        "kind": "b_poisoned_baseline",
+        "shared_gate_up": false,
+        "total_seconds": 46.138127083,
+        "encode_seconds": 45.213761458,
+        "terminal_wait_seconds": 0.924079875,
+        "command_segments": 4579,
+        "root_duration_sum_seconds": 46.18788270800724,
+        "root_interval_union_seconds": 46.09863291645888,
+        "root_interval_envelope_seconds": 46.115163500013296
+      },
+      {
+        "kind": "b_poisoned_shared",
+        "shared_gate_up": true,
+        "total_seconds": 45.200234125,
+        "encode_seconds": 44.278087667,
+        "terminal_wait_seconds": 0.920699625,
+        "command_segments": 4543,
+        "root_duration_sum_seconds": 45.260839081776794,
+        "root_interval_union_seconds": 45.190873332030606,
+        "root_interval_envelope_seconds": 45.193435041670455
+      }
+    ],
+    "paired_A_controls": [
+      {
+        "order": "baseline_then_shared",
+        "baseline_seconds": 43.925611916,
+        "shared_seconds": 54.646035834,
+        "shared_minus_baseline_seconds": 10.720423918000002,
+        "shared_over_baseline_ratio": 1.2440586129682365,
+        "shared_change_percent": 24.40586129682365
+      },
+      {
+        "order": "shared_then_baseline",
+        "baseline_seconds": 47.495677833,
+        "shared_seconds": 50.970565125,
+        "shared_minus_baseline_seconds": 3.4748872919999982,
+        "shared_over_baseline_ratio": 1.0731621791822423,
+        "shared_change_percent": 7.316217918224233
+      }
+    ],
+    "decision": "Both timed A orders are slower with the shared graph. Keep default off; B has the opposite sign, so do not infer a stable general regression or backend mechanism.",
+    "next_falsifier": "Qualify shared-graph phase profiling and isolate FFN GPU kernel/temporary-resource behavior before any promotion."
+  },
+  "verification": {
+    "cpu_examples": 83,
+    "cpu_failures": 0,
+    "release_build_exit_code": 0,
+    "budget_negative": "One byte below aggregate named budget rejects before any named upload/allocation.",
+    "native_full_exit_code": 0,
+    "audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/audit-shared-gate-up-v5.json",
+      "sha256": "6390388790ef8b9aa1fa5f10748ef0833eb87bb833255b01821b31976aa35c32",
+      "bytes": 18098
+    },
+    "auditor": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/source/audit_shared_gate_up_v1.py",
+      "sha256": "59337b59b1ac6382734f072d25cfd005aa9c896f89f37afa5fafa9fdcadd4e24",
+      "bytes": 67934
+    },
+    "audit_verdict": "ROBUST within the guarded, unprofiled one-block and full36+head shared gate/up comparison scope; no integrated-product fit, generation, throughput, or kernel-causality claim.",
+    "seeded_controls": {
+      "cases": [
+        "small_missing_capture",
+        "small_wrong_sha",
+        "full_missing_capture",
+        "full_wrong_sha",
+        "full_wrong_mode",
+        "full_partial_36",
+        "full_extra_wait",
+        "full_nonfinite",
+        "full_wrong_timing",
+        "full_profile_on",
+        "full_profile_preflight_latch",
+        "full_duplicate_memory_phase",
+        "full_changed_schedule",
+        "full_wrong_input",
+        "negative_nonzero_named_bytes",
+        "negative_wrong_budget",
+        "guard_swap_growth",
+        "report_guard_epoch"
+      ],
+      "passed": true
+    },
+    "repository_packet_validator": "Generic scripts/validate-landmark-graph.sh and template are absent here; actual receipt/source/numerical/guard audit plus JSON/link/digest validation are used.",
+    "format_check": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/static-format-check-v1.json",
+      "sha256": "16944c47f31e6b010a5f5074cdee188379b8763b5821fa0f2794c566ce5e7a0b",
+      "bytes": 2857,
+      "exit_code": 1,
+      "limitation": "Keep the qualified source epoch unchanged. The small probe JSON-report emitter has continuation-indentation differences, including the new comparison_complete continuation; this nonfunctional formatting check is not passed and is outside the numerical/build DoD."
+    }
+  },
+  "receipts": [
+    {
+      "name": "release-build-v4",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/release-build-v4.pre-execution.json",
+        "sha256": "b896f8fbfa0a2a7e309a2a6b79157d31d60f82b3eda4752585d178822870df37",
+        "bytes": 12342
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/release-build-v4.completion.json",
+        "sha256": "013efacb7c1d7cb22d8968d9e56bd024a7c36a4ae6644c17b5d8b4dd39c99854",
+        "bytes": 62
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/release-build-v4.out",
+        "sha256": "5b788ef05ef8743c6d1d28a60e49ea9874de7e940cbca0106f6db70aafcd002a",
+        "bytes": 1303
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/release-build-v4.guard.jsonl",
+        "sha256": "8f923e6ad4c7cc41f8d49102158288c7ec1a0177b5f5d6a1200718f280f63675",
+        "bytes": 10586
+      }
+    },
+    {
+      "name": "cpu-spec-v4",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/cpu-spec-v4.pre-execution.json",
+        "sha256": "da2eebf15f7397aaddcab51521bae3b056d23d3cf688c072a5ef3ca9a0b5d390",
+        "bytes": 11558
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/cpu-spec-v4.completion.json",
+        "sha256": "02aab1af2806c297a4a7f9410684e44f3dc0d57ce5b2909c2142abe85f176c51",
+        "bytes": 61
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/cpu-spec-v4.out",
+        "sha256": "1745ca9675fe7c43adef4fc5b1d54bb107f943610283915135e23a82843eaf14",
+        "bytes": 631
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/cpu-spec-v4.guard.jsonl",
+        "sha256": "c5c90c15e29311c923e37d6a0a7cd627d931e2a67f66622099806ecf7e7950fc",
+        "bytes": 4431
+      }
+    },
+    {
+      "name": "native-small-v3",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-small-v3.pre-execution.json",
+        "sha256": "99b4643eab2ef85e1903af2c1a0d5cb79314391df80447d2de3a580a325e0f3b",
+        "bytes": 14259
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-small-v3.completion.json",
+        "sha256": "70dfc43e0cc048d13716c5e2bc8f77eb246e02b6d45232e35afdf3b23816308c",
+        "bytes": 62
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-small-v3.out",
+        "sha256": "3cac7c7ec090a613eb3e1f4d8048d579f133eba092a5c860545fa796fe48ba2a",
+        "bytes": 937
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-small-v3.guard.jsonl",
+        "sha256": "0399d920b18477607ffd596b1bec4319a858adb80accc6beabb437f455973841",
+        "bytes": 9988
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-small-v3.json",
+        "sha256": "c8b5ff3b861ec307df6cf1b13fa3cfa4041a9d08fcf4e4fbc4d98689e5e577ad",
+        "bytes": 74294
+      }
+    },
+    {
+      "name": "native-budget-minus-one-v2",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-budget-minus-one-v2.pre-execution.json",
+        "sha256": "228bfadf1a801d3a7eedf5373895aa3d1582f2eb767e0ae768e6b053928cbaca",
+        "bytes": 17191
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-budget-minus-one-v2.completion.json",
+        "sha256": "deff4d114e07c14fe394b4d1f10d0a1a6c9cffcbe1ec90e57b6b8a5d0bdd6538",
+        "bytes": 61
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-budget-minus-one-v2.out",
+        "sha256": "95d8d2a14cac10bd77ea3aef9c083ee85e051d5dc9419b30b8efaf2c026b5216",
+        "bytes": 3521
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-budget-minus-one-v2.guard.jsonl",
+        "sha256": "a7815ca751865ccc03c2f6783ccf0f95427d371a9e786b56197b35ac802c92dd",
+        "bytes": 2577
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-budget-minus-one-v2.json",
+        "sha256": "aab4fdada8d087503cf17356d64d35e5dff5dc1897a0b95b3f775e68d4b67c23",
+        "bytes": 7775
+      }
+    },
+    {
+      "name": "native-full-v2",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-full-v2.pre-execution.json",
+        "sha256": "9c631f8d3f3f26a033adfba8fb6c4e0469d4f561f342acf0641909fea62d2a4d",
+        "bytes": 17155
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-full-v2.completion.json",
+        "sha256": "8a67a02fa5535ba6e25b41f550a15b67af5d2836871782facfdbc7649c6657f9",
+        "bytes": 61
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-full-v2.out",
+        "sha256": "b14f64b6896d824abae8a51361a8898568438257556877c28f007ec46c704352",
+        "bytes": 1130465
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/logs/native-full-v2.guard.jsonl",
+        "sha256": "7ff5a1990e29c6fd1e787431022e00694ec5faaa3f82ffbb8fb24f1a0d42283c",
+        "bytes": 443349
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/native-full-v2.json",
+        "sha256": "31aa850372675303272cfbd67def483034b725174a955e47d91fbbc9d1f3473c",
+        "bytes": 9467289
+      }
+    }
+  ],
+  "historical_exclusions": [
+    "Earlier build/test/small epochs are superseded by final source-matched names above.",
+    "native-full-v1 was intentionally stopped to harden unsupported-profile rejection; its timings are exploratory only.",
+    "Failed external auditor reports v2-v4 are preserved; the initial failed v1 JSON was overwritten by an immediate retry before preservation instructions and is not available as a retained receipt. Parser/path/lifecycle-observation corrections change no native arithmetic or measurement."
+  ]
+}

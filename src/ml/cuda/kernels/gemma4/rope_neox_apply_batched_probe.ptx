@@ -1,0 +1,57 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry rope_neox_apply_batched_probe(
+    .param .u64 x,
+    .param .u64 cos_t,
+    .param .u64 sin_t,
+    .param .u32 head_dim,
+    .param .u32 n_rot
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<18>;
+    .reg .b64 %rd<18>;
+    .reg .f32 %f<9>;
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [cos_t];
+    ld.param.u64 %rd3, [sin_t];
+    ld.param.u32 %r1, [head_dim];
+    ld.param.u32 %r2, [n_rot];
+
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %tid.x;
+    shr.u32 %r5, %r2, 1;
+    setp.ge.u32 %p1, %r4, %r5;
+    @%p1 bra DONE;
+
+    mul.lo.u32 %r6, %r3, %r1;
+    add.u32 %r7, %r6, %r4;
+    add.u32 %r8, %r7, %r5;
+
+    mul.wide.u32 %rd4, %r7, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    mul.wide.u32 %rd6, %r8, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    mul.wide.u32 %rd8, %r4, 4;
+    add.s64 %rd9, %rd2, %rd8;
+    add.s64 %rd10, %rd3, %rd8;
+
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd7];
+    ld.global.f32 %f3, [%rd9];
+    ld.global.f32 %f4, [%rd10];
+
+    mul.rn.f32 %f5, %f1, %f3;
+    neg.f32 %f7, %f4;
+    fma.rn.f32 %f5, %f2, %f7, %f5;
+    mul.rn.f32 %f6, %f1, %f4;
+    fma.rn.f32 %f6, %f2, %f3, %f6;
+    st.global.f32 [%rd5], %f5;
+    st.global.f32 [%rd7], %f6;
+
+DONE:
+    ret;
+}

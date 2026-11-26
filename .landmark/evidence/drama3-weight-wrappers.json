@@ -1,0 +1,443 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-weight-wrappers-20261016",
+  "created_at_utc": "2026-10-16T18:53:53.394205+00:00",
+  "base_revision": "99a4f4470a99178e18cfede5eab5922091c08828",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in terminal-only mapped-weight wrapper diagnostic, fixed-workload numerical/queue contract, and executed descriptive P/R comparison.",
+    "result": "Wrapper recreation is qualified over unchanged backing. No stable request-to-result advantage is demonstrated; keep the existing persistent cache.",
+    "exclusions": [
+      "Internal driver registration identity/reuse and pure buffer-identity causality are unobserved.",
+      "No performance equivalence, speed promotion, physical residency, all-weight-lifetime or isolated GC-cost claim.",
+      "No fresh stock-MLX generation/RNG equivalence, general voice/DAC/prosody parity, or closure of the existing MoE39 intermediate failure.",
+      "No fresh bridge build or reproducible-build attestation."
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/drama3-weight-wrappers.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-wrappers.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_wrappers.py",
+      "spec/drama3_weight_wrappers_spec.cr",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/drama3-weight-wrappers.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-wrappers.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_wrappers.py",
+      "spec/drama3_weight_wrappers_spec.cr",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr"
+    ]
+  },
+  "risk_and_recovery": {
+    "tier": "CAUTION",
+    "failure_mode": "Releasing mapped handles still referenced by in-flight GPU work.",
+    "guards": "Enable before Context use; refuse aborted, active encoder/command/lease/workspace and pending Context/graph work. Never drain to qualify refresh. Retain owners; abort and quarantine on failure.",
+    "rollback": "Omit diagnostic enabling or revert this isolated commit. Normal inference retains the global cache through one optional-bank branch.",
+    "execution": "Dedicated sequential worker only; unrelated projects/processes untouched. Guarded serial runs, 15% free-memory floor, quiet-host off."
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/commands.json",
+    "expected": "67 relevant Metal examples pass; lifetime/offset/packed/dense guards hold at graph0/2; balanced complete pairs qualify backing and counts; saved-MLX full codes and prefill terminal endpoints pass unchanged tolerances with unchanged inference ledgers.",
+    "observed": "PASS: all required execution receipts exit0, guarded pair run uninterrupted; static cross-artifact/source checks pass.",
+    "fallback": "GPU scalar/packed exact witnesses plus same native endpoints bitwise and pinned MLX pointwise endpoint comparison. Structural checks alone are not proof of execution."
+  },
+  "lineage": {
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer_sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+      "indexed_shards": "model-00001-of-00005.safetensors,model-00002-of-00005.safetensors,model-00003-of-00005.safetensors,model-00004-of-00005.safetensors,model-00005-of-00005.safetensors",
+      "shard_sizes_bytes": "5498947446,5390036166,5402946528,5423590660,2277811252"
+    },
+    "mlx_audio_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "baseline_sha256": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+    "saved_inputs_sha256": {
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json.sampler_logits.npz": "5577c320dbbcb5d7e5f1892b2eca2a49a5b9438355c5bf9632b476fcd59b6686",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/gpu-kernels-20261016/compare_worker_upstream.py": "6f4bc0445bc93860934ee93df52da0ce8e43ad0808e1494921a449ca07b5b78b",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/compare_reference_pauses.py": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da"
+    },
+    "changed_executable_source_sha256": {
+      "examples/drama3_weight_wrappers.cr": "d48ec2b8fcc69b9fb938f1fdc92bb043e11965d7c2865b8394098b5c1d610fa9",
+      "scripts/drama3/measure_weight_wrappers.py": "d95ca5daa51395d7c1497118b29ffa20915673cd18738a6e5cd36a6d90f8a8dc",
+      "spec/drama3_weight_wrappers_spec.cr": "6176dfd0eec176e629274dbf34e70d8776fcda7c4818af4a96524ee39bd087fb",
+      "src/ml/audio/drama3/metal.cr": "b45cec51fc3f6b8ef4e9bde6994a149e12a909fd27c65d63eb2664a980c78e42",
+      "src/ml/audio/drama3/resident.cr": "c08806245b7b7d890daf955cb5ce02e86f92df3028902677a97cc172e8fd3aba"
+    },
+    "source_receipt_scope": {
+      "examples/drama3_weight_wrappers.cr": [
+        "build-probe",
+        "paired-wrappers",
+        "final-broad-specs"
+      ],
+      "scripts/drama3/measure_weight_wrappers.py": [
+        "paired-wrappers"
+      ],
+      "spec/drama3_weight_wrappers_spec.cr": [
+        "final-broad-specs"
+      ],
+      "src/ml/audio/drama3/metal.cr": [
+        "build-probe",
+        "paired-wrappers",
+        "final-broad-specs"
+      ],
+      "src/ml/audio/drama3/resident.cr": [
+        "build-probe",
+        "paired-wrappers",
+        "final-broad-specs"
+      ]
+    },
+    "source_sequence": "Production/example unchanged across build, pairs and final tests. Python driver pinned at measurement. Final test hash includes the packed-Q4 witness added after measurement; production unchanged.",
+    "all_capture_source_hashes": "Per-command source_sha256 maps in the hashed commands.json receipt.",
+    "weight_pin_limit": "Indexed shard set, file sizes, config/index/tokenizer hashes and same-worker mmap backing qualified; full weight-file bytes were not rehashed.",
+    "bridge": "Unchanged bridge sources, reused object with SHA256 4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49"
+  },
+  "fixed_input": {
+    "text": "Hello, this is a voice test.",
+    "reference": null,
+    "seed": 1,
+    "max_frames": 64,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "sampler": {
+      "dtype": "float32-le",
+      "uniform_count": 704,
+      "sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "provenance": "host input tape uploaded once"
+    },
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+    "samples": 122880,
+    "sample_rate": 44100,
+    "audio_seconds": 2.786394557823129,
+    "effective_controls": {
+      "DRAMA3_BACKEND": "metal",
+      "DRAMA3_DAC_SCRATCH": "0",
+      "DRAMA3_MEMORY_PROFILE": "0",
+      "DRAMA3_ALLOCATION_PROFILE": "0",
+      "DRAMA3_METAL_TIMELINE": "1",
+      "DRAMA3_METAL_RESOURCES": "1",
+      "DRAMA3_MOE_BATCH": "1",
+      "DRAMA3_EXPERT_THREADS": "64",
+      "DRAMA3_DENSE_REDUCTION": "tree",
+      "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+      "DRAMA3_DELTA_TRANSPOSE": "1",
+      "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+      "DRAMA3_MMAP_SHARED": "0",
+      "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+      "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+      "DRAMA3_GENERATION_SCRATCH": "0",
+      "DRAMA3_HOST_PROFILE": "1"
+    }
+  },
+  "experiment": {
+    "requests": 18,
+    "cold_primes": 2,
+    "warm_jobs": 16,
+    "adjacent_pairs": 8,
+    "order": [
+      "P prime; P/R/R/P twice",
+      "P prime; R/P/P/R twice"
+    ],
+    "pair_order_balance": {
+      "P_then_R": 4,
+      "R_then_P": 4
+    },
+    "mappings": 6,
+    "declared_buffer_bytes": 25867452416,
+    "page_bytes": 16384,
+    "command_events": 2196,
+    "cold_definition": "New worker/mappings, not purged filesystem caches or physical-disk reads.",
+    "host": "Apple M2 Max; macOS26.6.2 (25G83); local weights, external-SSD scratch.",
+    "exposure_limit": "Raw view cache also resets (1421 views first refresh, 855 later); converted GPU F32 allocations remain cached. Not every refreshed raw shard binds in the first warm command.",
+    "timing_limit": "Request wall includes preparation, normal engine/WAV work, post-job GC and IPC. Host creation timer does not expose delayed driver registration or teardown.",
+    "summary_seconds": {
+      "persistent": {
+        "request_wall_seconds": {
+          "n": 8,
+          "median": 23.761333354050294,
+          "minimum": 23.1514900829643,
+          "maximum": 30.787479875143617
+        },
+        "preparation_seconds": {
+          "n": 8,
+          "median": 2.6459999999999997e-06,
+          "minimum": 1.667e-06,
+          "maximum": 4.083e-06
+        },
+        "construct_seconds": {
+          "n": 8,
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "first_encoding_seconds": {
+          "n": 8,
+          "median": 0.010494583286345005,
+          "minimum": 0.007700166665017605,
+          "maximum": 0.023574416991323233
+        },
+        "first_driver_seconds": {
+          "n": 8,
+          "median": 0.3750943543855101,
+          "minimum": 0.31142666656523943,
+          "maximum": 7.685557874850929
+        },
+        "first_gpu_seconds": {
+          "n": 8,
+          "median": 0.16490014572627842,
+          "minimum": 0.1595092499628663,
+          "maximum": 0.18889470817521214
+        }
+      },
+      "fresh": {
+        "request_wall_seconds": {
+          "n": 8,
+          "median": 24.620183187536895,
+          "minimum": 23.033646459225565,
+          "maximum": 30.391518084332347
+        },
+        "preparation_seconds": {
+          "n": 8,
+          "median": 0.0010871664999999998,
+          "minimum": 0.000776125,
+          "maximum": 0.001664792
+        },
+        "construct_seconds": {
+          "n": 8,
+          "median": 0.001078605,
+          "minimum": 0.000770749,
+          "maximum": 0.001653334
+        },
+        "first_encoding_seconds": {
+          "n": 8,
+          "median": 0.010082270950078964,
+          "minimum": 0.007753083482384682,
+          "maximum": 0.020089041441679
+        },
+        "first_driver_seconds": {
+          "n": 8,
+          "median": 0.44444243726320565,
+          "minimum": 0.31243537506088614,
+          "maximum": 7.228573875036091
+        },
+        "first_gpu_seconds": {
+          "n": 8,
+          "median": 0.1712228124961257,
+          "minimum": 0.15953408321365714,
+          "maximum": 0.19363899994641542
+        }
+      }
+    },
+    "paired_R_minus_P_seconds": {
+      "request_wall_seconds": {
+        "n": 8,
+        "median": -0.0008155202958732843,
+        "mean": -0.1085223956615664,
+        "minimum": -5.439324666280299,
+        "maximum": 6.644849959295243
+      },
+      "first_driver_seconds": {
+        "n": 8,
+        "median": -0.005171062424778938,
+        "mean": -0.23235903651220724,
+        "minimum": -5.40046187536791,
+        "maximum": 6.861156083177775
+      }
+    },
+    "request_wins": {
+      "persistent": 4,
+      "fresh": 4
+    },
+    "observations": {
+      "warm_first_pageins_zero": true,
+      "warm_first_disk_reads_zero": true,
+      "warm_request_pageins_zero": true,
+      "warm_request_disk_reads_always_zero": false,
+      "window_limit": "Process-wide overlapping windows are nonadditive; zero counters do not prove GPU residency. Scheduling and GPU intervals do not certify pure queue wait."
+    }
+  },
+  "numerical_and_queue_checks": {
+    "metal_examples": 67,
+    "failures": 0,
+    "all_requests_full_codes_and_wav_exact": true,
+    "codes_shape": [
+      60,
+      11
+    ],
+    "per_request": {
+      "submitted": 122,
+      "completed": 122,
+      "completion_waits": 122,
+      "depth": 2,
+      "max_pending": 2,
+      "terminal_pending": 0,
+      "terminal_retained_bytes": 0,
+      "control_read_bytes": 496,
+      "terminal_read_bytes": 494160
+    },
+    "upstream_full_codes": {
+      "modes": [
+        "persistent",
+        "fresh"
+      ],
+      "comparison": "Exact 60x11 integer equality on MLX GPU against saved pinned F32 MLX-core control and shared F32 tape, not fresh stock generation."
+    },
+    "prefill": {
+      "prompt_rows": 158,
+      "rotated_model_shards": 5,
+      "scope": "Final hidden/logits only, not every row/layer or discarded teacher_force outputs. Second arm also enables previously tested backbone/tower workspaces; combined numerical guard only.",
+      "fixture_sha256": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+      "tolerances": {
+        "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+        "atol": 3e-05,
+        "rtol": 0.0003
+      },
+      "stages": [
+        {
+          "name": "prompt.backbone.hidden",
+          "shape": [
+            1,
+            2048
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 2048,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.05126616,
+          "passes": true
+        },
+        {
+          "name": "prompt.main_logits",
+          "shape": [
+            1,
+            4097
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 4097,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.0079710195,
+          "passes": true
+        }
+      ],
+      "per_arm_submissions_completions_waits": 159,
+      "total_with_terminal_comparison": 319,
+      "readbacks": {
+        "control": 16,
+        "diagnostic": 40
+      },
+      "activation_cpu_reads": 0
+    },
+    "inference_boundary_changes": {
+      "new_submissions": 0,
+      "new_waits": 0,
+      "new_activation_reads": 0
+    }
+  },
+  "executed_checks": {
+    "build-probe": {
+      "exit_code": 0,
+      "wrapper_seconds": 10.60603545838967,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/build-probe.log",
+      "log_sha256": "c796dba6d9675563e7535616e8b649c3fd39abe9567955f5029a3d5b7c774985"
+    },
+    "final-broad-specs": {
+      "exit_code": 0,
+      "wrapper_seconds": 6.806469582952559,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/final-broad-specs.log",
+      "log_sha256": "d2bcd382f7286fe0ca217270b160109fec1655bf601d08b7135569f7279fddb2"
+    },
+    "paired-wrappers": {
+      "exit_code": 0,
+      "wrapper_seconds": 487.8492176248692,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/paired-wrappers.log",
+      "log_sha256": "9d1d1c167de348128e4db8fc818066d2f98c5eadcf3f6c161e95b23225e68b96"
+    },
+    "upstream-persistent": {
+      "exit_code": 0,
+      "wrapper_seconds": 0.7538357079029083,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/upstream-persistent.log",
+      "log_sha256": "ecc61993fe4cddd39b5e96ff05fe8ba851b3bf0784a5fd0ddf912c636f8f44f9"
+    },
+    "upstream-fresh": {
+      "exit_code": 0,
+      "wrapper_seconds": 0.8845885000191629,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/upstream-fresh.log",
+      "log_sha256": "ecc61993fe4cddd39b5e96ff05fe8ba851b3bf0784a5fd0ddf912c636f8f44f9"
+    },
+    "build-prefill": {
+      "exit_code": 0,
+      "wrapper_seconds": 8.628963958006352,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/build-prefill.log",
+      "log_sha256": "267774421793885ca0146d4750cf13ea0d23978acf8c4ad4a511d94cbfbf21c6"
+    },
+    "prefill-wrappers": {
+      "exit_code": 0,
+      "wrapper_seconds": 62.413988625165075,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/prefill-wrappers.log",
+      "log_sha256": "601b3676c25eaac4e04db9465726876e29829cb815c89365c08d6953e9f18228"
+    },
+    "static-checks": {
+      "exit_code": 0,
+      "wrapper_seconds": 0.7397026247344911,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/static-checks.log",
+      "log_sha256": "e547377f4b8847772fe0ebd65b06ab8972eff43d184eb4229ef534ba8be81b84"
+    }
+  },
+  "local_artifacts_sha256": {
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/commands.json": "7ff9db53a39c4acefa0b99c7c1557d1f8629a16de73407a056ec33ee624f0f0f",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/run.py": "befc19407c7511cc54fc1fcdb2c7cfa625916d0e62cc3a0a13e748f55cb71359",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/analysis.json": "15aff28deae79856b7549ed6f0225b65b30c0f3771a954001eb54f1dc5d6b831",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/analyze.py": "e7edeef01fb1c4a1d38745d21140e854780703bf009e2a73c082a873fc162617",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/static_checks.json": "b892a0666f2862ec55f6030a2c11ea5c185b0bef84041729260bedac5d6ce0aa",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/static_checks.py": "c185023190fa2c0174cc39f57bc69ebbe39e5b70d9fc3d1854086a1bb154ab26",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/static-checks.log": "e547377f4b8847772fe0ebd65b06ab8972eff43d184eb4229ef534ba8be81b84",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/pairs/wrapper-worker.json": "119643913a30b77af935f3cec40080d72e75ddb19507947f55cc18f88b83897f",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/pairs/worker0.stderr": "b0051c90cd0a0da5fd83afe3991c7ffce6e19ef7af9cea64b6462a0a2ccd1c69",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/pairs/worker1.stderr": "4baba998ca1b820de1ec88f81eff63aa31379d04a142ad41ed360775e50e9ec3",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/upstream-persistent.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/upstream-fresh.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/prefill.json": "50acf51f6ce82d750bc849746cf0c344abc4ae0047e4c141679e9773fecaf632",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/prefill_wrappers.cr": "b80e994fd1010c9814d77da70686ef6e353f54c40aef1a7145e6a4f11e0fb325",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/weight-wrappers": "05cbcaabcb0cfb359e622b6213a00901e1775e4ca69ac09175076c46bbb3535f",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/prefill-wrappers": "e841cef22d172693cf95dbfe3dbf36ff6157006045e40c2f8a2d1cd5fc21b5ff",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/bridge.o": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49"
+  },
+  "mini_quad": {
+    "verdict": "ROBUST within the bounded diagnostic, numerical and descriptive comparison scope.",
+    "reviewers": [
+      "prefill_start_adversary",
+      "weight_wrapper_audit"
+    ],
+    "correlation": "Same-lineage reviews are correlated. Execution receipts and measured outputs, not model agreement, supply evidence.",
+    "resolved_objection": "Generic driver does not force six mappings/two cycles or hash the baseline itself. The executed artifact qualifier plus receipt pins check these exact-run obligations; generic behavior is not relabeled.",
+    "rejected_inference": "Measured wrapper factory cost is not pure internal registration cost; view-cache churn, unchanged converted buffers, warm order and host noise remain alternatives."
+  },
+  "continuity": {
+    "next_falsifier": "View-only sham retaining Metal buffers versus P/full R on one Engine in balanced order; passive per-shard first-command binding counts. Not implemented or promoted.",
+    "numeric_return_frontier": "MoE39/common-prefix and DAC post-module intermediate stage.",
+    "decay_trigger": "Source/model/layout/queue/input/tape/observer/runtime/host/OS change, contradictory evidence or artifact eviction.",
+    "refresh": "Rerun focused Metal witnesses, balanced qualified pairs and saved-upstream GPU gates with pinned source/inputs and unchanged tolerances.",
+    "failure_policy": "Downgrade dependent claims if artifacts/pins/checks fail. Keep persistent default; reject unsafe rotation without draining.",
+    "report": "docs/drama3-weight-wrappers.md",
+    "validator_limit": "No repository generic evidence validator/template is present. Bounded JSON/path/hash/receipt/statistic consistency checks supplement executed tests; structure is not substantive proof."
+  }
+}

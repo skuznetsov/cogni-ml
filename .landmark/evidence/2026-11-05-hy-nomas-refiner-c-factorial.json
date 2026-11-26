@@ -1,0 +1,121 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_c_factorial_evidence/v1",
+  "date": "2026-11-05",
+  "base_revision": "535ae3b6640cf33a39c880c37c1919696bddd144",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Refiner-only conditional numerical factorization of one authenticated V224 Action2 semantic pair; no DiT, decoder or new render.",
+    "adversary": "ROBUST within this numerical scope; same-lineage review is correlated.",
+    "refresh": [
+      "source/runtime",
+      "weights",
+      "input/layout",
+      "precision",
+      "binary",
+      "evidence mutation or removal"
+    ],
+    "rollback": "Omit diagnostic probes; production runtime is unchanged."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "examples/hy_nomas_refiner_c_factorial_probe.cr",
+      "examples/support/hy_nomas_refiner_c_factorial_probe.cr",
+      "spec/support/hy_nomas_refiner_c_factorial_reference.py",
+      "spec/hy_nomas_refiner_c_factorial_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-05-hy-nomas-refiner-c-factorial.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_refiner_c_factorial_probe.cr",
+      "examples/support/hy_nomas_refiner_c_factorial_probe.cr",
+      "spec/support/hy_nomas_refiner_c_factorial_reference.py",
+      "spec/hy_nomas_refiner_c_factorial_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-05-hy-nomas-refiner-c-factorial.json"
+    ],
+    "production_behavior_changed": false
+  },
+  "verification": {
+    "cpu_tests": 46,
+    "release_build": "build3 passed",
+    "real_fixture_cpu_admission": true,
+    "source_native_checkpoints_bit_exact": 25,
+    "native_factor_invariants_exact": 14,
+    "independent_region_effect_summaries": 24,
+    "effect_stat_max_absolute_difference": 3.552713678800501e-15,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "dod_command": "python3 -B -m unittest spec.hy_nomas_refiner_c_factorial_test spec.hy_nomas_refiner_transfer_test spec.hy_nomas_action_conditioning_spec spec.hy_nomas_reference_attention_test spec.video_block_diff_test",
+    "dod_signal": "46 tests pass; guarded source/native and actual-fixture admission exit 0; all 25 checkpoints bit exact and all no-op/factor invariants exact.",
+    "gpu_dod_replay": "Executed argv and stdout hashes are bound in qualification.json; fresh output paths are required."
+  },
+  "result": {
+    "block1_action1_relative_rms": {
+      "combined_B_minus_A0": 0.003786254775839267,
+      "text_B_minus_A_at_cA": 0.00378594324442032,
+      "c_B_minus_A_at_textA": 0.00028422232644363725,
+      "interaction_B_minus_X10_minus_X01_plus_A0": 0.00037549022853472627
+    },
+    "conclusion": "Fixing c preserves measured cross-row text-attention transfer into unchanged Action1 rows for this pair; norms are conditional, not independent route percentages."
+  },
+  "execution": {
+    "scope": "refiner only; no DiT",
+    "case_order": [
+      "A0",
+      "A1",
+      "B",
+      "X10",
+      "X01"
+    ],
+    "prepared_weights_encodes": 1,
+    "command_chains": 1,
+    "terminal_waits": 1,
+    "named_allocations_during_encode": 0,
+    "readbacks_before_terminal_wait": 0,
+    "postwait_checkpoint_readbacks": 25
+  },
+  "memory": {
+    "named_plan_bytes": 1472201732,
+    "opaque_mps_resources_included": false,
+    "cache_aware_floor_pct": 10,
+    "process_cap_bytes": 6442450944,
+    "swap_growth_limit_bytes": 67108864,
+    "observed_swap_growth_bytes": 0,
+    "minimum_runtime_or_admission_sampled_headroom_bytes": 30607556608,
+    "instantaneous_gpu_peak_certified": false
+  },
+  "artifacts": {
+    "qualification_index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/qualification.json",
+      "bytes": 24144,
+      "sha256": "b217f76b65e401968cd5b9d3e38e107a251eb452570993824d1d2e9d97390798"
+    },
+    "source_manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/source.json",
+      "bytes": 20730,
+      "sha256": "8f9cb5cc6b7df387be446a93bdc3d550818fc930746ea4ecbf8b16f3807bf95b"
+    },
+    "native_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/native.json",
+      "bytes": 28669,
+      "sha256": "c5b5676b8b1ab962256675bd78c889903b8a9ef0c63737192e612759d7c95d09"
+    },
+    "independent_native_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/native-independent.json",
+      "bytes": 1979,
+      "sha256": "1070321516ca5f4958f94349c53bf124586265d5697c7b8e6fe5ca22afeaf50a"
+    }
+  },
+  "residual_risk": [
+    "Opaque MPS resources are outside named allocation counters.",
+    "Sampled process memory is not instantaneous total GPU peak.",
+    "Conditional effect norms are not independent additive channel percentages.",
+    "This refiner slice does not identify the cause of weak acting or admit a controller.",
+    "Single qualification timings are not speed comparisons.",
+    "The pinned source uses a qualified MPS adapter; this is not stock CUDA/Magi evidence."
+  ],
+  "next_boundary": "Same-latent direct DiT M00/M10/M01/M11 route ablation with fixed refined text, T0 and noise; qualify before rendering.",
+  "packet_validation": "The generic skill template and validate-landmark-graph.sh are absent here. Direct payload/statistic, command-receipt and file-digest checks are used; JSON shape alone is not proof."
+}

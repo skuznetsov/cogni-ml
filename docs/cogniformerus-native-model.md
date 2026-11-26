@@ -93,7 +93,7 @@ Learned K/V projections will:
 ## 3. What exists already
 
 ### In cogni-ml:
-- [x] nomic BERT MoE full forward pass on Metal GPU (`src/ml/gguf/nomic_bert.cr`)
+- [x] nomic BERT MoE full forward pass on Metal GPU (`src/ml/models/nomic_bert/encoder.cr`)
 - [x] Custom Metal shaders: flash attention, GEMM Q5_K/Q6_K, fused BERT ops
 - [x] ComputeGraph with automatic wave/barrier scheduling
 - [x] MetalBuffer with unified memory, BufferPool
@@ -104,7 +104,7 @@ Learned K/V projections will:
 - [x] Sampling Metal kernel — top-k + softmax (`kernels/sampling.metal`)
 - [x] CausalDecoder Crystal scaffold — full forward pass CPU reference (`src/ml/gguf/decoder.cr`)
 - [x] KV cache with bounds checking, V transpose, GQA support
-- [x] Phase 0.5 code discrimination test (`bin/test_code_discrimination.cr`)
+- [x] Phase 0.5 code discrimination test (`experiments/nomic/test_code_discrimination.cr`)
 
 ### In Cogniformerus:
 - [x] Hierarchical memory (pg_sorted_heap + GraphRAG)

@@ -1,0 +1,991 @@
+{
+  "adversary": {
+    "attacks": [
+      "Exact-limb capacity, temporal/spatial/channel indexing and direct rounding audited at fixed C512/K13824.",
+      "Controls-only success cannot pass a named-candidate gate; small/full ordered-FMA and exact-integer replays exit 1 as expected.",
+      "Actual upstream biased Conv3D matched separate BF16 bias addition on all sampled points; bias decomposition is checked rather than assumed.",
+      "A contradictory sampled F32 rounding result blocks a zero full-output counter claim.",
+      "Exact mathematical accuracy and separate F32 MPS output are not promoted to hidden BF16 accumulator equality.",
+      "No performance inference from mixed diagnostic intervals, midpoint-selected prevalence or compiler behavior."
+    ],
+    "correlation": "Same-lineage subagent math and evidence reviews are correlated, not independent backend validation.",
+    "scope": "The synthetic diagnostic and its negative result only.",
+    "verdict": "ROBUST"
+  },
+  "binary": {
+    "bytes": 1193240,
+    "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/build/dcae_v_reduction_probe",
+    "sha256": "74de3757345e523b0990136cd7454074b8e838e1aee19ae9362df9629c80fa23"
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/2026-11-08-dcae-conv3d-reduction.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_reduction_probe.cr",
+      "examples/support/dcae_v_reduction_bridge.mm",
+      "examples/support/dcae_v_reduction_compare.py",
+      "examples/support/dcae_v_reduction_native.metal",
+      "examples/support/dcae_v_reduction_oracle.py",
+      "examples/support/dcae_v_reduction_probe.metal",
+      "spec/dcae_v_reduction_compare_spec.py"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/2026-11-08-dcae-conv3d-reduction.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_reduction_probe.cr",
+      "examples/support/dcae_v_reduction_bridge.mm",
+      "examples/support/dcae_v_reduction_compare.py",
+      "examples/support/dcae_v_reduction_native.metal",
+      "examples/support/dcae_v_reduction_oracle.py",
+      "examples/support/dcae_v_reduction_probe.metal",
+      "spec/dcae_v_reduction_compare_spec.py"
+    ],
+    "unchanged": [
+      "Production decoder/kernel modules and defaults",
+      "atol=rtol=2e-5",
+      "10% reserve",
+      "No full generation"
+    ]
+  },
+  "claim": {
+    "level": "VERIFIED",
+    "not_claimed": [
+      "Real decoder-activation or full-model parity",
+      "An identified hidden MPS BF16 accumulator or reduction schedule",
+      "A full-tensor error rate for sampled native candidates",
+      "CUDA/backend-independent upstream equivalence",
+      "No opaque MPS allocations or driver waits",
+      "A Conv3D benchmark or generation-rate estimate",
+      "Full generation, video quality or identity repair"
+    ],
+    "performance_objective": "IN_PROGRESS: no optimized decoder arithmetic or speedup is admitted.",
+    "reduction_objective": "IN_PROGRESS: none of 18 F32 schedules or the exact-integer reference reproduces upstream within unchanged tolerances.",
+    "scope": "A diagnostic-only connected native GPU reduction probe and bounded upstream operator checks on two synthetic fixtures with real pretrained stage-2 weights."
+  },
+  "cleanup": {
+    "audit": {
+      "availability": "local retained evidence",
+      "bytes": 3774,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/cleanup.json",
+      "sha256": "d0307183d50f2dfdeaa8ea6923843f830f770403e94d6e4c86b0ae58db71dcb5"
+    },
+    "compiler_failure": "The first unrolled Metal exact kernel expanded compiler memory and was stopped before GPU execution. Final source disables loop unrolling; small3 log retained only as rejected-route evidence, not successful model execution.",
+    "preserved": "Weights, final binary/source archives and compact reproducibility data; preexisting user bytecode directories untouched."
+  },
+  "comparison": {
+    "atol": 2e-05,
+    "cache_cases": [
+      "invalid zero left frame",
+      "valid synthetic left frame"
+    ],
+    "causal_input": "concat(left one frame, input 40 frames, right zero one frame), Conv3D padding (0,1,1)",
+    "exact_integer": "Finite BF16 products accumulated in 34 radix-2^16 limbs, base 2^-272; signed cancellation then direct RN-even BF16/F32 without double rounding. Mathematical reference, not upstream semantics.",
+    "exact_integer_capacity_audit": "For fixed K=13824, product top bit 527 plus 14 carry bits fits 544 bits; each unnormalized limb is below 2^46. This is not an arbitrary-K or nonfinite-input certificate.",
+    "f32_native_schedules": "18 variants: ic/kt/kh/kw versus kt/kh/kw/ic, 1/4/8/16/32 striped accumulators, serial or balanced lane merge, explicit F32 fma.",
+    "full_control_scope": "Original versus multi-target MPS post-bias and separate upcast-F32 MPS rounded to BF16 versus exposed pre-bias are compared on every output value by GPU counters. A post-drain sampled CPU rounding check guards contradictory zero counters.",
+    "rtol": 2e-05,
+    "sampling": {
+      "boundary": 512,
+      "near_bf16_midpoint": 4096,
+      "selection": "GPU only; 8192 unique full-shape coordinates per case. Midpoint samples deliberately enrich rounding sensitivity and are not unbiased prevalence.",
+      "stratified": 3584
+    },
+    "upstream_control_scope": "8192 GPU-gathered pre/post-bias coordinates per cache case, plus original biased Conv3D versus separate BF16 bias addition.",
+    "vectors": {
+      "cases": "BF16 ties, direct versus F32 staged rounding, cancellation, subnormal/min-normal carry and overflow.",
+      "count": 256,
+      "k": 32,
+      "oracle": "Independent Python Fraction exact expected bits; only setup and post-drain checking are on CPU."
+    }
+  },
+  "date": "2026-11-08",
+  "failure_policy": "Reject unsafe admission, nonfinite values, invalid lineage or any unchanged-tolerance candidate failure. Never promote control success, exact mathematical sums, selected error counts or a shared-backend oracle to a broader parity/speed claim.",
+  "falsifier": "Any nonfinite or unchanged-tolerance pre/post-bias mismatch on an authenticated native sample rejects that candidate. The retained ordered-FMA mismatch must remain detectable.",
+  "guard": {
+    "limitations": "File-backed reclaimability is estimated. Sampled accounting cannot exclude between-poll spikes or all external compiler services; global headroom remains checked.",
+    "logs": {
+      "full": {
+        "availability": "local retained evidence",
+        "bytes": 15654,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-guard.jsonl",
+        "sha256": "e17fb2e77a15097ecc1caa509ef70682642c071a920e19ec3df51cb13be853ef"
+      },
+      "full-upstream": {
+        "availability": "local retained evidence",
+        "bytes": 8815,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-upstream-guard.jsonl",
+        "sha256": "f6655296f67135f6baddb72c14c1f4a7e731702052d815c6503efe489670e387"
+      },
+      "small4": {
+        "availability": "local retained evidence",
+        "bytes": 2900,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-guard.jsonl",
+        "sha256": "3e87c8a362b0a1e95129f1cc6f9a6f2af748c94d3f5cdd45b61eda2cefe9f992"
+      },
+      "small4-upstream-final": {
+        "availability": "local retained evidence",
+        "bytes": 2903,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-upstream-final-guard.jsonl",
+        "sha256": "590f20316193aa510148228605ee1f8eaeb550d9d3a8f40d8381637c3e62a948"
+      }
+    },
+    "policy": "Cache-aware 10% reserve, external sequential process-group guard, 64 MiB swap-growth stop, bounded timeout.",
+    "runs": {
+      "full": {
+        "elapsed_seconds": 23.96552037494257,
+        "exit_code": 0,
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 19327352832,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1215518.88001325,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 1200
+        },
+        "max_swap_growth_bytes": 0,
+        "min_cache_aware_headroom_bytes": 30772592640,
+        "min_cache_aware_headroom_fraction": 0.4478001594543457,
+        "peak_group_bytes": 3957310352,
+        "peak_group_gib": 3.6855324655771255,
+        "sample_count": 48
+      },
+      "full-upstream": {
+        "elapsed_seconds": 12.43104250007309,
+        "exit_code": 0,
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 19327352832,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1215556.575568791,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 1200
+        },
+        "max_swap_growth_bytes": 0,
+        "min_cache_aware_headroom_bytes": 30176067584,
+        "min_cache_aware_headroom_fraction": 0.4391195774078369,
+        "peak_group_bytes": 3825403968,
+        "peak_group_gib": 3.5626850724220276,
+        "sample_count": 26
+      },
+      "small4": {
+        "elapsed_seconds": 2.6151424169074744,
+        "exit_code": 0,
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 4294967296,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1215425.271902583,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 600
+        },
+        "max_swap_growth_bytes": 0,
+        "min_cache_aware_headroom_bytes": 34904883200,
+        "min_cache_aware_headroom_fraction": 0.5079329013824463,
+        "peak_group_bytes": 77005664,
+        "peak_group_gib": 0.07171711325645447,
+        "sample_count": 7
+      },
+      "small4-upstream-final": {
+        "elapsed_seconds": 2.64394958387129,
+        "exit_code": 0,
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 4294967296,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1215725.094057416,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 600
+        },
+        "max_swap_growth_bytes": 0,
+        "min_cache_aware_headroom_bytes": 33206206464,
+        "min_cache_aware_headroom_fraction": 0.4832139015197754,
+        "peak_group_bytes": 1273808192,
+        "peak_group_gib": 1.1863263249397278,
+        "sample_count": 7
+      }
+    },
+    "summary": {
+      "availability": "local retained evidence",
+      "bytes": 4275,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/memory-summary.json",
+      "sha256": "f440819d84de82539e3d52750f1b37acc2afac779602390893bd04f85ccfb200"
+    }
+  },
+  "implementation_sources": {
+    "Makefile": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/Makefile",
+      "bytes": 97775,
+      "sha256": "19b7a985d1234b3633b73f8506ce80a1910dce98340b01304adbee13047b98ae"
+    },
+    "examples/dcae_v_reduction_probe.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/dcae_v_reduction_probe.cr",
+      "bytes": 18300,
+      "sha256": "46674733f1b7bd28ec3b4a3d1263894770edebb048c86a26eb03c67d96a55b9e"
+    },
+    "examples/support/dcae_v_reduction_bridge.mm": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/support/dcae_v_reduction_bridge.mm",
+      "bytes": 18950,
+      "sha256": "907c87ac9115e86ca2c12dd308e1c61362d1afddb3d463a73681bd459a238788"
+    },
+    "examples/support/dcae_v_reduction_compare.py": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-final/examples/support/dcae_v_reduction_compare.py",
+      "bytes": 13040,
+      "sha256": "fda88a0d95fcac89fe579d6af013ffccaaba6a164db304294a7c9b5ae47b13b0"
+    },
+    "examples/support/dcae_v_reduction_native.metal": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/support/dcae_v_reduction_native.metal",
+      "bytes": 21774,
+      "sha256": "3aaac1c37b2364651903c1718200cd2cfcef61ebd08022e601b4b3332a88ceb2"
+    },
+    "examples/support/dcae_v_reduction_oracle.py": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-final/examples/support/dcae_v_reduction_oracle.py",
+      "bytes": 5787,
+      "sha256": "d15c094f50fceedeb3a753b465c9ffceebaba2420bfa31588a938c83257f6592"
+    },
+    "examples/support/dcae_v_reduction_probe.metal": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/support/dcae_v_reduction_probe.metal",
+      "bytes": 5743,
+      "sha256": "1b0d1e2c821c908af6eb385abf5f2d8b29c879de265fe8577380af1a04f320c2"
+    },
+    "examples/support/hy_nomas_probe_instrumentation.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/support/hy_nomas_probe_instrumentation.cr",
+      "bytes": 931,
+      "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48"
+    },
+    "examples/support/wan_memory_guard.py": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/examples/support/wan_memory_guard.py",
+      "bytes": 37589,
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    },
+    "spec/dcae_v_reduction_compare_spec.py": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-final/spec/dcae_v_reduction_compare_spec.py",
+      "bytes": 7247,
+      "sha256": "4133e94f6fd5100291102acb39524b58de96d7790504e75d02324c1a840cc7cc"
+    },
+    "src/ml/metal/bridge.mm": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/metal/bridge.mm",
+      "bytes": 49845,
+      "sha256": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13"
+    },
+    "src/ml/metal/device.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/metal/device.cr",
+      "bytes": 25220,
+      "sha256": "43711e4ddb51d2c31cc7b262f72efcbe9ca35d50bc3ce85be402b13e9126df32"
+    },
+    "src/ml/video/checkpoint.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/video/checkpoint.cr",
+      "bytes": 16090,
+      "sha256": "12c359fbb373901179c602e6819f0d3f053deea394e3a7741e7d5a9b119229ff"
+    },
+    "src/ml/video/dcae_v_mps.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/video/dcae_v_mps.cr",
+      "bytes": 6925,
+      "sha256": "91033a4e9ee3ddb8a1ebb58642470054c27c407b1cd4a61cb5e7e930c65b1978"
+    },
+    "src/ml/video/dcae_v_mps_bridge.mm": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/video/dcae_v_mps_bridge.mm",
+      "bytes": 28712,
+      "sha256": "31c8298dc5fcfe00bee9c08edd6cd3d479b1b437596d243ed4d5ef26952cd56d"
+    },
+    "src/ml/video/metal_mps_command_chain.cr": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/video/metal_mps_command_chain.cr",
+      "bytes": 23232,
+      "sha256": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893"
+    },
+    "src/ml/video/metal_mps_command_chain.mm": {
+      "archive": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-v2/src/ml/video/metal_mps_command_chain.mm",
+      "bytes": 66820,
+      "sha256": "f973b615fcc9a7d56541a974c6cf1862110f30babdff709234555b2d7ec44ba3"
+    }
+  },
+  "links": {
+    "frontier": "docs/dcae-v-decoder-frontier.md",
+    "previous_profile": ".landmark/evidence/2026-11-08-dcae-conv3d-profile.json"
+  },
+  "next_falsifier": "Capture true stage-2 BF16 input and causal cache in a bounded decoder-prefix run, then repeat the declared comparisons. This tests input-distribution dependence without full generation; native reduction parity remains open.",
+  "raw_artifacts": {
+    "bytes": 421680709,
+    "files": 287,
+    "manifest": {
+      "availability": "local retained evidence",
+      "bytes": 46190,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/raw-artifact-manifest.json",
+      "sha256": "b8eaf100d77f3def70c1136f516c6592b51b066f3d652e7d6039711be08a4298"
+    },
+    "root": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF"
+  },
+  "refresh_triggers": [
+    "Source or binary change",
+    "OS, SDK, runtime or GPU change",
+    "Weights or actual/synthetic input distribution change",
+    "Geometry, cache, rounding, coordinate selection, guard or measurement-policy change"
+  ],
+  "risk_tier": "CAUTION: new diagnostic, explicit process and memory guards; production defaults/arithmetic unchanged.",
+  "rollback": "Remove this diagnostic-only probe/Makefile target as one coherent change. No production arithmetic/default migration was made.",
+  "runs": {
+    "full": {
+      "cache_seed": 1298,
+      "cases": {
+        "invalid": {
+          "exact_integer_by_sample_group": {
+            "boundary": {
+              "bit_mismatches": 1,
+              "count": 512,
+              "max_abs": 1.52587890625e-05,
+              "tolerance_failures": 0
+            },
+            "near_midpoint": {
+              "bit_mismatches": 2146,
+              "count": 4096,
+              "max_abs": 0.125,
+              "tolerance_failures": 1866
+            },
+            "stratified": {
+              "bit_mismatches": 6,
+              "count": 3584,
+              "max_abs": 0.03125,
+              "tolerance_failures": 6
+            }
+          },
+          "full_output_control": {
+            "bf16-nonfinite": 0,
+            "f32-nonfinite": 0,
+            "mps-f32-rounded-vs-pre-bit": 0,
+            "mps-f32-rounded-vs-pre-tolerance": 0,
+            "original-vs-multi-post-bit": 0,
+            "original-vs-multi-post-tolerance": 0
+          },
+          "prebias_candidate_tolerance_failures": {
+            "exact-integer": 1872,
+            "order0-lanes1-tree0": 1852,
+            "order0-lanes16-tree0": 1847,
+            "order0-lanes16-tree1": 1826,
+            "order0-lanes32-tree0": 1853,
+            "order0-lanes32-tree1": 1850,
+            "order0-lanes4-tree0": 1828,
+            "order0-lanes4-tree1": 1823,
+            "order0-lanes8-tree0": 1839,
+            "order0-lanes8-tree1": 1827,
+            "order1-lanes1-tree0": 1862,
+            "order1-lanes16-tree0": 1856,
+            "order1-lanes16-tree1": 1848,
+            "order1-lanes32-tree0": 1860,
+            "order1-lanes32-tree1": 1857,
+            "order1-lanes4-tree0": 1815,
+            "order1-lanes4-tree1": 1816,
+            "order1-lanes8-tree0": 1824,
+            "order1-lanes8-tree1": 1830
+          },
+          "sampled_control_bit_mismatches": {
+            "sampled_mps_f32_round_vs_bf16_pre": 0,
+            "upstream_biased_call_vs_separate": 0,
+            "upstream_post": 0,
+            "upstream_pre": 0
+          }
+        },
+        "valid": {
+          "exact_integer_by_sample_group": {
+            "boundary": {
+              "bit_mismatches": 0,
+              "count": 512,
+              "max_abs": 0.0,
+              "tolerance_failures": 0
+            },
+            "near_midpoint": {
+              "bit_mismatches": 2140,
+              "count": 4096,
+              "max_abs": 0.125,
+              "tolerance_failures": 1866
+            },
+            "stratified": {
+              "bit_mismatches": 6,
+              "count": 3584,
+              "max_abs": 0.03125,
+              "tolerance_failures": 6
+            }
+          },
+          "full_output_control": {
+            "bf16-nonfinite": 0,
+            "f32-nonfinite": 0,
+            "mps-f32-rounded-vs-pre-bit": 0,
+            "mps-f32-rounded-vs-pre-tolerance": 0,
+            "original-vs-multi-post-bit": 0,
+            "original-vs-multi-post-tolerance": 0
+          },
+          "prebias_candidate_tolerance_failures": {
+            "exact-integer": 1872,
+            "order0-lanes1-tree0": 1856,
+            "order0-lanes16-tree0": 1842,
+            "order0-lanes16-tree1": 1819,
+            "order0-lanes32-tree0": 1850,
+            "order0-lanes32-tree1": 1843,
+            "order0-lanes4-tree0": 1824,
+            "order0-lanes4-tree1": 1821,
+            "order0-lanes8-tree0": 1843,
+            "order0-lanes8-tree1": 1833,
+            "order1-lanes1-tree0": 1866,
+            "order1-lanes16-tree0": 1849,
+            "order1-lanes16-tree1": 1840,
+            "order1-lanes32-tree0": 1852,
+            "order1-lanes32-tree1": 1844,
+            "order1-lanes4-tree0": 1817,
+            "order1-lanes4-tree1": 1817,
+            "order1-lanes8-tree0": 1821,
+            "order1-lanes8-tree1": 1828
+          },
+          "sampled_control_bit_mismatches": {
+            "sampled_mps_f32_round_vs_bf16_pre": 0,
+            "upstream_biased_call_vs_separate": 0,
+            "upstream_post": 0,
+            "upstream_pre": 0
+          }
+        }
+      },
+      "diagnostic_gpu_seconds": 17.725614792201668,
+      "exact_vector_failures": {
+        "bf16": 0,
+        "f32": 0
+      },
+      "graph_roots": 19,
+      "hot_metrics": {
+        "allocations": 0,
+        "preterminal_waits": 0,
+        "readbacks": 0
+      },
+      "input_kind": "GPU hash seeded finite BF16 synthetic real-geometry input",
+      "input_seed": 8230,
+      "interval_scope": "Multiple full MPS convolutions, full controls, sampling and 19 native candidates; not per-Conv3D time or speedup evidence.",
+      "manifest": {
+        "availability": "local retained evidence",
+        "bytes": 1794,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full/manifest.json",
+        "sha256": "a19308363fd47f941cf631d3dc162ad4756e4dbb227f21188eab62008a978cba"
+      },
+      "named_gpu_bytes": 2291273680,
+      "observations": {
+        "availability": "local retained evidence",
+        "bytes": 370180,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-observed-final.json",
+        "sha256": "4aa0c2c0fc59df5c8c3104e142ecb0298c0db7d2ffe3e2c3089d60ce808b2e36"
+      },
+      "output_values_per_case": 188743680,
+      "shape": [
+        1,
+        512,
+        40,
+        72,
+        128
+      ],
+      "terminal_waits": 1,
+      "upstream": {
+        "availability": "local retained evidence",
+        "bytes": 648,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full/upstream-operator.json",
+        "sha256": "3d3e7f5d471f73720449d087eebcb0aa0e84bb78602407a96c898d28a9faa1ce"
+      },
+      "weight_shape": [
+        512,
+        512,
+        3,
+        3,
+        3
+      ]
+    },
+    "small4": {
+      "cache_seed": 1298,
+      "cases": {
+        "invalid": {
+          "exact_integer_by_sample_group": {
+            "boundary": {
+              "bit_mismatches": 0,
+              "count": 512,
+              "max_abs": 0.0,
+              "tolerance_failures": 0
+            },
+            "near_midpoint": {
+              "bit_mismatches": 63,
+              "count": 4096,
+              "max_abs": 0.015625,
+              "tolerance_failures": 58
+            },
+            "stratified": {
+              "bit_mismatches": 1,
+              "count": 3584,
+              "max_abs": 0.0001220703125,
+              "tolerance_failures": 1
+            }
+          },
+          "full_output_control": {
+            "bf16-nonfinite": 0,
+            "f32-nonfinite": 0,
+            "mps-f32-rounded-vs-pre-bit": 0,
+            "mps-f32-rounded-vs-pre-tolerance": 0,
+            "original-vs-multi-post-bit": 0,
+            "original-vs-multi-post-tolerance": 0
+          },
+          "prebias_candidate_tolerance_failures": {
+            "exact-integer": 59,
+            "order0-lanes1-tree0": 62,
+            "order0-lanes16-tree0": 63,
+            "order0-lanes16-tree1": 66,
+            "order0-lanes32-tree0": 68,
+            "order0-lanes32-tree1": 59,
+            "order0-lanes4-tree0": 72,
+            "order0-lanes4-tree1": 71,
+            "order0-lanes8-tree0": 78,
+            "order0-lanes8-tree1": 77,
+            "order1-lanes1-tree0": 96,
+            "order1-lanes16-tree0": 59,
+            "order1-lanes16-tree1": 63,
+            "order1-lanes32-tree0": 60,
+            "order1-lanes32-tree1": 55,
+            "order1-lanes4-tree0": 80,
+            "order1-lanes4-tree1": 76,
+            "order1-lanes8-tree0": 66,
+            "order1-lanes8-tree1": 66
+          },
+          "sampled_control_bit_mismatches": {
+            "sampled_mps_f32_round_vs_bf16_pre": 0,
+            "upstream_biased_call_vs_separate": 0,
+            "upstream_post": 0,
+            "upstream_pre": 0
+          }
+        },
+        "valid": {
+          "exact_integer_by_sample_group": {
+            "boundary": {
+              "bit_mismatches": 0,
+              "count": 512,
+              "max_abs": 0.0,
+              "tolerance_failures": 0
+            },
+            "near_midpoint": {
+              "bit_mismatches": 63,
+              "count": 4096,
+              "max_abs": 0.015625,
+              "tolerance_failures": 58
+            },
+            "stratified": {
+              "bit_mismatches": 1,
+              "count": 3584,
+              "max_abs": 0.0001220703125,
+              "tolerance_failures": 1
+            }
+          },
+          "full_output_control": {
+            "bf16-nonfinite": 0,
+            "f32-nonfinite": 0,
+            "mps-f32-rounded-vs-pre-bit": 0,
+            "mps-f32-rounded-vs-pre-tolerance": 0,
+            "original-vs-multi-post-bit": 0,
+            "original-vs-multi-post-tolerance": 0
+          },
+          "prebias_candidate_tolerance_failures": {
+            "exact-integer": 59,
+            "order0-lanes1-tree0": 64,
+            "order0-lanes16-tree0": 64,
+            "order0-lanes16-tree1": 67,
+            "order0-lanes32-tree0": 69,
+            "order0-lanes32-tree1": 59,
+            "order0-lanes4-tree0": 73,
+            "order0-lanes4-tree1": 72,
+            "order0-lanes8-tree0": 76,
+            "order0-lanes8-tree1": 75,
+            "order1-lanes1-tree0": 97,
+            "order1-lanes16-tree0": 60,
+            "order1-lanes16-tree1": 64,
+            "order1-lanes32-tree0": 62,
+            "order1-lanes32-tree1": 56,
+            "order1-lanes4-tree0": 79,
+            "order1-lanes4-tree1": 75,
+            "order1-lanes8-tree0": 66,
+            "order1-lanes8-tree1": 66
+          },
+          "sampled_control_bit_mismatches": {
+            "sampled_mps_f32_round_vs_bf16_pre": 0,
+            "upstream_biased_call_vs_separate": 0,
+            "upstream_post": 0,
+            "upstream_pre": 0
+          }
+        }
+      },
+      "diagnostic_gpu_seconds": 0.47478908323682845,
+      "exact_vector_failures": {
+        "bf16": 0,
+        "f32": 0
+      },
+      "graph_roots": 3,
+      "hot_metrics": {
+        "allocations": 0,
+        "preterminal_waits": 0,
+        "readbacks": 0
+      },
+      "input_kind": "legacy periodic synthetic BF16 positive control",
+      "input_seed": 8230,
+      "interval_scope": "Multiple full MPS convolutions, full controls, sampling and 19 native candidates; not per-Conv3D time or speedup evidence.",
+      "manifest": {
+        "availability": "local retained evidence",
+        "bytes": 1779,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4/manifest.json",
+        "sha256": "d63fb68d5385d523cd2301c1cb005988c63785d94eebe59fab7660d0ce3f52f2"
+      },
+      "named_gpu_bytes": 20614096,
+      "observations": {
+        "availability": "local retained evidence",
+        "bytes": 308520,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-observed-final.json",
+        "sha256": "619157617350f54c3fb23fefb48e6fe9834f77732443cbfa507a60015003947c"
+      },
+      "output_values_per_case": 307200,
+      "shape": [
+        1,
+        512,
+        40,
+        3,
+        5
+      ],
+      "terminal_waits": 1,
+      "upstream": {
+        "availability": "local retained evidence",
+        "bytes": 645,
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4/upstream-operator.json",
+        "sha256": "70bf172f51a240101d176aa9d4bb113d54201ae00c065ba34a12ea23e46db5e0"
+      },
+      "weight_shape": [
+        512,
+        512,
+        3,
+        3,
+        3
+      ]
+    }
+  },
+  "schema": "cogni_ml.dcae_conv3d_reduction/v1",
+  "source_base_commit": "9acedab2d7a72869ec2684a3747366a96bbdd441",
+  "source_pins": {
+    "availability": "local retained evidence",
+    "bytes": 5651,
+    "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/source-binary-pins-final.json",
+    "sha256": "897ca8d6c8c9896193ff3255401b32eb73fc699bd8f1ea123c863ce67aef3d82"
+  },
+  "source_state": "The executed native v2 source and binary are unchanged. Final post-drain comparator, separate upstream oracle and CPU tests are pinned separately; both final upstream runs include the original biased Conv3D call.",
+  "staged_rounding": {
+    "analysis": {
+      "invalid": {
+        "all_changed_are_exact_f32_bf16_midpoints": true,
+        "changed_equal_mps_and_exact_f32_with_staged_bf16": 32,
+        "changed_mps_matches_direct": 7,
+        "changed_mps_matches_neither": 0,
+        "changed_mps_matches_staged": 42,
+        "direct_exact_bf16_tolerance_failures": 1872,
+        "direct_exact_bf16_vs_exact_f32_then_bf16_bit_differences": 49,
+        "direct_failures_corrected_by_exact_f32_staging": 42,
+        "direct_failures_persist_with_exact_f32_staging": 1830,
+        "mps_f32_bit_differences_vs_exact_f32": 8001,
+        "samples": 8192
+      },
+      "valid": {
+        "all_changed_are_exact_f32_bf16_midpoints": true,
+        "changed_equal_mps_and_exact_f32_with_staged_bf16": 33,
+        "changed_mps_matches_direct": 5,
+        "changed_mps_matches_neither": 0,
+        "changed_mps_matches_staged": 44,
+        "direct_exact_bf16_tolerance_failures": 1872,
+        "direct_exact_bf16_vs_exact_f32_then_bf16_bit_differences": 49,
+        "direct_failures_corrected_by_exact_f32_staging": 44,
+        "direct_failures_persist_with_exact_f32_staging": 1828,
+        "mps_f32_bit_differences_vs_exact_f32": 8002,
+        "samples": 8192
+      }
+    },
+    "conclusion": "F32 staging repairs only 42/44 of 1872 direct-exact tolerance failures; 1830/1828 persist. It is a contributor, not an identified MPS reduction schedule.",
+    "report": {
+      "availability": "local retained evidence",
+      "bytes": 1107,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/staged-rounding-analysis.json",
+      "sha256": "0cd86ff09987c2291e645c2437525124c36ad7d8613225ec984e668858de29c7"
+    },
+    "script": {
+      "availability": "local retained evidence",
+      "bytes": 2331,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/staged_rounding_analysis.py",
+      "sha256": "0c99685ffac9af77eafdf98859809cd04b6a37a69df8d3f8d67b221223e55fba"
+    }
+  },
+  "synchronization": {
+    "lifetime": "All named tensor buffers and graph plans allocated/bound before encoding; retained until terminal drain. Exports and CPU compact analysis occur after the drain.",
+    "named_hot_allocations": 0,
+    "named_hot_readbacks": 0,
+    "opaque_scope": "MPSGraph resource allocation, driver waits and oracle export synchronization are not instrumented native-hot counters.",
+    "preterminal_waits": 0,
+    "terminal_waits_per_native_chain": 1
+  },
+  "upstream": {
+    "checkpoint_authentication": "Whole checkpoint authenticated by each native launch; raw weight/bias exports independently joined to safetensors offsets.",
+    "cpu_fallback": false,
+    "device": "mps",
+    "executed_functions": [
+      "_custom_conv3d",
+      "_conv3d_split_channel"
+    ],
+    "module": {
+      "availability": "local retained evidence",
+      "bytes": 63218,
+      "path": "/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/autoencoder_dcae_v.py",
+      "sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+    },
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "scope": "Unmodified pinned function ASTs executed in a separate process. Full model is not loaded; shared Apple backend is not independent backend replication.",
+    "torch_version": "2.8.0",
+    "weight_export_joins": {
+      "decoder.stages.2.op_list.1.main.conv1.conv.bias": {
+        "both_exports_match": true,
+        "dtype": "BF16",
+        "offsets": [
+          122276376,
+          122277400
+        ],
+        "sha256": "3aebeaf0f26b26e77994d24aeae26f89b92f029b7bcdd2302695bfdefc51a199",
+        "shape": [
+          512
+        ]
+      },
+      "decoder.stages.2.op_list.1.main.conv1.conv.weight": {
+        "both_exports_match": true,
+        "dtype": "BF16",
+        "offsets": [
+          122277400,
+          136433176
+        ],
+        "sha256": "3c82a9bce393d00ff9fa51efa890d86febed75ce1a3f34d98530a31a0f356b69",
+        "shape": [
+          512,
+          512,
+          3,
+          3,
+          3
+        ]
+      }
+    },
+    "weights_path": "/opt/mldata_ssd/models/hy-nomas/dcae-v-native-decoder-ebbee483/decoder-bf16.safetensors",
+    "weights_sha256": "f53c94b06685027b8131b7f52cab519edee1e51287d93d8fdac6a17506f8881b"
+  },
+  "verification": {
+    "comparison_commands_and_exits": [
+      {
+        "candidate": null,
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4",
+          "--observe-only",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-observed-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "small4",
+        "expected_exit_code": 0,
+        "gate_passed": false,
+        "observed_exit_code": 0,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-observed-final.json",
+        "report_sha256": "619157617350f54c3fb23fefb48e6fe9834f77732443cbfa507a60015003947c"
+      },
+      {
+        "candidate": "order0-lanes1-tree0",
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4",
+          "--require-candidate",
+          "order0-lanes1-tree0",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-order0-lanes1-tree0-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "small4",
+        "expected_exit_code": 1,
+        "gate_passed": false,
+        "observed_exit_code": 1,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-order0-lanes1-tree0-final.json",
+        "report_sha256": "9725fb9404071eded3bf56e7367d998c4a8557d5151c24ba572aaf08a691140b"
+      },
+      {
+        "candidate": "exact-integer",
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4",
+          "--require-candidate",
+          "exact-integer",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-exact-integer-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "small4",
+        "expected_exit_code": 1,
+        "gate_passed": false,
+        "observed_exit_code": 1,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/small4-exact-integer-final.json",
+        "report_sha256": "bd9db87c42ba63ac70eb2194c3c97c3b562dbefdaa1e8854792f353a2c581c6a"
+      },
+      {
+        "candidate": null,
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full",
+          "--observe-only",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-observed-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "full",
+        "expected_exit_code": 0,
+        "gate_passed": false,
+        "observed_exit_code": 0,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-observed-final.json",
+        "report_sha256": "4aa0c2c0fc59df5c8c3104e142ecb0298c0db7d2ffe3e2c3089d60ce808b2e36"
+      },
+      {
+        "candidate": "order0-lanes1-tree0",
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full",
+          "--require-candidate",
+          "order0-lanes1-tree0",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-order0-lanes1-tree0-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "full",
+        "expected_exit_code": 1,
+        "gate_passed": false,
+        "observed_exit_code": 1,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-order0-lanes1-tree0-final.json",
+        "report_sha256": "b01ea7dbee3dfefe923741ce96924884ac7c3f2a201fe05acd744c15d74a0a9a"
+      },
+      {
+        "candidate": "exact-integer",
+        "command": [
+          "python3",
+          "-B",
+          "examples/support/dcae_v_reduction_compare.py",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full",
+          "--require-candidate",
+          "exact-integer",
+          "--require-upstream",
+          "--positive-control",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-exact-integer-final.json"
+        ],
+        "controls_passed": true,
+        "dataset": "full",
+        "expected_exit_code": 1,
+        "gate_passed": false,
+        "observed_exit_code": 1,
+        "report": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/full-exact-integer-final.json",
+        "report_sha256": "da40411766eb0c82be014d9330690d7fd3d17c12adfbcae149aacf97b9539f9b"
+      }
+    ],
+    "comparison_receipt": {
+      "availability": "local retained evidence",
+      "bytes": 5072,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/final-comparison-receipt.json",
+      "sha256": "87e71a3dc29ce48628efd1701b0fc593fcc9f884b4a2c233e344387451d06fb2"
+    },
+    "cpu_tests": [
+      {
+        "command": "python3 -B -m unittest spec/dcae_v_reduction_compare_spec.py",
+        "exit_code": 0,
+        "failures": 0,
+        "observed_tests": 9
+      },
+      {
+        "command": "python3 -B -m unittest spec/wan_memory_guard_spec.py",
+        "exit_code": 0,
+        "failures": 0,
+        "observed_tests": 44
+      }
+    ],
+    "curator": {
+      "availability": "local retained evidence",
+      "bytes": 16976,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/curate_reduction_evidence.py",
+      "sha256": "948970ae35c39545deef307b91537f09809248049c87c09482e5454bd412997b"
+    },
+    "definition_of_done": [
+      "Release diagnostic build and runtime Metal compilation",
+      "256 GPU exact-vector matches in BF16 and F32",
+      "Guarded H3/W5 known mismatch and real-geometry operator probes",
+      "Separate pinned upstream BF16 pre/post and biased-call checks",
+      "Required-candidate negative exits; controls alone cannot pass a candidate",
+      "Buffer lifetime, coordinate and terminal-drain audit"
+    ],
+    "release_build_log": {
+      "availability": "local retained evidence",
+      "bytes": 757,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/build.log",
+      "sha256": "32c2b79eebba77e6a76f19836db5233a37985f3491d0368c7e014a12747c0a02"
+    },
+    "static_checks": [
+      {
+        "command": "crystal tool format --check examples/dcae_v_reduction_probe.cr",
+        "exit_code": 0
+      },
+      {
+        "command": "ruff check --no-cache examples/support/dcae_v_reduction_compare.py examples/support/dcae_v_reduction_oracle.py spec/dcae_v_reduction_compare_spec.py",
+        "exit_code": 0
+      },
+      {
+        "command": "git diff --check",
+        "exit_code": 0
+      }
+    ],
+    "structural_tooling": "The skill-referenced scripts/validate-landmark-graph.sh is absent (observed exit 127); no graph-validator pass is claimed. This curator parses reports and dereferences source/raw/report digests; it does not rerun the experiments.",
+    "test_log_scope": "CPU/static results were observed in session tool output; retained artifacts independently cover actual GPU execution and negative candidate comparisons."
+  }
+}

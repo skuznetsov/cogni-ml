@@ -1,0 +1,186 @@
+{
+  "format": "local compact Landmark evidence index; repository template unavailable",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "On the authenticated block-0 S1280 post-attention residual, native square-versus-upstream-power values explain the observed materialized variance/epsilon delta; mean and epsilon are raw-bit exact when supplied identical upstream squares.",
+    "scope": "One saved BF16 residual [1,1280,3584] and pinned gain; isolated GPU-only diagnostic math, unchanged atol=rtol=2e-5.",
+    "excluded": [
+      "production fix",
+      "all-input arithmetic equivalence",
+      "full S1280 prefix parity",
+      "speedup",
+      "full generation"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "examples/support/qwen25_pretrained_block_reference.py",
+      "spec/qwen25_pretrained_block_reference_spec.py",
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "examples/qwen25_rms_statistics_probe.cr",
+      "examples/support/qwen25_rms_statistics_probe.cr",
+      "spec/qwen25_rms_statistics_probe_spec.cr",
+      "LANDMARKS.md",
+      "docs/qwen25-hy-nomas-frontier.md",
+      ".landmark/evidence/2026-10-24-qwen25-rms-square-localization.json"
+    ],
+    "changed_paths": [
+      "examples/support/qwen25_pretrained_block_reference.py",
+      "spec/qwen25_pretrained_block_reference_spec.py",
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "examples/qwen25_rms_statistics_probe.cr",
+      "examples/support/qwen25_rms_statistics_probe.cr",
+      "spec/qwen25_rms_statistics_probe_spec.cr",
+      "LANDMARKS.md",
+      "docs/qwen25-hy-nomas-frontier.md",
+      ".landmark/evidence/2026-10-24-qwen25-rms-square-localization.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-reduction-receipt-v1.json",
+      "nbytes": 57936,
+      "sha256": "92af339c90778d112e5b8c1a6ae0191c784f55f9923790e69b0b224adbd454a2"
+    },
+    "availability": "local SSD; invalidate on loss or digest mismatch",
+    "base_commit": "b794bc242396958f1fe8ea784be829a43870cfe9",
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_pretrained_block_reference.py",
+        "nbytes": 96099,
+        "sha256": "daf6ec6f50f6bafddff4f6e0d30384fd50948333ce71ae87ec6ae4f257d899e2"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_pretrained_block_reference_spec.py",
+        "nbytes": 30707,
+        "sha256": "f5118b94c4968d0bc180e494d01b15267146938a65497e85c02bf928c8783529"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_mps_bridge.mm",
+        "nbytes": 104603,
+        "sha256": "2945bac64ddb83ee6984d4813e5ad092128c6d9b39e32467b9f8e3269acef8f7"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_rms_statistics_probe.cr",
+        "nbytes": 17452,
+        "sha256": "52e23d19fdfc31e6001196ceede8f9491cf5af43d7bcf93ea6ea150cb9a149ff"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_rms_statistics_probe.cr",
+        "nbytes": 27599,
+        "sha256": "62c0389b8811517667b685770ccec6dcb91bcd3771be1c87cd5fbc8e16af8673"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_rms_statistics_probe_spec.cr",
+        "nbytes": 18068,
+        "sha256": "2a0fdae66c9b909ccb78922d78e8048721bb8ed1d68727985879fe8248853911"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4528916,
+        "sha256": "006df823158af65cc6e9b902e633a62bce8759f256309613cea9edb2668d853f"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 40893,
+        "sha256": "f576e120919e0925dbab686aaed5cc792f7915cf3dab318c4daa72889b1175c6"
+      }
+    ]
+  },
+  "verification": {
+    "observed_dod": "Official old stages and gained output raw-exact; native cast raw-exact; square differs by at most two ULP; native mean/+epsilon on upstream squares raw-exact in 1280/1280 rows; pow/mul control reproduces both arms.",
+    "python": "32 tests, OK",
+    "crystal": "7 examples, 0 failures/errors/pending",
+    "native_build": "format, normal/cpu_only no-codegen, strict Clang and release link pass",
+    "runs": [
+      {
+        "name": "oracle-rms-only-block0-post-v2",
+        "report": {
+          "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/rms-only-block0-post-v2.json",
+          "nbytes": 155911,
+          "sha256": "c068b70a4a2c0020eb2b42cb639cc82e33c457758c43a237b474eaf18b0b3ca7"
+        },
+        "exit_code": 0,
+        "sampled_peak_process_bytes": 1520306120,
+        "observed_swap_growth_bytes": 0
+      },
+      {
+        "name": "native-rms-reduction-block0-post-v1",
+        "report": {
+          "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-rms-reduction-block0-post-v1.json",
+          "nbytes": 16695,
+          "sha256": "9f6128703fa6be8efd482d26b39b72fbc64b50a4d608703dc2b99af274408287"
+        },
+        "exit_code": 0,
+        "sampled_peak_process_bytes": 121537352,
+        "observed_swap_growth_bytes": 0
+      },
+      {
+        "name": "native-rms-reduction-block0-post-v2",
+        "report": {
+          "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-rms-reduction-block0-post-v2.json",
+          "nbytes": 24884,
+          "sha256": "3379067297d98416468c266e96f0c6cecbe508df60a5ecf4a603defcbd891dbf"
+        },
+        "exit_code": 0,
+        "sampled_peak_process_bytes": 252838872,
+        "observed_swap_growth_bytes": 0
+      },
+      {
+        "name": "oracle-rms-pow-mul-block0-post-v1",
+        "report": {
+          "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-pow-mul-control-v1.json",
+          "nbytes": 21895,
+          "sha256": "18d0ac20eb7f8d650fa6600c01c5ee9951da951b91e8044e490ece20335ea3ae"
+        },
+        "exit_code": 0,
+        "sampled_peak_process_bytes": 1456620936,
+        "observed_swap_growth_bytes": 0
+      }
+    ],
+    "adversary": {
+      "verdict": "ROBUST",
+      "scope": "Authenticated fixed-input localization, source/binary binding, terminal-read ordering and bounded lifecycle only.",
+      "reviewers": [
+        "qwen25_contract_audit",
+        "root"
+      ],
+      "basis": "Root-observed scoped review and dereferenced source/report checks; same-lineage review is correlated.",
+      "strongest_attack": "Identical upstream squares enter a separately compiled diagnostic graph, not the fused production graph; narrow the inference accordingly.",
+      "response": "Retain the explicit fused-graph limitation and make no production-repair or full-prefix qualification claim."
+    },
+    "structural_validation": {
+      "status": "local JSON, path whitelist and dereferenced SHA256 checks only",
+      "repository_template_and_validator": "Absent from this checkout and installed evidence-packet skill; no validate-landmark-graph.sh success claimed.",
+      "scope": "Index validation is not numerical proof or independence validation."
+    }
+  },
+  "residual_risks": [
+    "The upstream-square control uses a separately compiled materialized mean graph, not an injection into the fused production helper.",
+    "The closed MPSGraph power implementation and exact internal approximation mechanism are not established.",
+    "The prior constant-exponent power negative covers that formulation only; Torch feeds an exponent tensor through its scalar wrapper.",
+    "This fixed-input localization changes no production arithmetic and qualifies neither S1280 prefix parity, performance nor generated video.",
+    "Companion bridge.o and metal_mps_command_chain.o have pinned bytes but opaque pre-existing source ancestry; this is not a hermetic build.",
+    "Memory limits are sampled, with file-backed bytes an estimate of reclaimability; they are not an instantaneous peak guarantee or reservation.",
+    "MiniQuad reviewers share lineage/context and are correlated, not independent model provenance."
+  ],
+  "refresh": {
+    "decay_triggers": [
+      "scoped source change",
+      "checkpoint/fixture/input change",
+      "geometry or precision change",
+      "compiler/SDK/OS/device change",
+      "execution route or lifecycle change",
+      "artifact loss or hash mismatch"
+    ],
+    "operation": "Reauthenticate all byte bindings and rerun the isolated official/native/expression controls with fresh names and current admission.",
+    "failure_policy": "Reopen the dependent localization claim; do not silently substitute fixtures or broaden tolerances."
+  },
+  "next_falsifier": "Test native GPU-fed exponent power matching the Torch scalar feed, then validate a bounded repair at RMS and block 0 before a separately admitted 26-block prefix.",
+  "rollback": "Remove opt-in diagnostics only; production helper arithmetic and existing prefix path are unchanged.",
+  "links": {
+    "frontier": "docs/qwen25-hy-nomas-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}

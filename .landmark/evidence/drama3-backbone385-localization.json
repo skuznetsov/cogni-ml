@@ -1,0 +1,1936 @@
+{
+  "format": "drama3-backbone385-localization-evidence-v1",
+  "claim": {
+    "level": "VERIFIED within captured terminal-norm localization",
+    "summary": "Captured terminal backbone norm arithmetic is smaller in RMS than its incoming-input effect at384/385. Substituting M(H_N) for N(H_N) on captured native pre-norm input at385, through unchanged native tower HNorm/EH with fixed embedding, leaves both EH failures. This operator-only substitution is insufficient; the MLX diagonal M(H_M) was not substituted.",
+    "strict_full_numeric_parity": {
+      "status": "FAIL",
+      "compared_stages": 1287,
+      "compared_values": 5271552,
+      "failing_stages": 29,
+      "failing_values": 38,
+      "first_step": 385,
+      "last_step": 505,
+      "failing_stage_metrics": {
+        "generation.step385.tower_logits.6": {
+          "count": 4096,
+          "bit_differences": 4093,
+          "outside_tolerance": 1,
+          "max_abs": 9.417533874511719e-05,
+          "rms": 2.0827429592955073e-05,
+          "max_tolerance_ratio": 1.2486073804191913,
+          "failing_coordinates": [
+            644
+          ]
+        },
+        "generation.step385.tower_logits.8": {
+          "count": 4096,
+          "bit_differences": 4085,
+          "outside_tolerance": 1,
+          "max_abs": 8.20159912109375e-05,
+          "rms": 1.6846603178324675e-05,
+          "max_tolerance_ratio": 1.0675225732855549,
+          "failing_coordinates": [
+            887
+          ]
+        },
+        "generation.step386.tower_logits.4": {
+          "count": 4096,
+          "bit_differences": 4084,
+          "outside_tolerance": 1,
+          "max_abs": 0.0001125335693359375,
+          "rms": 2.061778150556275e-05,
+          "max_tolerance_ratio": 1.2028547701600973,
+          "failing_coordinates": [
+            962
+          ]
+        },
+        "generation.step386.tower_logits.5": {
+          "count": 4096,
+          "bit_differences": 4088,
+          "outside_tolerance": 2,
+          "max_abs": 0.0001010894775390625,
+          "rms": 1.925192241015491e-05,
+          "max_tolerance_ratio": 1.3040085134214583,
+          "failing_coordinates": [
+            564,
+            934
+          ]
+        },
+        "generation.step401.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4090,
+          "outside_tolerance": 1,
+          "max_abs": 0.00010251998901367188,
+          "rms": 1.8555953102270305e-05,
+          "max_tolerance_ratio": 1.152079118356511,
+          "failing_coordinates": [
+            1
+          ]
+        },
+        "generation.step416.tower_logits.3": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 1,
+          "max_abs": 8.20159912109375e-05,
+          "rms": 1.598926351135314e-05,
+          "max_tolerance_ratio": 1.038824892936929,
+          "failing_coordinates": [
+            433
+          ]
+        },
+        "generation.step422.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4087,
+          "outside_tolerance": 1,
+          "max_abs": 9.894371032714844e-05,
+          "rms": 1.963517511776648e-05,
+          "max_tolerance_ratio": 1.0332688773652672,
+          "failing_coordinates": [
+            838
+          ]
+        },
+        "generation.step426.tower_logits.4": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 1,
+          "max_abs": 7.092952728271484e-05,
+          "rms": 1.3261090293199559e-05,
+          "max_tolerance_ratio": 1.0963223672721205,
+          "failing_coordinates": [
+            712
+          ]
+        },
+        "generation.step433.tower_logits.8": {
+          "count": 4096,
+          "bit_differences": 4091,
+          "outside_tolerance": 1,
+          "max_abs": 0.0001049041748046875,
+          "rms": 2.6468258082750952e-05,
+          "max_tolerance_ratio": 1.1349028696673276,
+          "failing_coordinates": [
+            797
+          ]
+        },
+        "generation.step438.tower_logits.7": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 1,
+          "max_abs": 7.843971252441406e-05,
+          "rms": 1.78883077586152e-05,
+          "max_tolerance_ratio": 1.241428549996539,
+          "failing_coordinates": [
+            622
+          ]
+        },
+        "generation.step442.tower_logits.6": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 1,
+          "max_abs": 7.43865966796875e-05,
+          "rms": 1.7098055720650222e-05,
+          "max_tolerance_ratio": 1.0467498638095754,
+          "failing_coordinates": [
+            726
+          ]
+        },
+        "generation.step445.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 2,
+          "max_abs": 0.00010859966278076172,
+          "rms": 2.0123823691144687e-05,
+          "max_tolerance_ratio": 1.206152140573615,
+          "failing_coordinates": [
+            374,
+            855
+          ]
+        },
+        "generation.step445.tower_logits.4": {
+          "count": 4096,
+          "bit_differences": 4086,
+          "outside_tolerance": 2,
+          "max_abs": 9.584426879882812e-05,
+          "rms": 1.9886517559419623e-05,
+          "max_tolerance_ratio": 1.0953800580883533,
+          "failing_coordinates": [
+            307,
+            636
+          ]
+        },
+        "generation.step446.tower_logits.5": {
+          "count": 4096,
+          "bit_differences": 4093,
+          "outside_tolerance": 1,
+          "max_abs": 0.00010943412780761719,
+          "rms": 2.1042013314399228e-05,
+          "max_tolerance_ratio": 1.3381924936452436,
+          "failing_coordinates": [
+            202
+          ]
+        },
+        "generation.step451.tower_logits.2": {
+          "count": 4096,
+          "bit_differences": 4086,
+          "outside_tolerance": 2,
+          "max_abs": 0.0001220703125,
+          "rms": 2.456218728037503e-05,
+          "max_tolerance_ratio": 1.226182180136257,
+          "failing_coordinates": [
+            37,
+            531
+          ]
+        },
+        "generation.step459.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4090,
+          "outside_tolerance": 1,
+          "max_abs": 7.915496826171875e-05,
+          "rms": 1.5977026506914336e-05,
+          "max_tolerance_ratio": 1.076479769164352,
+          "failing_coordinates": [
+            788
+          ]
+        },
+        "generation.step465.tower_logits.6": {
+          "count": 4096,
+          "bit_differences": 4085,
+          "outside_tolerance": 1,
+          "max_abs": 0.00010585784912109375,
+          "rms": 2.042256358487606e-05,
+          "max_tolerance_ratio": 1.2379452007418232,
+          "failing_coordinates": [
+            505
+          ]
+        },
+        "generation.step466.tower_logits.8": {
+          "count": 4096,
+          "bit_differences": 4090,
+          "outside_tolerance": 1,
+          "max_abs": 0.0001239776611328125,
+          "rms": 2.8145498536493055e-05,
+          "max_tolerance_ratio": 1.0290793605518156,
+          "failing_coordinates": [
+            326
+          ]
+        },
+        "generation.step474.tower_logits.8": {
+          "count": 4096,
+          "bit_differences": 4092,
+          "outside_tolerance": 1,
+          "max_abs": 0.00012111663818359375,
+          "rms": 3.6468241733122936e-05,
+          "max_tolerance_ratio": 1.0076229103358956,
+          "failing_coordinates": [
+            842
+          ]
+        },
+        "generation.step475.tower_logits.2": {
+          "count": 4096,
+          "bit_differences": 4011,
+          "outside_tolerance": 1,
+          "max_abs": 8.296966552734375e-05,
+          "rms": 1.430224971193442e-05,
+          "max_tolerance_ratio": 1.0946005355333122,
+          "failing_coordinates": [
+            493
+          ]
+        },
+        "generation.step478.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4007,
+          "outside_tolerance": 1,
+          "max_abs": 8.106231689453125e-05,
+          "rms": 1.4200606053174586e-05,
+          "max_tolerance_ratio": 1.0271222985077149,
+          "failing_coordinates": [
+            153
+          ]
+        },
+        "generation.step485.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4087,
+          "outside_tolerance": 2,
+          "max_abs": 0.00011527538299560547,
+          "rms": 2.286562890779185e-05,
+          "max_tolerance_ratio": 1.1116995928856537,
+          "failing_coordinates": [
+            38,
+            134
+          ]
+        },
+        "generation.step489.tower_logits.7": {
+          "count": 4096,
+          "bit_differences": 4089,
+          "outside_tolerance": 1,
+          "max_abs": 7.408857345581055e-05,
+          "rms": 1.60714448075153e-05,
+          "max_tolerance_ratio": 1.1395230354444101,
+          "failing_coordinates": [
+            641
+          ]
+        },
+        "generation.step491.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4092,
+          "outside_tolerance": 2,
+          "max_abs": 0.0001246929168701172,
+          "rms": 2.9248359125591893e-05,
+          "max_tolerance_ratio": 1.3188395823696302,
+          "failing_coordinates": [
+            189,
+            381
+          ]
+        },
+        "generation.step494.tower_logits.6": {
+          "count": 4096,
+          "bit_differences": 4082,
+          "outside_tolerance": 1,
+          "max_abs": 8.481740951538086e-05,
+          "rms": 1.776071640366167e-05,
+          "max_tolerance_ratio": 1.1321368399920693,
+          "failing_coordinates": [
+            363
+          ]
+        },
+        "generation.step499.tower_logits.4": {
+          "count": 4096,
+          "bit_differences": 4092,
+          "outside_tolerance": 1,
+          "max_abs": 9.775161743164062e-05,
+          "rms": 2.0757058195045325e-05,
+          "max_tolerance_ratio": 1.054199446154706,
+          "failing_coordinates": [
+            56
+          ]
+        },
+        "generation.step499.tower_logits.7": {
+          "count": 4096,
+          "bit_differences": 4087,
+          "outside_tolerance": 2,
+          "max_abs": 0.0001049041748046875,
+          "rms": 2.0621913000081548e-05,
+          "max_tolerance_ratio": 1.2670312985882943,
+          "failing_coordinates": [
+            242,
+            836
+          ]
+        },
+        "generation.step502.tower_logits.7": {
+          "count": 4096,
+          "bit_differences": 3805,
+          "outside_tolerance": 1,
+          "max_abs": 6.753206253051758e-05,
+          "rms": 1.2684697646996765e-05,
+          "max_tolerance_ratio": 1.0983780688276077,
+          "failing_coordinates": [
+            154
+          ]
+        },
+        "generation.step505.tower_logits.1": {
+          "count": 4096,
+          "bit_differences": 4088,
+          "outside_tolerance": 3,
+          "max_abs": 0.0001220703125,
+          "rms": 2.3731313760459678e-05,
+          "max_tolerance_ratio": 1.3777401416486483,
+          "failing_coordinates": [
+            250,
+            416,
+            731
+          ]
+        }
+      }
+    },
+    "not_claimed": [
+      "numeric repair",
+      "earliest generation-wide divergence",
+      "causal attribution to layer39 or historical KV",
+      "window-growth causality",
+      "speedup",
+      "audio-quality change"
+    ]
+  },
+  "risk_and_recovery": "CAUTION bounded diagnostics. No production edits; revert the evidence/documentation commit to roll back. Do not run services or reuse diagnostic readbacks in production.",
+  "source_under_test": {
+    "checkout": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+    "head_before_evidence": "ce4f1322aded41b080b4e2be12fe15fc2edb2aca",
+    "production_revision": "811f3c96d2679d404c951aa5db012a26072c3d39",
+    "production_source_hashes_checked_before_after_runs": {
+      "src/ml/audio/drama3/window_growth.cr": "b50c61b3a6d5840ef36ef2d1a071efd7989c6e929c3305785a55b3732403ed5d",
+      "src/ml/audio/drama3/resident.cr": "35d400ce1268db27296b5bf80720e402078332ce587ecaffab8d4c683b34eed7",
+      "src/ml/audio/drama3/backbone_resident.cr": "2520b2e38d5c3001d4d20a1ec23958d6af8ae10d12fe6dea0db2552fbdc71a7d",
+      "src/ml/audio/drama3/tower_resident.cr": "ca855406bdbb14374aa008aad17775c28be8c82cea100a9549ff069a4f030b82",
+      "src/ml/audio/drama3/generator_resident.cr": "30edd220b3f2e09455c5bc21f9eab40c31550c8f49e92d9fedcc034ef61f2785",
+      "src/ml/audio/drama3/kernels/tower_resident.metal": "0c5ef05e6d2203c8c6e43157e4059372a9edafe47da858b232736cc23e08c518",
+      "src/ml/audio/drama3/studio/engine.cr": "5a9b47bc3966f11115d85b5bd519e6eaad48c7bf097a796c83365c692ff3261c",
+      "src/ml/audio/drama3/studio/frame_window.cr": "7f2d094f8ab30b9e46f8c1db6a57ed7d798d5af0be0715a7e8eba0fc5a1d27e7",
+      "src/ml/audio/drama3/studio/assets/app.js": "92c4f5f5a9ac1b0f40f77886bd806db8d96a04e495fa013c9ae9d500b435a008",
+      "src/ml/audio/drama3/studio/assets/i18n.js": "55517f45ce89035f1ee210473a65f7c05e1a5a2acc7f95eaa30dccce1d2b4d97",
+      "examples/drama3_dense_decode_compare.cr": "06fb8580ea2fdf23f54f8f6e5d4a9549cc69405ddb6b947dab9fd775d6a4ee00",
+      "spec/drama3_prefill_generator_spec.cr": "65713b2ee11bdaea8b6cdc88136a958b455ad63c51aed7d60f5fce366ec7a7e6",
+      "spec/drama3_window_budget_spec.cr": "789774d3e1d85be3abf11a68cf9d9cc4bcf2c31919aecd127678c0d9fa0f34e3",
+      "spec/drama3_window_growth_spec.cr": "0bf95c5f5349a6f1774a16898be845988b1d39749f33ef6ec5584e30622497ce",
+      "spec/drama3_window_growth_resident_spec.cr": "44eb7149bc274b139d1e2aa36c72cc182913786c2c2c58daf4c4a35905cc09a8",
+      "src/ml/audio/drama3/native.cr": "5b70f4cf69f1c9f02d4e0f1abcb4064ba8c8fdc51f1a5f88e5f57329ec2afd5e",
+      "src/ml/audio/drama3/kernels/resident.metal": "ae7d503ea3b014fb0aaa9622dc18bab7cbd31bdbc7fd54b3b357f0aa04a13d62",
+      "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13"
+    },
+    "bridge_sha256": "16613762decfabc1d44d6615ef0af95986fdccafc07ad93d9f007c5440a055f3",
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
+    },
+    "runtime": {
+      "mlx": "0.31.1",
+      "numpy": "1.26.4",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "python": "3.12.2",
+      "safetensors": "0.5.3",
+      "torch": "2.6.0"
+    },
+    "device": "Apple M2 Max, 64GiB unified memory",
+    "upstream_audio_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "mlx_loaded_sources": {
+      "qwen3_5": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/lm/models/qwen3_5.py",
+        "sha256": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1"
+      },
+      "mlx_nn_normalization": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-reference-20261014/venv/lib/python3.12/site-packages/mlx/nn/layers/normalization.py",
+        "sha256": "92cfbc9ba53d4b2d7681a9096881d8cce4c7f5aff06ce054efbd6d454cf8c14f",
+        "class": "mlx.nn.layers.normalization.RMSNorm"
+      }
+    },
+    "provenance_limit": "Selected source and raw BF16 payload pins plus separately observed binaries/plans. No complete five-shard integrity, transitive dependency closure or reproducible source-to-binary build attestation."
+  },
+  "lineage": {
+    "parent_packet": ".landmark/evidence/drama3-hnorm385-localization.json",
+    "parent_sha256": "254417e41b354a7def0d31e4c3dcc9f7f6cb33b357d755ff36fce2d7ca14e4df",
+    "capture_report_hashes": {
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/native_detailed.json": "b3eeaf298c896183a1dd758c575b39867e47dfa65be921c2215c5998a6e8fac4",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/replay_internal.json": "09d9163a3381f302bfe6a2ca6bb28d9a12c3c3fd09bc83872bc0091652b5149d",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/backbone_internal_384_385.json": "5489ce877f6dea089a101e571e4733d2a49ee37d16bd24f3849a6bde8e39eb43",
+      "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native_detailed.json": "0aa4e001c2fa9c7431a4688a20050adc8b3974bc07c96e2eb5c94c19959ebae3",
+      "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_internal.json": "3cbfc1968296d2f618c868e062400431de30c44f315c32039b2463d66e42c0af",
+      "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/tower_internal_384_385.json": "3d75d15341731a33536a5b46ad903e3213bee1c9566ed48f063a17b4cb551924"
+    },
+    "generation_source_sha256": "a9bad778c5fefafa1e0e53da2d9715a72c18f24f6d8d110b12e58700287549e1"
+  },
+  "workload": {
+    "prompt_rows": 96,
+    "code_rows": 512,
+    "teacher_forced_capacity": 608,
+    "capture_steps": [
+      384,
+      385
+    ],
+    "graph_depth": 2,
+    "startup_environment": {
+      "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+      "DRAMA3_BACKEND": "metal",
+      "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+      "DRAMA3_DAC_SCRATCH": "1",
+      "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+      "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+      "DRAMA3_GDN_POST_FUSION": "0",
+      "DRAMA3_MEMORY_PROFILE": "0",
+      "DRAMA3_METAL_RESOURCES": "0",
+      "DRAMA3_MMAP_SHARED": "0",
+      "DRAMA3_MOE_BATCH": "1",
+      "DRAMA3_PREFILL_CHUNK": "1",
+      "DRAMA3_STUDIO_MEMORY_LIMIT_MIB": "40960",
+      "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+      "DRAMA3_TOWER_FFN_PAIR_FUSION": "0"
+    },
+    "backbone_row_positions": {
+      "384": {
+        "consumed_zero_based_frame_index": 383,
+        "layer39_full_attention_cache_offset_before": 479,
+        "layer39_full_attention_cache_offset_after": 480
+      },
+      "385": {
+        "consumed_zero_based_frame_index": 384,
+        "layer39_full_attention_cache_offset_before": 480,
+        "layer39_full_attention_cache_offset_after": 481
+      }
+    },
+    "prefix_limit": "Discrete prefix and mixed input at384/385 are bit-equal; historical backbone KV/SSM and tower KV contents are not identical across backends."
+  },
+  "math": {
+    "norm": "Ordinary backbone RMSNorm: x / sqrt(mean(x*x)+1e-6) * weight. Original BF16 backbone.norm.weight is already shifted by the converter; promote to F32 without another +1. Tower HNorm is separately zero-centered.",
+    "weight": {
+      "dtype": "BF16",
+      "shape": [
+        2048
+      ],
+      "raw_sha256": "b083b92ed80158dca7ea63898a848d2fb8d6f6a18b1ebdc08d06ec01028baf6c"
+    },
+    "eh_weight": {
+      "dtype": "BF16",
+      "shape": [
+        2048,
+        4096
+      ],
+      "raw_sha256": "7d510141f167a10cc94cb29be0ddee19971f9aa09b68e4602c4981d75acc09ee"
+    },
+    "hnorm_weight": {
+      "dtype": "BF16",
+      "shape": [
+        2048
+      ],
+      "raw_sha256": "9d33a17bdada9e5ccb8efaa289a54ce12c2a01069cfda2741e9599f65fd148f8"
+    },
+    "atol": 6e-05,
+    "rtol": 0.0003,
+    "precision_change": false,
+    "comparison": "abs(native-MLX) <= atol + rtol*abs(MLX). F64 analysis of drained F32 vectors does not change GPU arithmetic."
+  },
+  "passive_capture": {
+    "bit_exact_controls": {
+      "native_ordinary": {
+        "stages": 1718,
+        "values": 6449296
+      },
+      "native_tower_details": {
+        "stages": 674,
+        "values": 2002944
+      },
+      "mlx_ordinary": {
+        "stages": 1718,
+        "values": 6449296
+      },
+      "mlx_tower_details": {
+        "stages": 702,
+        "values": 2089984
+      }
+    },
+    "exact_joins": 86,
+    "added_native_snapshots": 164,
+    "added_native_terminal_bytes": 1343488,
+    "all_layer_output_metrics": {
+      "generation.step384.backbone.layers.0.output": {
+        "count": 2048,
+        "bit_differences": 1673,
+        "outside_tolerance": 0,
+        "max_abs": 5.960464477539062e-07,
+        "rms": 6.426072056859487e-08,
+        "max_tolerance_ratio": 0.0031592091597493037,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.1.output": {
+        "count": 2048,
+        "bit_differences": 1995,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 6.885496128137644e-07,
+        "max_tolerance_ratio": 0.03466637003024055,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.2.output": {
+        "count": 2048,
+        "bit_differences": 1996,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.3915428128080752e-06,
+        "max_tolerance_ratio": 0.04717256088540662,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.3.output": {
+        "count": 2048,
+        "bit_differences": 2016,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.3826905363899408e-06,
+        "max_tolerance_ratio": 0.047028042181971735,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.4.output": {
+        "count": 2048,
+        "bit_differences": 2031,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.615904260957924e-06,
+        "max_tolerance_ratio": 0.042854086536602116,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.5.output": {
+        "count": 2048,
+        "bit_differences": 2029,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.5705853789849119e-06,
+        "max_tolerance_ratio": 0.04587081609005808,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.6.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.3023939179841564e-06,
+        "max_tolerance_ratio": 0.03541531498666424,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.7.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.2715674774660766e-06,
+        "max_tolerance_ratio": 0.03953859115629396,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.8.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.3835134663891355e-06,
+        "max_tolerance_ratio": 0.04443459418608939,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.9.output": {
+        "count": 2048,
+        "bit_differences": 2033,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.7604591097710858e-06,
+        "max_tolerance_ratio": 0.03287453005097453,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.10.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.8007399101705023e-06,
+        "max_tolerance_ratio": 0.06577592191421558,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.11.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.8302088490222012e-06,
+        "max_tolerance_ratio": 0.04752514023922267,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.12.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.6360384518258117e-06,
+        "max_tolerance_ratio": 0.05165257590181154,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.13.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.6556980047595101e-06,
+        "max_tolerance_ratio": 0.04017598455335393,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.14.output": {
+        "count": 2048,
+        "bit_differences": 2039,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 1.2955656318981491e-06,
+        "max_tolerance_ratio": 0.051789488552492755,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.15.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 1.381317066897364e-06,
+        "max_tolerance_ratio": 0.0422539530503549,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.16.output": {
+        "count": 2048,
+        "bit_differences": 2037,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 1.3887063493868253e-06,
+        "max_tolerance_ratio": 0.07880512500272845,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.17.output": {
+        "count": 2048,
+        "bit_differences": 2040,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 1.6085575574222682e-06,
+        "max_tolerance_ratio": 0.07904023464104168,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.18.output": {
+        "count": 2048,
+        "bit_differences": 2031,
+        "outside_tolerance": 0,
+        "max_abs": 1.52587890625e-05,
+        "rms": 1.5836939875729078e-06,
+        "max_tolerance_ratio": 0.06711497645610662,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.19.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.669235264811365e-06,
+        "max_tolerance_ratio": 0.07619066771962694,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.20.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.6842624996069221e-06,
+        "max_tolerance_ratio": 0.058158392643127325,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.21.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.7997828218561478e-06,
+        "max_tolerance_ratio": 0.059882297838293595,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.22.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.7818955108223822e-06,
+        "max_tolerance_ratio": 0.07584783288514498,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.23.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 1.9594869983103483e-06,
+        "max_tolerance_ratio": 0.08915748298733382,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.24.output": {
+        "count": 2048,
+        "bit_differences": 2031,
+        "outside_tolerance": 0,
+        "max_abs": 3.0517578125e-05,
+        "rms": 2.0075944582443877e-06,
+        "max_tolerance_ratio": 0.06786156376133314,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.25.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 1.811981201171875e-05,
+        "rms": 2.0433426167165174e-06,
+        "max_tolerance_ratio": 0.07689093611558145,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.26.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 7.62939453125e-05,
+        "rms": 2.7489589304036478e-06,
+        "max_tolerance_ratio": 0.10894749752140749,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.27.output": {
+        "count": 2048,
+        "bit_differences": 2027,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 2.8572776129849585e-06,
+        "max_tolerance_ratio": 0.10285534702105413,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.28.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 2.574920654296875e-05,
+        "rms": 3.0783474083946096e-06,
+        "max_tolerance_ratio": 0.1062930480201166,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.29.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 4.393516760823576e-06,
+        "max_tolerance_ratio": 0.1659112563241931,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.30.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 5.898562857930724e-06,
+        "max_tolerance_ratio": 0.1795022350609472,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.31.output": {
+        "count": 2048,
+        "bit_differences": 2040,
+        "outside_tolerance": 0,
+        "max_abs": 0.000152587890625,
+        "rms": 7.149500521572668e-06,
+        "max_tolerance_ratio": 0.24377694160397065,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.32.output": {
+        "count": 2048,
+        "bit_differences": 2037,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 6.789230953528527e-06,
+        "max_tolerance_ratio": 0.26039871467194436,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.33.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 7.429835936796469e-06,
+        "max_tolerance_ratio": 0.35727520934322604,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.34.output": {
+        "count": 2048,
+        "bit_differences": 2035,
+        "outside_tolerance": 0,
+        "max_abs": 7.43865966796875e-05,
+        "rms": 9.072155520455474e-06,
+        "max_tolerance_ratio": 0.37314735504835955,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.35.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 0.00018310546875,
+        "rms": 1.1497013598662307e-05,
+        "max_tolerance_ratio": 0.5469696200381371,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.36.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 1.2270680433187943e-05,
+        "max_tolerance_ratio": 0.4371444084991625,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.37.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 1.4735067635000831e-05,
+        "max_tolerance_ratio": 0.3447258982347522,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.38.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 0.0003662109375,
+        "rms": 2.0774300020333573e-05,
+        "max_tolerance_ratio": 0.41558486829735863,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.layers.39.output": {
+        "count": 2048,
+        "bit_differences": 2021,
+        "outside_tolerance": 1,
+        "max_abs": 0.00341796875,
+        "rms": 8.325447343851331e-05,
+        "max_tolerance_ratio": 1.0248529041160894,
+        "failing_coordinates": [
+          755
+        ]
+      },
+      "generation.step385.backbone.layers.0.output": {
+        "count": 2048,
+        "bit_differences": 1779,
+        "outside_tolerance": 0,
+        "max_abs": 2.86102294921875e-06,
+        "rms": 1.2359440321604049e-07,
+        "max_tolerance_ratio": 0.012744554865037873,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.1.output": {
+        "count": 2048,
+        "bit_differences": 2000,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.5774557515788948e-06,
+        "max_tolerance_ratio": 0.0298550713358104,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.2.output": {
+        "count": 2048,
+        "bit_differences": 2011,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.3772085278746048e-06,
+        "max_tolerance_ratio": 0.03958275443554971,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.3.output": {
+        "count": 2048,
+        "bit_differences": 2010,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.6597725897414649e-06,
+        "max_tolerance_ratio": 0.03011118119586298,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.4.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.8110105337686323e-06,
+        "max_tolerance_ratio": 0.04169851904039125,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.5.output": {
+        "count": 2048,
+        "bit_differences": 2029,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.7562679580064218e-06,
+        "max_tolerance_ratio": 0.04489363866968277,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.6.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 7.62939453125e-05,
+        "rms": 1.9827286798366242e-06,
+        "max_tolerance_ratio": 0.03269037101852612,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.7.output": {
+        "count": 2048,
+        "bit_differences": 2027,
+        "outside_tolerance": 0,
+        "max_abs": 7.62939453125e-05,
+        "rms": 1.9605774062678914e-06,
+        "max_tolerance_ratio": 0.04259267151970133,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.8.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.759403532675317e-06,
+        "max_tolerance_ratio": 0.07009986575556358,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.9.output": {
+        "count": 2048,
+        "bit_differences": 2027,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.4736555002011704e-06,
+        "max_tolerance_ratio": 0.048461282886203126,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.10.output": {
+        "count": 2048,
+        "bit_differences": 2026,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.5174822005836873e-06,
+        "max_tolerance_ratio": 0.06985836173945967,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.11.output": {
+        "count": 2048,
+        "bit_differences": 2026,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.7673846834790903e-06,
+        "max_tolerance_ratio": 0.05661403700609815,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.12.output": {
+        "count": 2048,
+        "bit_differences": 2025,
+        "outside_tolerance": 0,
+        "max_abs": 7.62939453125e-05,
+        "rms": 2.1001867853251324e-06,
+        "max_tolerance_ratio": 0.058920727586628814,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.13.output": {
+        "count": 2048,
+        "bit_differences": 2031,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.6207796298753363e-06,
+        "max_tolerance_ratio": 0.047629724210543484,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.14.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.5658394091063177e-06,
+        "max_tolerance_ratio": 0.044463564528917664,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.15.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 4.57763671875e-05,
+        "rms": 1.7249904673182377e-06,
+        "max_tolerance_ratio": 0.05181018903188612,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.16.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 1.9500909587588846e-06,
+        "max_tolerance_ratio": 0.07766100158705716,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.17.output": {
+        "count": 2048,
+        "bit_differences": 2042,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 2.0809613511720025e-06,
+        "max_tolerance_ratio": 0.07212485495398137,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.18.output": {
+        "count": 2048,
+        "bit_differences": 2026,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 2.0688286569988265e-06,
+        "max_tolerance_ratio": 0.0701205493865956,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.19.output": {
+        "count": 2048,
+        "bit_differences": 2036,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001068115234375,
+        "rms": 2.822588307821381e-06,
+        "max_tolerance_ratio": 0.08306972264638639,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.20.output": {
+        "count": 2048,
+        "bit_differences": 2040,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001068115234375,
+        "rms": 2.8237297237146066e-06,
+        "max_tolerance_ratio": 0.061076686782949495,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.21.output": {
+        "count": 2048,
+        "bit_differences": 2029,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 3.1146136190000074e-06,
+        "max_tolerance_ratio": 0.060312643970304114,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.22.output": {
+        "count": 2048,
+        "bit_differences": 2033,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001373291015625,
+        "rms": 3.45144259289291e-06,
+        "max_tolerance_ratio": 0.06403067617119437,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.23.output": {
+        "count": 2048,
+        "bit_differences": 2037,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 3.267800015164351e-06,
+        "max_tolerance_ratio": 0.06149294179277701,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.24.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 7.62939453125e-05,
+        "rms": 2.4871788752741653e-06,
+        "max_tolerance_ratio": 0.07749638435713209,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.25.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 2.3817512091302687e-06,
+        "max_tolerance_ratio": 0.07364140482576746,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.26.output": {
+        "count": 2048,
+        "bit_differences": 2037,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 3.4821634167516e-06,
+        "max_tolerance_ratio": 0.1030907499448496,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.27.output": {
+        "count": 2048,
+        "bit_differences": 2033,
+        "outside_tolerance": 0,
+        "max_abs": 0.00018310546875,
+        "rms": 4.703637731490983e-06,
+        "max_tolerance_ratio": 0.09576432155309121,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.28.output": {
+        "count": 2048,
+        "bit_differences": 2030,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 3.857990368250338e-06,
+        "max_tolerance_ratio": 0.1370093754116036,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.29.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 4.100799560546875e-05,
+        "rms": 3.829251097778941e-06,
+        "max_tolerance_ratio": 0.17764641576454418,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.30.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 0.00018310546875,
+        "rms": 6.2791335901806e-06,
+        "max_tolerance_ratio": 0.33198417190383184,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.31.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 0.000152587890625,
+        "rms": 6.477731029019508e-06,
+        "max_tolerance_ratio": 0.19366044782283737,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.32.output": {
+        "count": 2048,
+        "bit_differences": 2038,
+        "outside_tolerance": 0,
+        "max_abs": 6.103515625e-05,
+        "rms": 6.387680579255119e-06,
+        "max_tolerance_ratio": 0.253221641693292,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.33.output": {
+        "count": 2048,
+        "bit_differences": 2032,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 7.534551462584279e-06,
+        "max_tolerance_ratio": 0.21787672916408474,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.34.output": {
+        "count": 2048,
+        "bit_differences": 2034,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 9.74541570498549e-06,
+        "max_tolerance_ratio": 0.32708174828535463,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.35.output": {
+        "count": 2048,
+        "bit_differences": 2031,
+        "outside_tolerance": 0,
+        "max_abs": 0.00018310546875,
+        "rms": 1.1340543237577057e-05,
+        "max_tolerance_ratio": 0.47917019607821526,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.36.output": {
+        "count": 2048,
+        "bit_differences": 2027,
+        "outside_tolerance": 0,
+        "max_abs": 9.72747802734375e-05,
+        "rms": 1.1929691073093032e-05,
+        "max_tolerance_ratio": 0.34545671886344176,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.37.output": {
+        "count": 2048,
+        "bit_differences": 2028,
+        "outside_tolerance": 0,
+        "max_abs": 0.0001220703125,
+        "rms": 1.4813493596307075e-05,
+        "max_tolerance_ratio": 0.5476408599675976,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.38.output": {
+        "count": 2048,
+        "bit_differences": 2029,
+        "outside_tolerance": 0,
+        "max_abs": 0.000244140625,
+        "rms": 2.040408920710889e-05,
+        "max_tolerance_ratio": 0.6542451211193133,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.layers.39.output": {
+        "count": 2048,
+        "bit_differences": 2022,
+        "outside_tolerance": 0,
+        "max_abs": 0.001220703125,
+        "rms": 4.271497048055842e-05,
+        "max_tolerance_ratio": 0.6838208260716478,
+        "failing_coordinates": []
+      }
+    },
+    "boundary_metrics": {
+      "generation.step384.backbone.input": {
+        "count": 2048,
+        "bit_differences": 0,
+        "outside_tolerance": 0,
+        "max_abs": 0.0,
+        "rms": 0.0,
+        "max_tolerance_ratio": 0.0,
+        "failing_coordinates": []
+      },
+      "generation.step384.backbone.norm.input": {
+        "count": 2048,
+        "bit_differences": 2021,
+        "outside_tolerance": 1,
+        "max_abs": 0.00341796875,
+        "rms": 8.325447343851331e-05,
+        "max_tolerance_ratio": 1.0248529041160894,
+        "failing_coordinates": [
+          755
+        ]
+      },
+      "generation.step384.backbone.norm.output": {
+        "count": 2048,
+        "bit_differences": 2033,
+        "outside_tolerance": 0,
+        "max_abs": 6.4373016357421875e-06,
+        "rms": 1.2615192118842489e-06,
+        "max_tolerance_ratio": 0.04671996436891163,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.input": {
+        "count": 2048,
+        "bit_differences": 0,
+        "outside_tolerance": 0,
+        "max_abs": 0.0,
+        "rms": 0.0,
+        "max_tolerance_ratio": 0.0,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.norm.input": {
+        "count": 2048,
+        "bit_differences": 2022,
+        "outside_tolerance": 0,
+        "max_abs": 0.001220703125,
+        "rms": 4.271497048055842e-05,
+        "max_tolerance_ratio": 0.6838208260716478,
+        "failing_coordinates": []
+      },
+      "generation.step385.backbone.norm.output": {
+        "count": 2048,
+        "bit_differences": 2029,
+        "outside_tolerance": 0,
+        "max_abs": 1.1444091796875e-05,
+        "rms": 1.2834252841128757e-06,
+        "max_tolerance_ratio": 0.042332146874712456,
+        "failing_coordinates": []
+      }
+    },
+    "interpretation": "At384, the first selected layer-output tolerance excess is layer39 coordinate755; all40 selected outputs at385 pass. Both norm outputs pass. These layer boundary comparisons are descriptive, not same-input layer-operator tests or generation-wide origin evidence."
+  },
+  "norm_crossover": {
+    "format": "drama3-backbone385-norm-comparison-v1",
+    "atol": 6e-05,
+    "rtol": 0.0003,
+    "source_hashes": {
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_native.json": "2c0a3c45d57cde98cd05c490006a9e9f0842666b4dc2f8550e88cea36a2853e9",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_mlx.json": "32a3d270de189dafe487500c21edbfc81d0eba7e823d99f78c539aece7b49f5c"
+    },
+    "fixture_sha256": "c65e25695590f37bb2af33603e7b47a53999db13d3d01a2fb5f2bcc1ee5f67bf",
+    "original_diagonals_bit_exact": 4,
+    "same_input_scalar_comparisons": 8192,
+    "per_step": {
+      "384": {
+        "input_difference": {
+          "count": 2048,
+          "bit_differences": 2021,
+          "outside_tolerance": 1,
+          "max_abs": 0.00341796875,
+          "rms": 8.325447343851331e-05,
+          "max_tolerance_ratio": 1.0248529041160894,
+          "failing_coordinates": [
+            755
+          ]
+        },
+        "original_output_difference": {
+          "count": 2048,
+          "bit_differences": 2033,
+          "outside_tolerance": 0,
+          "max_abs": 6.4373016357421875e-06,
+          "rms": 1.2615192118842489e-06,
+          "max_tolerance_ratio": 0.04671996436891163,
+          "failing_coordinates": []
+        },
+        "same_native_input": {
+          "count": 2048,
+          "bit_differences": 2048,
+          "outside_tolerance": 0,
+          "max_abs": 4.76837158203125e-06,
+          "rms": 1.6321090571089206e-07,
+          "max_tolerance_ratio": 0.0012363085091424305,
+          "failing_coordinates": []
+        },
+        "same_mlx_input": {
+          "count": 2048,
+          "bit_differences": 2048,
+          "outside_tolerance": 0,
+          "max_abs": 6.67572021484375e-06,
+          "rms": 2.1328827256846486e-07,
+          "max_tolerance_ratio": 0.0014057499220371092,
+          "failing_coordinates": []
+        },
+        "hidden_effect_through_mlx_norm": {
+          "max_abs": 6.67572021484375e-06,
+          "rms": 1.2230366911040442e-06
+        },
+        "native_vs_mlx_norm_effect_at_native_input": {
+          "max_abs": 4.76837158203125e-06,
+          "rms": 1.6321090571089206e-07
+        },
+        "hidden_effect_through_native_norm": {
+          "max_abs": 8.58306884765625e-06,
+          "rms": 1.2230976644766748e-06
+        },
+        "native_vs_mlx_norm_effect_at_mlx_input": {
+          "max_abs": 6.67572021484375e-06,
+          "rms": 2.1328827256846486e-07
+        },
+        "interaction": {
+          "max_abs": 1.9073486328125e-06,
+          "rms": 5.884872169758643e-08
+        },
+        "telescope": "N(H_N)-M(H_M) = [M(H_N)-M(H_M)] + [N(H_N)-M(H_N)]",
+        "alternative_telescope": "N(H_N)-M(H_M) = [N(H_N)-N(H_M)] + [N(H_M)-M(H_M)]",
+        "telescope_exact": true
+      },
+      "385": {
+        "input_difference": {
+          "count": 2048,
+          "bit_differences": 2022,
+          "outside_tolerance": 0,
+          "max_abs": 0.001220703125,
+          "rms": 4.271497048055842e-05,
+          "max_tolerance_ratio": 0.6838208260716478,
+          "failing_coordinates": []
+        },
+        "original_output_difference": {
+          "count": 2048,
+          "bit_differences": 2029,
+          "outside_tolerance": 0,
+          "max_abs": 1.1444091796875e-05,
+          "rms": 1.2834252841128757e-06,
+          "max_tolerance_ratio": 0.042332146874712456,
+          "failing_coordinates": []
+        },
+        "same_native_input": {
+          "count": 2048,
+          "bit_differences": 2048,
+          "outside_tolerance": 0,
+          "max_abs": 9.5367431640625e-06,
+          "rms": 3.161848517006345e-07,
+          "max_tolerance_ratio": 0.00206712170526833,
+          "failing_coordinates": []
+        },
+        "same_mlx_input": {
+          "count": 2048,
+          "bit_differences": 2048,
+          "outside_tolerance": 0,
+          "max_abs": 9.5367431640625e-06,
+          "rms": 3.3358020903055197e-07,
+          "max_tolerance_ratio": 0.0022062254905288663,
+          "failing_coordinates": []
+        },
+        "hidden_effect_through_mlx_norm": {
+          "max_abs": 4.589557647705078e-06,
+          "rms": 1.1672630918696395e-06
+        },
+        "native_vs_mlx_norm_effect_at_native_input": {
+          "max_abs": 9.5367431640625e-06,
+          "rms": 3.161848517006345e-07
+        },
+        "hidden_effect_through_native_norm": {
+          "max_abs": 4.470348358154297e-06,
+          "rms": 1.158339398703941e-06
+        },
+        "native_vs_mlx_norm_effect_at_mlx_input": {
+          "max_abs": 9.5367431640625e-06,
+          "rms": 3.3358020903055197e-07
+        },
+        "interaction": {
+          "max_abs": 2.384185791015625e-07,
+          "rms": 3.624975290799205e-08
+        },
+        "telescope": "N(H_N)-M(H_M) = [M(H_N)-M(H_M)] + [N(H_N)-M(H_N)]",
+        "alternative_telescope": "N(H_N)-M(H_M) = [N(H_N)-N(H_M)] + [N(H_M)-M(H_M)]",
+        "telescope_exact": true
+      }
+    },
+    "native_graph": {
+      "depth": 2,
+      "submitted": 1,
+      "completed": 1,
+      "pending": 0,
+      "max_pending": 1,
+      "completion_waits": 1,
+      "retained_bytes": 0,
+      "max_retained_bytes": 5499035648
+    },
+    "native_readbacks": {
+      "terminal": 32768
+    },
+    "mlx_eval_calls": 1,
+    "mlx_runtime_sources_match_passive": true,
+    "mlx_runtime_sources": {
+      "qwen3_5": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/lm/models/qwen3_5.py",
+        "sha256": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1"
+      },
+      "mlx_nn_normalization": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-reference-20261014/venv/lib/python3.12/site-packages/mlx/nn/layers/normalization.py",
+        "sha256": "92cfbc9ba53d4b2d7681a9096881d8cce4c7f5aff06ce054efbd6d454cf8c14f",
+        "class": "mlx.nn.layers.normalization.RMSNorm"
+      }
+    },
+    "limits": [
+      "Immediate four-cell norm sensitivity is conditional on captured F32 inputs and promoted original norm weights.",
+      "Layer output/input differences can reflect accumulated activation/KV history; no particular layer is established as the cause.",
+      "This isolated norm probe does not rerun the full strict tower logits gate or establish its repair."
+    ]
+  },
+  "terminal_norm_substitution": {
+    "format": "drama3-backbone385-terminal-norm-substitution-v1",
+    "source_hashes": {
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/chain_fixture.json": "5bb22d25a4bdbd6b48febf38eef326671f61426b3a172167f9d8fa8ba8924d9b",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/chain_native.json": "60d7820f5b0a20bae9f78832c59d70fd4f8251ed1e9318964accc5c47b846ea9",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_native.json": "2c0a3c45d57cde98cd05c490006a9e9f0842666b4dc2f8550e88cea36a2853e9",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_mlx.json": "32a3d270de189dafe487500c21edbfc81d0eba7e823d99f78c539aece7b49f5c",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/capture_comparison.json": "90b0cc3c36b96a1f6ef8178cf0ce1d8578fb696c1a319b0352f73032bf4b7a3f",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_comparison.json": "808aaaf70a9dc2e939128bcc752772e14d7cc723cbd8d7c07f3c185ee65b07dc"
+    },
+    "atol": 6e-05,
+    "rtol": 0.0003,
+    "intervention": "Replace only terminal backbone N(H_N) with M(H_N); feed the changed hidden through unchanged native tower HNorm and EH with fixed bit-equal normalized embedding. The original MLX EH reference stays fixed.",
+    "original_diagonals_bit_exact": 2,
+    "baseline": {
+      "count": 2048,
+      "bit_differences": 2002,
+      "outside_tolerance": 2,
+      "max_abs": 0.0001220703125,
+      "rms": 3.553080838982596e-05,
+      "max_tolerance_ratio": 1.4142408225421141,
+      "failing_coordinates": [
+        394,
+        636
+      ]
+    },
+    "replacement": {
+      "count": 2048,
+      "bit_differences": 2014,
+      "outside_tolerance": 2,
+      "max_abs": 0.000125885009765625,
+      "rms": 3.527066189435075e-05,
+      "max_tolerance_ratio": 1.3791479981614165,
+      "failing_coordinates": [
+        394,
+        636
+      ]
+    },
+    "coordinates": [
+      {
+        "index": 394,
+        "baseline_native": -0.038207054138183594,
+        "replacement_native": -0.0382080078125,
+        "original_mlx_reference": -0.03813338279724121,
+        "baseline_error": -7.367134094238281e-05,
+        "replacement_error": -7.462501525878906e-05,
+        "terminal_norm_substitution_shift": -9.5367431640625e-07,
+        "allowed": 7.144001483917236e-05
+      },
+      {
+        "index": 636,
+        "baseline_native": -0.02656078338623047,
+        "replacement_native": -0.026558399200439453,
+        "original_mlx_reference": -0.02646470069885254,
+        "baseline_error": -9.608268737792969e-05,
+        "replacement_error": -9.369850158691406e-05,
+        "terminal_norm_substitution_shift": 2.384185791015625e-06,
+        "allowed": 6.793941020965577e-05
+      }
+    ],
+    "native_graph": {
+      "depth": 2,
+      "submitted": 1,
+      "completed": 1,
+      "pending": 0,
+      "max_pending": 1,
+      "completion_waits": 1,
+      "retained_bytes": 0,
+      "max_retained_bytes": 2277916672
+    },
+    "native_readbacks": {
+      "terminal": 32768
+    },
+    "limits": [
+      "Captured local counterfactual; no production norm substitution or complete autoregressive replay with replacement.",
+      "Historical backbone and tower KV differences are not removed or attributed.",
+      "No precision/tolerance, performance or audio-quality claim changes."
+    ]
+  },
+  "gpu_and_memory_boundary": {
+    "production_change": false,
+    "native_passive_graph_before_drain": {
+      "depth": 2,
+      "submitted": 608,
+      "completed": 606,
+      "pending": 2,
+      "max_pending": 2,
+      "completion_waits": 606,
+      "retained_bytes": 13383130864,
+      "max_retained_bytes": 31989306472
+    },
+    "native_passive_graph_after_drain": {
+      "depth": 2,
+      "submitted": 608,
+      "completed": 608,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 608,
+      "retained_bytes": 0,
+      "max_retained_bytes": 31989306472
+    },
+    "native_passive_readbacks": {
+      "control": 10224,
+      "terminal": 35152448
+    },
+    "native_standalone": "Each submits/completes/waits once at depth2, no reads before finish; terminal32768 bytes, control0 and diagnostic0, pending/retained0. MLX norm evaluates four outputs once before serialization.",
+    "scope": "Private captured-input uploads and terminal diagnostic serialization only. No new production activation/cache transfer or synchronization. Extra passive GPU copies are not performance-neutral, so no speed claim.",
+    "guards": "Heavy jobs serial under run_safe; configured15% free-memory threshold, tree RSS8192MiB build/analysis and40960MiB model jobs, finite wrapper and outer timeouts. Logs show preflight, not observed minima. CogniGraph retained bytes are accounting, not physical residency. Studio was not started."
+  },
+  "executed_runs": {
+    "build": {
+      "plan_sha256": "ba9ae64db8fc2107f7b89fd804e70322c0fed496d36d7319e95a70fe7e16884a",
+      "receipt_sha256": "a8b50d7b9d79ed9a97d9292cd13323fb0417cb56c6c98240731fa6f7ea4ae592",
+      "exit_code": 0,
+      "elapsed_seconds": 8.673120083287358,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "crystal",
+        "300",
+        "8192",
+        "build",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/replay_native_backbone385.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/replay_native_backbone385",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "outer_timeout_seconds": 330,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "native": {
+      "plan_sha256": "dadb4c8e17dbcef1758f3734df9ef27f7a69db9f4f5b58ff757ec60bbc4bcb92",
+      "receipt_sha256": "36706f4cbe984e65147f48d8398c8a4436ad55e192f7a2c0281c664f0e027165",
+      "exit_code": 0,
+      "elapsed_seconds": 115.21968837501481,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/replay_native_backbone385",
+        "960",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/native_detailed.json"
+      ],
+      "outer_timeout_seconds": 990,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 40960
+    },
+    "mlx": {
+      "plan_sha256": "f6f42f366e8de39a098df3732ed5b51b20db3c6e02d9e201f940a950256337a6",
+      "receipt_sha256": "3309074fba2c0945218d189e44bd9cbb4e60d7c39f8f204fa3c540408c151891",
+      "exit_code": 0,
+      "elapsed_seconds": 80.79613379109651,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "960",
+        "40960",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/replay_mlx_backbone385.py",
+        "--mlx-root",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+        "--model-dir",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--generation",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+        "--output",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/replay_internal.json",
+        "--detail-output",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/backbone_internal_384_385.json"
+      ],
+      "outer_timeout_seconds": 990,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 40960
+    },
+    "norm-build": {
+      "plan_sha256": "fef54aa996519c105413cb24af44c48a8b0952e45f84503ec433ffbca5a0d4c3",
+      "receipt_sha256": "b6d1df4313031afb64bc493dcb18a17c62d0178138ebb48ea0a4b2dd7718c86b",
+      "exit_code": 0,
+      "elapsed_seconds": 7.553869791794568,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "crystal",
+        "240",
+        "8192",
+        "build",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_native.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/norm_native",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "outer_timeout_seconds": 270,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "norm-native": {
+      "plan_sha256": "8466920117fec6318dc9882653ddf1ec94c9200b07f10479d5a13ec35c8228cc",
+      "receipt_sha256": "309a544de7e904ba3f9a86a5b459e09811b0ddf9f7edd2f9ca56ca9231850cef",
+      "exit_code": 0,
+      "elapsed_seconds": 3.649425500072539,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/norm_native",
+        "210",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_fixture.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_native.json"
+      ],
+      "outer_timeout_seconds": 240,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 40960
+    },
+    "norm-mlx": {
+      "plan_sha256": "740c788526f6287136002d15d517aceb9f1054ec7b54811b88ed51ff027dd86d",
+      "receipt_sha256": "3b2504ea6c8c84f4c200976c66dd2f231590cf6c1831f3a68e4c639f28dc8a28",
+      "exit_code": 0,
+      "elapsed_seconds": 0.8875225000083447,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "210",
+        "40960",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/mlx/norm_mlx.py",
+        "--mlx-root",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+        "--model",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--fixture",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_fixture.json",
+        "--output",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/norm_mlx.json"
+      ],
+      "outer_timeout_seconds": 240,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 40960
+    },
+    "chain-build": {
+      "plan_sha256": "aea0583240c7c8d3601003eb93f159c179f74550d23869f8895223f46391f58b",
+      "receipt_sha256": "338cc3f6a5490e5f705ac6afba97dd2ede63f2fedcfba64b80f58a430e18570d",
+      "exit_code": 0,
+      "elapsed_seconds": 7.228847458958626,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "crystal",
+        "240",
+        "8192",
+        "build",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/chain_native.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/chain_native",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "outer_timeout_seconds": 270,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "chain-native": {
+      "plan_sha256": "845034862127c434b53b1115d6aae3cc64bbec782cad6b772a006da7a2cf872f",
+      "receipt_sha256": "f4594a09e2659c36b41fa6c827bda83f29143a09b76e5e253f7f960b01eced46",
+      "exit_code": 0,
+      "elapsed_seconds": 2.22412591567263,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/build/chain_native",
+        "210",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/chain_fixture.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/chain_native.json"
+      ],
+      "outer_timeout_seconds": 240,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 40960
+    },
+    "native_passivity": {
+      "plan_sha256": "970d97e561811cd13032e28b24e9fef74c01b71761f1a851f907a8286794a2fe",
+      "receipt_sha256": "ab41ee6d738c87d534d6eac6b8e86742250ec1465d6ae3d1d90003897f51492c",
+      "exit_code": 0,
+      "elapsed_seconds": 3.0396365830674767,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "180",
+        "8192",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/native_passivity.py"
+      ],
+      "outer_timeout_seconds": 210,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "analyze_capture": {
+      "plan_sha256": "a95de1eb84715d5e00f707e213a81e4bb0db72f5d2eb57323d0dee43299769ba",
+      "receipt_sha256": "76f2ee78c09daf1fb50e32b53fad5fc8318ccfd613031dfb48ca5a16c4ad55e0",
+      "exit_code": 0,
+      "elapsed_seconds": 8.074609082657844,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "180",
+        "8192",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/analyze_capture.py"
+      ],
+      "outer_timeout_seconds": 210,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "analyze_norm": {
+      "plan_sha256": "13cabad715989fabd5ada2859ab80ae00b71cd85173d9733ca27275edb99a66c",
+      "receipt_sha256": "b675350a62f1c487a244352687c07e4a4e781297401adf89edf3bd4d9270b1e2",
+      "exit_code": 0,
+      "elapsed_seconds": 1.604166999924928,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "180",
+        "8192",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/analyze_norm.py"
+      ],
+      "outer_timeout_seconds": 210,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    },
+    "analyze_chain": {
+      "plan_sha256": "815f025d8bfc688ad62180561f7383fae536f468fda25d5bcf7ac0b46f228d87",
+      "receipt_sha256": "778c025dbff2b456af834c6e8d46ae9724fcb3e832fc37fddc46f6758cb9e2b9",
+      "exit_code": 0,
+      "elapsed_seconds": 0.8432873752899468,
+      "guarded_argv": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "180",
+        "8192",
+        "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/analyze_chain.py"
+      ],
+      "outer_timeout_seconds": 210,
+      "configured_minimum_system_free_percent": 15,
+      "max_tree_rss_mib": 8192
+    }
+  },
+  "preserved_failed_attempts": {
+    "native_passivity-attempt1": {
+      "exit_code": 1,
+      "reason": "Missing zero diagnostic key; corrected to get(diagnostic,0).",
+      "source_snapshot": "native_passivity.attempt1.py",
+      "runner_snapshot": "run_analysis.attempt1.py",
+      "import_snapshot": "analyze_capture.attempt1.py",
+      "not_a_passing_test": true
+    },
+    "analyze_norm-attempt1": {
+      "exit_code": 1,
+      "reason": "Invalid standalone control-read assumption; actual source has no control reads, corrected to get(control,0)==0.",
+      "source_snapshot": "analyze_norm.norm-attempt1.py",
+      "runner_snapshot": "run_analysis.norm-attempt1.py",
+      "import_snapshot": "analyze_capture.norm-attempt1.py",
+      "not_a_passing_test": true
+    }
+  },
+  "mini_quadrumvirate": {
+    "prediction": "Terminal backbone RMSNorm could be the missing contributor to captured tower EH failures.",
+    "discriminator": "Passive384/385 backbone boundaries with exact parent controls; four crossed GPU norm cells with original diagonals, then operator-only substitution through fixed native HNorm/EH.",
+    "result": "Both EH failures survive terminal-norm-only substitution. Input drift precedes terminal norm; its causal history remains unlocalized.",
+    "adversary": "ROBUST within captured local attribution after source-identity, original-diagonal, tolerance and no-new-production-sync checks. Same-lineage review is correlated, not independent replication.",
+    "review_sha256": "f410ead8ffcb155156ec2e5c8dbdc9088ddb11adace4e5fd72c7a61fdd9e573a"
+  },
+  "dod": {
+    "command": [
+      "python3",
+      "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/run_analysis.py",
+      "verify_evidence"
+    ],
+    "expected_signal": "Artifact and source/plan/receipt hashes match; original diagonals and scalar tolerance summaries recompute; the builder-computed strict38-value FAIL result is pinned; only the three intended repository paths changed.",
+    "receipt_path": "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/verify_evidence-receipt.json",
+    "verification_scope_limit": "Final verifier recomputes standalone norm/chain numeric claims. Passive-capture metrics, raw strict-logit gate and source-revision equality belong to separately executed pinned analyses; no independent replication is claimed.",
+    "receipt_scope": "The final verifier receipt is external to the packet index to avoid self-referential hashing; inspect its actual exit status.",
+    "fallback": "Direct four-output native HNorm/EH counterfactual reconstructs both original native diagonals and checks every2048 EH value against the unchanged original MLX reference."
+  },
+  "next_falsifier": "Capture layer39 attention output, attention residual, post-attention norm, router/MoE contributions and residual at384/385. Cross stateless operations on identical captured inputs first; isolate KV/SSM history separately before any stateful attention attribution.",
+  "decay_and_refresh": "Refresh after source/probe/binary/checkpoint/config/runtime/device/driver/precision/tolerance/prefix/cache/graph/capture-policy changes. Missing or changed private artifacts reopen dependent claims. Host workload changes memory admission.",
+  "artifacts": {
+    "root": "/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019",
+    "sha256": {
+      "replay_native_backbone385.cr": "84603cb7da0289b3c73cee3bb1219eb75f9ae61823f2124eb4a5b7f78dfeb019",
+      "mlx/replay_mlx_backbone385.py": "db343920c52ca6cc0bc5c7268d3ca890731bbe40ecfa708a780e56eab875caff",
+      "run_probe.py": "03b420b19afdb9eae7dbf155a7548e3389a097356a49550a0a74cfa71984a020",
+      "native_detailed.json": "b3eeaf298c896183a1dd758c575b39867e47dfa65be921c2215c5998a6e8fac4",
+      "mlx/replay_internal.json": "09d9163a3381f302bfe6a2ca6bb28d9a12c3c3fd09bc83872bc0091652b5149d",
+      "mlx/replay_internal.json.manifest.json": "c6e3a1ca01fec3a9f609d64fc60d375522601d7b10a03e3798e1c1367a81787e",
+      "mlx/backbone_internal_384_385.json": "5489ce877f6dea089a101e571e4733d2a49ee37d16bd24f3849a6bde8e39eb43",
+      "native_passivity.py": "dfd449ca6fac169cc0564b0cf8814db7e251ab6ee962301e311188d31f98a9fa",
+      "native_passivity.json": "652ab65cf666bb948a1d6b5b889aefa7748526ac805fa09b5516bf206f11f6c2",
+      "analyze_capture.py": "f32e853258109a532dfac093d23a1aab3e89d25fd30145cd95f62214d242d9be",
+      "capture_comparison.json": "90b0cc3c36b96a1f6ef8178cf0ce1d8578fb696c1a319b0352f73032bf4b7a3f",
+      "norm_fixture.json": "c65e25695590f37bb2af33603e7b47a53999db13d3d01a2fb5f2bcc1ee5f67bf",
+      "norm_native.cr": "7f0e34038c3f2c013345a9918325ac10e320a59a4a456b1ff37af48c41bea1ac",
+      "mlx/norm_mlx.py": "0efbbfcc1ef45ee891dc1498966b61bdf17f0f76069bad4ae2c28a937fc60b99",
+      "run_norm.py": "fac101375322a87b7340c661357197e008db31cb8cb731c19f0394837959ffec",
+      "norm_native.json": "2c0a3c45d57cde98cd05c490006a9e9f0842666b4dc2f8550e88cea36a2853e9",
+      "norm_mlx.json": "32a3d270de189dafe487500c21edbfc81d0eba7e823d99f78c539aece7b49f5c",
+      "analyze_norm.py": "3c60657039d32af5a1c8c37d5c151d6fdce894f5c10db71f6111ee55b527001c",
+      "norm_comparison.json": "808aaaf70a9dc2e939128bcc752772e14d7cc723cbd8d7c07f3c185ee65b07dc",
+      "chain_fixture.json": "5bb22d25a4bdbd6b48febf38eef326671f61426b3a172167f9d8fa8ba8924d9b",
+      "chain_native.cr": "d4d95f4ce5a8939a38d343c1fc1f248640876ae00ff78267a720112a56742e4c",
+      "run_chain.py": "f20636eee7146ff75b3400c387028c4033f89247ba44b4f9f6b8d4992edd4d7d",
+      "chain_native.json": "60d7820f5b0a20bae9f78832c59d70fd4f8251ed1e9318964accc5c47b846ea9",
+      "analyze_chain.py": "5eba02de8e4a34b663a8eeed3592dc07cab5d111e424b348ffda9da6bc5f123c",
+      "terminal_norm_substitution.json": "569184d7811e50096e96e17c97c5d553e0aadda50760d3ee88bfe5f6bb068022",
+      "run_analysis.py": "4a07d7d63e3923e24853ddb5c097e0bc298a5bb24d57979e46a5e71f21f18bdf",
+      "build_evidence.py": "3bb94763694a5fec152991b429ea8f305ea9333da047265ddbee05a140857700",
+      "verify_evidence.py": "8f6a3ed8df07a1fe67b529b818224b9f71518baff305449491076d2fdf5d3492",
+      "final-adversary.txt": "f410ead8ffcb155156ec2e5c8dbdc9088ddb11adace4e5fd72c7a61fdd9e573a",
+      "native_passivity.attempt1.py": "8626c11286d82e0b2e1079009508189ae9efaca2021d2a41a70c7ae63e84f69c",
+      "run_analysis.attempt1.py": "4a07d7d63e3923e24853ddb5c097e0bc298a5bb24d57979e46a5e71f21f18bdf",
+      "analyze_capture.attempt1.py": "b240594a107bc14c60a999e98303d06604293e425611633463c9ec3545362c00",
+      "analyze_norm.norm-attempt1.py": "5627e35ad7e999611c65b55a5e67d0ddb1d0d9478cd2244980a0b7815d9d2599",
+      "run_analysis.norm-attempt1.py": "4a07d7d63e3923e24853ddb5c097e0bc298a5bb24d57979e46a5e71f21f18bdf",
+      "analyze_capture.norm-attempt1.py": "f32e853258109a532dfac093d23a1aab3e89d25fd30145cd95f62214d242d9be",
+      "build/replay_native_backbone385": "36182bf71c279ec1e73e3841ded7a157353b48b053d766c628d64552d8ef7b05",
+      "build/norm_native": "06779c33c56cad17658158e791f816a570bad79644ba0e182d8157c000777495",
+      "build/chain_native": "68e261c9f73744cc63aab32d05ec5bcd207b236c3eaf8e74a1ec0e2813eef67b",
+      "build-run-plan.json": "ba9ae64db8fc2107f7b89fd804e70322c0fed496d36d7319e95a70fe7e16884a",
+      "build-receipt.json": "a8b50d7b9d79ed9a97d9292cd13323fb0417cb56c6c98240731fa6f7ea4ae592",
+      "build.log": "de879e2b8a211f6ac90e9d385e68df8847cbdbddf085879a50bb48d4cfb0bab9",
+      "native-run-plan.json": "dadb4c8e17dbcef1758f3734df9ef27f7a69db9f4f5b58ff757ec60bbc4bcb92",
+      "native-receipt.json": "36706f4cbe984e65147f48d8398c8a4436ad55e192f7a2c0281c664f0e027165",
+      "native.log": "a72afbafcca50aecb518d91a87741cc01382377fe947d15981b0b949343c986b",
+      "mlx-run-plan.json": "f6f42f366e8de39a098df3732ed5b51b20db3c6e02d9e201f940a950256337a6",
+      "mlx-receipt.json": "3309074fba2c0945218d189e44bd9cbb4e60d7c39f8f204fa3c540408c151891",
+      "mlx.log": "fcc6c92f96047b3080a796a9ce46578167d187662e8dd13b8d4386c3ba0d2ccc",
+      "norm-build-run-plan.json": "fef54aa996519c105413cb24af44c48a8b0952e45f84503ec433ffbca5a0d4c3",
+      "norm-build-receipt.json": "b6d1df4313031afb64bc493dcb18a17c62d0178138ebb48ea0a4b2dd7718c86b",
+      "norm-build.log": "cec9b9f73899b87c37b05fef4b870d238144733397762199c4e79f3f3b58d2a2",
+      "norm-native-run-plan.json": "8466920117fec6318dc9882653ddf1ec94c9200b07f10479d5a13ec35c8228cc",
+      "norm-native-receipt.json": "309a544de7e904ba3f9a86a5b459e09811b0ddf9f7edd2f9ca56ca9231850cef",
+      "norm-native.log": "54914ba9e2cecce9448f354bda1238b10fc955b0613164e0729c4ddf43374c9c",
+      "norm-mlx-run-plan.json": "740c788526f6287136002d15d517aceb9f1054ec7b54811b88ed51ff027dd86d",
+      "norm-mlx-receipt.json": "3b2504ea6c8c84f4c200976c66dd2f231590cf6c1831f3a68e4c639f28dc8a28",
+      "norm-mlx.log": "048ef517f83ebb341c1ecaf04211dc053dc22503f8951b8796549b7aaf650b75",
+      "chain-build-run-plan.json": "aea0583240c7c8d3601003eb93f159c179f74550d23869f8895223f46391f58b",
+      "chain-build-receipt.json": "338cc3f6a5490e5f705ac6afba97dd2ede63f2fedcfba64b80f58a430e18570d",
+      "chain-build.log": "332230d3d8b6a36c74e0c6129b3947304ba9adeb4a338ca253d87361cb2677f5",
+      "chain-native-run-plan.json": "845034862127c434b53b1115d6aae3cc64bbec782cad6b772a006da7a2cf872f",
+      "chain-native-receipt.json": "f4594a09e2659c36b41fa6c827bda83f29143a09b76e5e253f7f960b01eced46",
+      "chain-native.log": "2ce1ade81fc525618e2d258f7a9b888b42befea72b6df48ba6849be49663560c",
+      "native_passivity-run-plan.json": "970d97e561811cd13032e28b24e9fef74c01b71761f1a851f907a8286794a2fe",
+      "native_passivity-receipt.json": "ab41ee6d738c87d534d6eac6b8e86742250ec1465d6ae3d1d90003897f51492c",
+      "native_passivity.log": "40b777c1e20c642e9a986b99638ca8027789438f2d45a302b7330dcc61ae7e9a",
+      "analyze_capture-run-plan.json": "a95de1eb84715d5e00f707e213a81e4bb0db72f5d2eb57323d0dee43299769ba",
+      "analyze_capture-receipt.json": "76f2ee78c09daf1fb50e32b53fad5fc8318ccfd613031dfb48ca5a16c4ad55e0",
+      "analyze_capture.log": "e6ef7573487634368e030942a55e5ce3211abff8a9c2284996a7d1870a69d544",
+      "analyze_norm-run-plan.json": "13cabad715989fabd5ada2859ab80ae00b71cd85173d9733ca27275edb99a66c",
+      "analyze_norm-receipt.json": "b675350a62f1c487a244352687c07e4a4e781297401adf89edf3bd4d9270b1e2",
+      "analyze_norm.log": "55b948666b591fca698de5319611f505046c4c56d80d03f7f956a9c65c4b623c",
+      "analyze_chain-run-plan.json": "815f025d8bfc688ad62180561f7383fae536f468fda25d5bcf7ac0b46f228d87",
+      "analyze_chain-receipt.json": "778c025dbff2b456af834c6e8d46ae9724fcb3e832fc37fddc46f6758cb9e2b9",
+      "analyze_chain.log": "ee05b5343b2200fa57b10b18589a476ec0b28f79380ee3bfa1216753bb8914f3",
+      "native_passivity-attempt1-run-plan.json": "806789ecc677482a52af0f21b1b2f0dae172589bd63c43b38bac7c0ea931868a",
+      "native_passivity-attempt1-receipt.json": "66bd05b9b56dc75c6b17130c424730b302b2cfc559ff1aeda33dad618b0715de",
+      "native_passivity-attempt1.log": "8ba63bd347a91ec4d58894c045147ea21e034fb077809c74bd2ad55200a1ef60",
+      "analyze_norm-attempt1-run-plan.json": "09c47e4f1d57d089731c63d9e507022f4a483925ef2ec40addb2d935e10bca8f",
+      "analyze_norm-attempt1-receipt.json": "6dfb6452c9a3cf74b046b925356e203c5be0c57cc97148505af66e33f88e8534",
+      "analyze_norm-attempt1.log": "437f3c4752386b34187680db613a25acd815d0f758aec8224b1ab1d0004c81a4"
+    }
+  }
+}

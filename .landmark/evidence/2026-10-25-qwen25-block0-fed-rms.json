@@ -1,0 +1,161 @@
+{
+  "format": "Local compact evidence index; no official packet-validator claim",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "Both RMS sites in the opt-in native block reproduce all 17 saved S1280 block-0 stages raw-bit exactly against the authenticated upstream oracle.",
+    "scope": "Pinned Qwen2.5-VL-7B checkpoint block 0, saved deterministic S1280 input, MPS BF16, unchanged atol=rtol=2e-5.",
+    "excluded": [
+      "all-input parity",
+      "26-block S1280 prefix repair",
+      "production-default promotion",
+      "closed compiler mechanism",
+      "speedup",
+      "full generation"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "src/ml/gguf/qwen25_hy_nomas.cr",
+      "examples/qwen25_pretrained_block_probe.cr",
+      "spec/qwen25_prefix_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json"
+    ],
+    "changed_paths": [
+      "src/ml/gguf/qwen25_mps_bridge.mm",
+      "src/ml/gguf/qwen25_hy_nomas.cr",
+      "examples/qwen25_pretrained_block_probe.cr",
+      "spec/qwen25_prefix_spec.cr",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/block0-fed-rms-receipt-v1.json",
+      "nbytes": 21995,
+      "sha256": "9c7ca7aa9e63572700b08089902619eef0e964176e7c244a61e6c98621458182"
+    },
+    "base_commit": "e7b324fecf68f70e3a3031b7b0e5d41b78a639b3",
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_hy_nomas.cr",
+        "nbytes": 23456,
+        "sha256": "e19b300a313acf51ce9da0ff21f2e62195a7c8d1d30f41da4b778c91a7f4e272"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_mps_bridge.mm",
+        "nbytes": 131358,
+        "sha256": "cb36804bbd87a7216f0783f1ada9c2ff6a33b4ffb6877b30843858dac66833d0"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_pretrained_block_probe.cr",
+        "nbytes": 52419,
+        "sha256": "8397f9ba94e5506abf0f6524c9ff54052a3edc89c47f4a8b023b745e6289cc6c"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_prefix_spec.cr",
+        "nbytes": 2452,
+        "sha256": "854d6727e45d43b9fa35d2295b6d398bc53f600b84cecc695cb793b4b2313796"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 57408,
+        "sha256": "a8cddc1ba627a14bbf0fc7153cb122003c29bae504c234966bd885a061d4962b"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4537536,
+        "sha256": "f8566e17e28d3943406bcdb1462e769a0907428bd5d180d6258793d906522d40"
+      }
+    ],
+    "review": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/block0-fed-rms-review-v1.json",
+      "nbytes": 2501,
+      "sha256": "c66a289eadf6ea277028ccca09dbe37e065babc75ce042c2b44ab11f62b79bfa"
+    },
+    "availability": "Local SSD; invalidate on loss or digest mismatch"
+  },
+  "verification": {
+    "observed_dod": "17/17 stages, 116326400 BF16 words raw exact; retained prefix state 1, post RMS normalized scratch and inverse root exact; same-binary legacy remains negative.",
+    "cpu": "35 focused Crystal examples pass.",
+    "native_build": "Normal/cpu-only no-codegen, strict Clang, release link, format/diff checks pass; exact argv retained.",
+    "execution": {
+      "named_bytes": 854129924,
+      "exponent_bytes": 4,
+      "prepared_steps": 19,
+      "terminal_wait_count": 1,
+      "tracked_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "postwait_diagnostic_reads": 29,
+      "early_release_rejected": true,
+      "tolerance": {
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "guard": {
+      "sampled_peak_bytes": 2076641416,
+      "minimum_headroom_bytes": 27374583808,
+      "minimum_pressure_free_pct": 74,
+      "max_swap_growth_bytes": 0,
+      "exit_code": 0,
+      "named_bytes": 854129924,
+      "guard_limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 5368709120,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 4604649.60671925,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 180
+      }
+    },
+    "structural_validation": "Local JSON/path whitelist/dereferenced SHA256/report/source-boundary assertions only; no unavailable official packet-validator success claimed."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Pinned Qwen2.5-VL-7B checkpoint block 0, saved deterministic S1280 input, MPS BF16, unchanged atol=rtol=2e-5.",
+    "correlated_review": true,
+    "review_record": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/block0-fed-rms-review-v1.json",
+      "nbytes": 2501,
+      "sha256": "c66a289eadf6ea277028ccca09dbe37e065babc75ce042c2b44ab11f62b79bfa"
+    },
+    "limits": [
+      "Fixed retained oracle/input only; no new upstream capture in this slice.",
+      "Null, size and value guards are executed; alternate-device/storage and alias guards are source-inspected only.",
+      "The native caller must keep scalar bytes immutable; the Crystal binding is private, not a system-enforced read-only buffer.",
+      "All arithmetic is GPU; diagnostic readback occurs after the single terminal wait.",
+      "Guard samples are not reservations or instantaneous peak guarantees.",
+      "Reused companion objects have pinned bytes but opaque source ancestry; build is not hermetic."
+    ]
+  },
+  "refresh": {
+    "decay_triggers": [
+      "scoped source",
+      "fixture/input",
+      "precision/geometry",
+      "toolchain/SDK/OS/device",
+      "execution/lifecycle",
+      "artifact loss/hash mismatch"
+    ],
+    "operation": "Reauthenticate inputs and source/build pins; rebuild changed code and repeat the guarded same-input legacy/fed block pair.",
+    "failure_policy": "Reopen dependent qualification and keep the fed route opt-in; do not widen tolerances."
+  },
+  "next_falsifier": "Separately admit a fed 26-block prefix option with exponent accounting and shared-workspace lifecycle, then compare all retained S1280 hidden states; no full generation.",
+  "rollback": "Disable rms_power_fed; old block ABI/default and PrefixPlan remain unchanged.",
+  "links": {
+    "frontier": "docs/qwen25-hy-nomas-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}

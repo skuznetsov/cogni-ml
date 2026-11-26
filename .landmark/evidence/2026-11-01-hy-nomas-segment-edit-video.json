@@ -1,0 +1,208 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 19165,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/qualification-summary.json",
+      "sha256": "240c905ca9e10bbc47b36bd4e37b63cd9cfa0b6249e9af506e333b42f28015df"
+    },
+    {
+      "bytes": 11332,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/decode/pair-validation.json",
+      "sha256": "b65a1f777fea84ae465c9202443b3291356e0a5b6432414d599346f2d0534468"
+    },
+    {
+      "bytes": 2926,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/videos/raw-previews.json",
+      "sha256": "10e3b934b909a24d2fab53504207296992dead9d397cabd13e602b5197ab82ce"
+    },
+    {
+      "bytes": 6650,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/videos/export-validation.json",
+      "sha256": "8f5e3e572255b15333606bd132a59c519ca404fd26db2f4a2fea437c0667df69"
+    },
+    {
+      "bytes": 983,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/upstream-geometry.json",
+      "sha256": "54020e42b29bcb508b5f4c5a499e297b9bb886dc2d082ea3b66c13e919c0cf5d"
+    },
+    {
+      "bytes": 30708,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/native-source-pins.json",
+      "sha256": "346775305d15c9a98a780e656617c754816103b0923991705c7d519695aec0a0"
+    },
+    {
+      "bytes": 11956,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/checker-source-pins.json",
+      "sha256": "2ee33ac35a97ff688dcddc17f2ac1848358f7056f8c858d1b6e70e83bd49e52b"
+    },
+    {
+      "bytes": 1085,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/export-source-pins.json",
+      "sha256": "a3899c511ca10d67ac1d1ce1651c1acdb33329fe452211213b6cce1bff74f107"
+    },
+    {
+      "bytes": 977,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/diagnostic-source-pins.json",
+      "sha256": "cb81e89af1705e2ca53ac9916da04f3d483c81d32975ba2dad5f6a059c082a9d"
+    },
+    {
+      "bytes": 897,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/adversary-review.json",
+      "sha256": "da3e64b7e43d8931730a72da03f704dd9c15efb8981c45af6461b6c9bcaae4a6"
+    },
+    {
+      "bytes": 1308,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/collect-qualification-command.json",
+      "sha256": "dd847b610fa9255c5eab552377fcc8f8a9afd179c05c4a0d4487aff2ffda4351"
+    },
+    {
+      "bytes": 137339,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/decode-original.jsonl",
+      "sha256": "c6b97ac251a893194b5384f6bb4d12e09cdd7e550c52641e3a3d70db2ad3d6f7"
+    },
+    {
+      "bytes": 143219,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/decode-edited.jsonl",
+      "sha256": "a23c6d6ee2241b88ee1c3121a1039d4706d9b802b011e96dd0dbc0454d8ddb65"
+    },
+    {
+      "bytes": 147,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/python-comparator-tests.out",
+      "sha256": "4392c13b697a2eec18c6efdb9312a62b37868eea3f412375156aa9ff6c441fad"
+    },
+    {
+      "bytes": 4535,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/build-decoder.out",
+      "sha256": "03e7bcdd3472cf70836f647583714bd0adb0b636eec9f1932a0b4869f3b0f4f4"
+    },
+    {
+      "bytes": 156,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/authenticate-pair.out",
+      "sha256": "54477c10a1926336126b9d58a86ee7f94f9e750904d9fb15f8f4f6308c1cf547"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "spec/support/hy_nomas_segment_edit_video_compare.py",
+      "spec/hy_nomas_segment_edit_video_compare_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-segment-edit-video.json"
+    ],
+    "changed_paths": [
+      "spec/support/hy_nomas_segment_edit_video_compare.py",
+      "spec/hy_nomas_segment_edit_video_compare_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-segment-edit-video.json"
+    ],
+    "out_of_scope": [
+      "New DiT generation in this step.",
+      "Full upstream neural/video parity.",
+      "Perceptual quality equivalence.",
+      "Per-segment prompt editing.",
+      "Edited QBit execution."
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Weights, raw pixels, binary, logs and videos remain outside Git; hashes detect changes and do not provide recovery.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Code/binary/input/noise/weights/codec/geometry/backend/device changes or modification/loss of referenced local artifacts.",
+    "level": "VERIFIED",
+    "scope": "Source/pair integrity, finite raw output, prefix/default regression, terminal export integrity and guarded native decoder execution.",
+    "text": "Saved original and edited B/C native timelines produce an authenticated matched 15-second decode pair with bitwise equal pixel frames [0,100); the decoder overlap [100,120) may differ."
+  },
+  "created_at": "2026-11-01T15:22:35.644296+00:00",
+  "definition_of_done": {
+    "commands": [
+      "python3 -B -m unittest spec/hy_nomas_segment_edit_video_compare_test.py spec/hy_nomas_segment_edit_resume_reference_test.py spec/hy_nomas_segment_edit_reference_test.py spec/hy_nomas_cache_qbit_video_compare_test.py",
+      "Guarded native decode pair and terminal postprocessing: external run_decode_pair.py and postprocess.py; exact command receipts linked by qualification-summary.json."
+    ],
+    "expected": "48 tests; pair_integrity_passed=true; exact first100 pixel frames; finite full outputs; correctly sized/duration exports; guards passed.",
+    "observed": "Passed at the recorded native/checker source pins."
+  },
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/decode/pair-validation.json",
+      "result": "passed",
+      "signal": "Fresh edit-matrix authentication; selected original [1,3] and edited restart [2,3], common actual executable/weights/noise/settings, finite full raw files and first 100 pixel frames bitwise equal."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/videos/raw-previews.json",
+      "result": "passed",
+      "signal": "Fresh original full raw output bitwise equal to previous native exact control; lossless seam/late previews bound to raw hashes."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/videos/export-validation.json",
+      "result": "passed",
+      "signal": "Both originals and original-left/edited-right hstack: 360 frames, 24fps, 15s, authenticated source/output hashes."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/upstream-geometry.json",
+      "result": "passed",
+      "signal": "Pinned upstream pure window helper reproduces 17 native starts; geometry only."
+    },
+    {
+      "kind": "executed_test",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/logs/python-comparator-tests.out",
+      "result": "passed",
+      "signal": "48 Python tests, including 10 new video comparator tests and hostile mutations."
+    },
+    {
+      "kind": "guarded_native_run",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/qualification-summary.json",
+      "result": "passed",
+      "signal": "26 GiB cap, 10% file-cache-aware reserve, 64 MiB swap stop, 1200 s deadline; sampled peak 18.8106 GiB, minimum headroom 29.0074 GiB, zero swap growth; instrumented encode allocations/readbacks/prewaits 0, terminal waits 1."
+    }
+  ],
+  "id": "LM-HY-NOMAS-SEGMENT-EDIT-VIDEO-2026-11-01",
+  "limitations": [
+    "Sampled guards do not bound between-sample spikes.",
+    "File-cache headroom estimates reclaimability.",
+    "Instrumented encode counters exclude opaque MPS allocations.",
+    "Setup authentication and terminal output/export use CPU I/O.",
+    "H264 comparison is re-encoded; raw F32 and lossless PNG previews are retained.",
+    "Evidence is local-only; hashes detect change and cannot recover lost artifacts."
+  ],
+  "quality_verdict": "Pending user motion review. Raw new-take errors and selected stills do not establish motion quality.",
+  "rollback": "Revert this comparator/documentation commit and reuse the untouched original saved branch.",
+  "source_state": {
+    "base_commit": "2e972119521cc5a8631d6f293a4a3c58c61ed4e1",
+    "branch": "codex/hy-nomas-native",
+    "comparator_sha256": "946d8cdabf3f3380647155df8e8756d347c15c37504adff0e2c45920ea627a32",
+    "native_binary_sha256": "46ef6149ac67537831a70a629be6c0238c8167dcd6101bb4046f7349d467d1ca",
+    "tests_sha256": "3eebcc110628d852540b952e7f9132f53ce9495223547d6fa8afb49e36e4b2fa"
+  },
+  "verdict": {
+    "hash_mismatches": 0,
+    "observations": [
+      "Correct original [1,3] and edited restart [2,3] terminal source banks.",
+      "Same actual decoder executable/weights/noise/conditioning/settings.",
+      "Planar F32 prefix [0,100) bitwise equal; overlap/B/C changed nonvacuously.",
+      "Fresh default output matches prior original raw control.",
+      "Guards and terminal export frame/duration/hash checks passed."
+    ],
+    "open": [
+      "User motion-quality review.",
+      "Full upstream neural/video parity.",
+      "Edited QBit execution."
+    ],
+    "review_type": "Same-lineage correlated read-only agent review; not independent model-quality or upstream parity evidence.",
+    "reviewed_collector_artifacts": 27,
+    "reviewed_source_pins": 253,
+    "schema": "cogni_ml.segment_edit_video_adversary/v1",
+    "scope": "Matched native pair integrity and bounded decoder execution only.",
+    "verdict": "ROBUST"
+  }
+}

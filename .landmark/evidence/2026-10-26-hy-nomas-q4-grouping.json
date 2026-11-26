@@ -1,0 +1,958 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-grouping",
+  "status": "VERIFIED within declared diagnostic scope",
+  "risk": "CAUTION: opt-in diagnostic accumulation and resource scheduling changes; no production kernel/default changes",
+  "base_commit": "1a8164d88263d9af1d974ea0f8e94bfc0113ab10",
+  "claim": "On the authenticated M23/K8192/N2048 projection and exact decoded F16 operands, contiguous two-way K4096 partial accumulation plus F32 addition reproduces the full-K MPS output bitwise before and after bias, in two guarded runs.",
+  "not_claimed": [
+    "MPS-private internal reduction schedule",
+    "Generalization to other inputs, shapes or dtypes",
+    "Direct packed-Q4 execution qualification",
+    "Original-BF16 quantization quality, kernel speedup, full-block or generation performance"
+  ],
+  "problem": "The unchanged direct Q4 and dense SIMD clone reproduce17 failures at finite2e-5 against identical-operand MPS; determine whether a full-K partial-sum grouping removes them without changing operands or synchronization.",
+  "design": {
+    "groups": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
+    ],
+    "layouts": [
+      "contiguous",
+      "strided32"
+    ],
+    "merge_orders": [
+      "fold",
+      "adjacent-balanced-tree"
+    ],
+    "k_tiles_per_case": 256,
+    "partials_reused_bytes": 6029312,
+    "bias": "Applied once after merging",
+    "coverage": "Actual tile-visit counts for representative output threadgroup; ownership additionally relies on reviewed arithmetic",
+    "sentinel": "GPU NaN poison before each case"
+  },
+  "dod": {
+    "build": "build-v1: guarded release target hy_nomas_q4_reduction_probe, exit0",
+    "native": "group-v1 and group-v2: exit0",
+    "postterminal": "verify-v3: guarded separate112 comparisons per run plus hashes/controls/guard checks, PASS",
+    "adversary": "Correlated source/terminal-byte review ROBUST; checker rejects three forged-metadata cases",
+    "format_and_diff": "Scoped Crystal format and git diff --check; repeated before commit"
+  },
+  "observations": {
+    "runs": 2,
+    "output_banks_reproduced": 68,
+    "previous20_banks_preserved": 20,
+    "tolerance": {
+      "serialized_atol": 2e-05,
+      "serialized_rtol": 2e-05,
+      "effective_f32_atol": 1.9999999494757503e-05,
+      "effective_f32_rtol": 1.9999999494757503e-05
+    },
+    "grouping_coverage": [
+      {
+        "name": "contiguous.g1",
+        "groups": 1,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 256,
+        "partition_start_step_k": 8192,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "contiguous.g2",
+        "groups": 2,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 128,
+        "partition_start_step_k": 4096,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "contiguous.g4",
+        "groups": 4,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 64,
+        "partition_start_step_k": 2048,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "contiguous.g8",
+        "groups": 8,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 32,
+        "partition_start_step_k": 1024,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "contiguous.g16",
+        "groups": 16,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 16,
+        "partition_start_step_k": 512,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "contiguous.g32",
+        "groups": 32,
+        "interleaved_32_tiles": false,
+        "tiles_per_partition": 8,
+        "partition_start_step_k": 256,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g1",
+        "groups": 1,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 256,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 32,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g2",
+        "groups": 2,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 128,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 64,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g4",
+        "groups": 4,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 64,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 128,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g8",
+        "groups": 8,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 32,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 256,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g16",
+        "groups": 16,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 16,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 512,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      },
+      {
+        "name": "strided32.g32",
+        "groups": 32,
+        "interleaved_32_tiles": true,
+        "tiles_per_partition": 8,
+        "partition_start_step_k": 32,
+        "within_partition_step_k": 1024,
+        "visited_tiles": 256,
+        "every_tile_once": true
+      }
+    ],
+    "baseline_direct_vs_mps": {
+      "name": "direct.bias.vs.mps.helper.bias",
+      "elements": 47104,
+      "failures": 17,
+      "raw_bit_differences": 45853,
+      "max_abs": 0.000247955322265625,
+      "rmse": 1.8544793163295328e-05,
+      "relative_l2": 1.4113482393796142e-06,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "execution": {
+      "terminal_wait_count": 1,
+      "command_segments": 1,
+      "encode_named_allocations": 0,
+      "preterminal_readbacks": 0,
+      "terminal_packed_readbacks": 1,
+      "named_bytes": 253596912,
+      "combined_timing_is_not_a_kernel_benchmark": true,
+      "neural_math_and_reconstruction_on_gpu": true
+    },
+    "original_bf16_baseline_lossy": {
+      "name": "direct.bias.vs.original_bf16_saved_upstream",
+      "elements": 47104,
+      "failures": 47099,
+      "raw_bit_differences": 47104,
+      "max_abs": 3.2914271354675293,
+      "rmse": 0.6173029242778442,
+      "relative_l2": 0.04703757411399845,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "original_bf16_g2_lossy": [
+      {
+        "name": "group.contiguous.g2.fold.bias.vs.original_bf16_saved_upstream",
+        "elements": 47104,
+        "failures": 47098,
+        "raw_bit_differences": 47104,
+        "max_abs": 3.2914328575134277,
+        "rmse": 0.6173029922206691,
+        "relative_l2": 0.0470375792911417,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "group.contiguous.g2.tree.bias.vs.original_bf16_saved_upstream",
+        "elements": 47104,
+        "failures": 47098,
+        "raw_bit_differences": 47104,
+        "max_abs": 3.2914328575134277,
+        "rmse": 0.6173029922206691,
+        "relative_l2": 0.0470375792911417,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "grouping_results_before_bias": [
+      {
+        "name": "group.contiguous.g1.fold.raw.vs.mps.helper.raw",
+        "failures": 17,
+        "raw_bit_differences": 45856,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544596809314236e-05
+      },
+      {
+        "name": "group.contiguous.g1.tree.raw.vs.mps.helper.raw",
+        "failures": 17,
+        "raw_bit_differences": 45856,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544596809314236e-05
+      },
+      {
+        "name": "group.contiguous.g2.fold.raw.vs.mps.helper.raw",
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0
+      },
+      {
+        "name": "group.contiguous.g2.tree.raw.vs.mps.helper.raw",
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0
+      },
+      {
+        "name": "group.contiguous.g4.fold.raw.vs.mps.helper.raw",
+        "failures": 20,
+        "raw_bit_differences": 45228,
+        "max_abs": 0.000141143798828125,
+        "rmse": 1.1337853265012032e-05
+      },
+      {
+        "name": "group.contiguous.g4.tree.raw.vs.mps.helper.raw",
+        "failures": 20,
+        "raw_bit_differences": 45179,
+        "max_abs": 0.000141143798828125,
+        "rmse": 1.1334658871803276e-05
+      },
+      {
+        "name": "group.contiguous.g8.fold.raw.vs.mps.helper.raw",
+        "failures": 17,
+        "raw_bit_differences": 45670,
+        "max_abs": 0.000125885009765625,
+        "rmse": 1.2146789159844152e-05
+      },
+      {
+        "name": "group.contiguous.g8.tree.raw.vs.mps.helper.raw",
+        "failures": 19,
+        "raw_bit_differences": 45549,
+        "max_abs": 0.0001220703125,
+        "rmse": 1.2136839307509049e-05
+      },
+      {
+        "name": "group.contiguous.g16.fold.raw.vs.mps.helper.raw",
+        "failures": 19,
+        "raw_bit_differences": 45603,
+        "max_abs": 0.000110626220703125,
+        "rmse": 1.2120580812671717e-05
+      },
+      {
+        "name": "group.contiguous.g16.tree.raw.vs.mps.helper.raw",
+        "failures": 18,
+        "raw_bit_differences": 45446,
+        "max_abs": 0.000110626220703125,
+        "rmse": 1.2104513696480657e-05
+      },
+      {
+        "name": "group.contiguous.g32.fold.raw.vs.mps.helper.raw",
+        "failures": 19,
+        "raw_bit_differences": 45629,
+        "max_abs": 0.00011444091796875,
+        "rmse": 1.202771269686551e-05
+      },
+      {
+        "name": "group.contiguous.g32.tree.raw.vs.mps.helper.raw",
+        "failures": 18,
+        "raw_bit_differences": 45540,
+        "max_abs": 0.00011444091796875,
+        "rmse": 1.1978350835838663e-05
+      },
+      {
+        "name": "group.strided32.g1.fold.raw.vs.mps.helper.raw",
+        "failures": 17,
+        "raw_bit_differences": 45856,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544596809314236e-05
+      },
+      {
+        "name": "group.strided32.g1.tree.raw.vs.mps.helper.raw",
+        "failures": 17,
+        "raw_bit_differences": 45856,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544596809314236e-05
+      },
+      {
+        "name": "group.strided32.g2.fold.raw.vs.mps.helper.raw",
+        "failures": 59,
+        "raw_bit_differences": 45865,
+        "max_abs": 0.00016021728515625,
+        "rmse": 1.527791171499276e-05
+      },
+      {
+        "name": "group.strided32.g2.tree.raw.vs.mps.helper.raw",
+        "failures": 59,
+        "raw_bit_differences": 45865,
+        "max_abs": 0.00016021728515625,
+        "rmse": 1.527791171499276e-05
+      },
+      {
+        "name": "group.strided32.g4.fold.raw.vs.mps.helper.raw",
+        "failures": 35,
+        "raw_bit_differences": 45717,
+        "max_abs": 0.0001220703125,
+        "rmse": 1.3429868704626313e-05
+      },
+      {
+        "name": "group.strided32.g4.tree.raw.vs.mps.helper.raw",
+        "failures": 34,
+        "raw_bit_differences": 45672,
+        "max_abs": 0.0001220703125,
+        "rmse": 1.3433669726898195e-05
+      },
+      {
+        "name": "group.strided32.g8.fold.raw.vs.mps.helper.raw",
+        "failures": 27,
+        "raw_bit_differences": 45625,
+        "max_abs": 0.0001220703125,
+        "rmse": 1.2684880184941988e-05
+      },
+      {
+        "name": "group.strided32.g8.tree.raw.vs.mps.helper.raw",
+        "failures": 28,
+        "raw_bit_differences": 45637,
+        "max_abs": 0.0001220703125,
+        "rmse": 1.2677583471596682e-05
+      },
+      {
+        "name": "group.strided32.g16.fold.raw.vs.mps.helper.raw",
+        "failures": 23,
+        "raw_bit_differences": 45580,
+        "max_abs": 0.00012969970703125,
+        "rmse": 1.2287970714475914e-05
+      },
+      {
+        "name": "group.strided32.g16.tree.raw.vs.mps.helper.raw",
+        "failures": 22,
+        "raw_bit_differences": 45483,
+        "max_abs": 0.00012969970703125,
+        "rmse": 1.2266118773486867e-05
+      },
+      {
+        "name": "group.strided32.g32.fold.raw.vs.mps.helper.raw",
+        "failures": 18,
+        "raw_bit_differences": 45595,
+        "max_abs": 0.00011444091796875,
+        "rmse": 1.2078962753159359e-05
+      },
+      {
+        "name": "group.strided32.g32.tree.raw.vs.mps.helper.raw",
+        "failures": 19,
+        "raw_bit_differences": 45473,
+        "max_abs": 0.000118255615234375,
+        "rmse": 1.2038697640403174e-05
+      }
+    ],
+    "exact_raw_and_biased_grouping_comparisons": [
+      "group.contiguous.g2.fold.raw.vs.mps.helper.raw",
+      "group.contiguous.g2.fold.bias.vs.mps.helper.bias",
+      "group.contiguous.g2.tree.raw.vs.mps.helper.raw",
+      "group.contiguous.g2.tree.bias.vs.mps.helper.bias"
+    ],
+    "fold_vs_tree_comparisons": {
+      "count": 24,
+      "all_finite": true,
+      "g2_contiguous_raw_and_bias_bit_identical": true,
+      "detail": "Complete comparison summaries remain in both native reports and are recomputed by verify-v3."
+    }
+  },
+  "lineage": {
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "source_sha256": "73819bcf3b82b090116dd1a1748795de95eef703c304e7443963d00ea8aa4d70",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "payload_bytes": 85058560,
+      "selected_weight_offset": 61441024,
+      "selected_bias_offset": 61436928
+    },
+    "previous_report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/probe-v2.json",
+      "sha256": "7d09512e91c3c84966c2c46141fb4236361b49e6986b22affe1669c9d3f3f26e",
+      "common_output_hashes_verified": 20
+    },
+    "kernel_sources": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "derived_sha256": "efbb69a87c84dd438d6af321c8059e1dc6e28d3906d178f9160f3394e2d0c380",
+      "grouped_sha256": "448b3d9fbcfbbcc8bc3b85b78a1ebb60df1288edc7e2b9df4e82722fdfdd241f",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158"
+    },
+    "native_identity_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/native-v1-receipt.json",
+      "nbytes": 3031,
+      "sha256": "c7f9091e34da52a7f085780ec0f06916f44f231d4caaff78859ec205a7c12bf4",
+      "availability": "local external SSD"
+    },
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/native-v1.json",
+      "nbytes": 3301,
+      "sha256": "3fde4549841e3d06b8f14d3e428424c1b3bff4252d5f04dfffa6461b55384815",
+      "availability": "local external SSD"
+    },
+    "preserved_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/build/hy_nomas_q4_grouping_probe-v1",
+      "sha256": "05ed0bccd7876fdf0f1597210b4eee0cfbc28a72f8dbc9b6da8f835752c6b63a",
+      "nbytes": 1737304
+    },
+    "environment": {
+      "device": "Apple M2 Max",
+      "os": "26.6.2 (25G83)",
+      "sdk": "27.0",
+      "crystal": "Crystal 1.22.1 (2026-10-22)\n\nLLVM: 23.1.4\nDefault target: aarch64-apple-darwin25.6.0"
+    },
+    "limitation": "Post-run selected-source/binary/object identities, not a hermetic build or driver attestation."
+  },
+  "verification": {
+    "terminal": {
+      "common_banks_equal": 68,
+      "memory_claim": "sampled guard observations only; no peak bound",
+      "reports": [
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v1.json",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v2.json"
+      ],
+      "sampled_guard_checks": {
+        "group-v1": {
+          "minimum_sampled_file_cache_headroom_bytes": 37356142592,
+          "sampled_within_2gib_cap": true,
+          "samples": 4
+        },
+        "group-v2": {
+          "minimum_sampled_file_cache_headroom_bytes": 38283542528,
+          "sampled_within_2gib_cap": true,
+          "samples": 3
+        }
+      },
+      "status": "PASS",
+      "checker": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v3.py",
+        "nbytes": 33276,
+        "sha256": "e9555470090c232ec48507494cf78de179866556d6e7d1c1c30cd3e2265ee8c9",
+        "availability": "local external SSD"
+      },
+      "comparison_summaries_recomputed_per_run": 112,
+      "decode_words_verified": 30,
+      "coverage_words_verified_per_run": 3072,
+      "original_bf16_lossy_gate_kept_separate": true
+    },
+    "mini_quad": {
+      "verdict": "ROBUST",
+      "scope": "One authenticated M23/K8192/N2048 projection and exact decoded F16 operands, no production promotion",
+      "reviewer": "timestep_audit, correlated same-lineage Mini-Quad agent",
+      "source_audit": [
+        "Full-K input/weight strides preserved; both advance sites use partition step",
+        "Each z writes its own partial-output bank, scratch poisoned first, bias added once",
+        "Resources rooted through the single terminal readback"
+      ],
+      "terminal_bytes_audit": {
+        "runs": 2,
+        "banks_equal": 68,
+        "g2_contiguous_fold_tree_raw_bias_bit_differences": 0,
+        "elements_per_output": 47104,
+        "old_one_group_failures": 17,
+        "all_12_coverage_slices_contain_256_ones": true
+      },
+      "limitations": [
+        "Coverage counts aggregate tile visits, not per-partition ownership; owner mapping also uses source audit",
+        "No proof of private MPS schedule",
+        "Dense decoded-F16 diagnostic, not direct packed-Q4 qualification",
+        "Original-BF16 lossy gate remains failed; no speed or generation claim"
+      ]
+    },
+    "admission": {
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "reject-budget-v1",
+          "expected_exit": 1,
+          "observed_exit": 1,
+          "expected_diagnostic": "named residency exceeds caller cap before Metal allocation",
+          "metal_initialization_absent": true,
+          "passed": true
+        },
+        {
+          "name": "reject-report-v1",
+          "expected_exit": 1,
+          "observed_exit": 1,
+          "expected_diagnostic": "Refusing to replace existing report",
+          "metal_initialization_absent": true,
+          "passed": true
+        },
+        {
+          "name": "reject-sidecar-v1",
+          "expected_exit": 1,
+          "observed_exit": 1,
+          "expected_diagnostic": "Refusing to replace existing packed sidecar",
+          "metal_initialization_absent": true,
+          "passed": true
+        }
+      ],
+      "existing_report_and_packed_data_unchanged": true,
+      "budget_rejected_before_artifact_creation": true,
+      "sidecar_sentinel_unchanged": true
+    },
+    "checker_pressure": {
+      "status": "PASS",
+      "scope": "In-memory mutations of captured report metadata; originals unchanged; no neural math or GPU work",
+      "checks": [
+        {
+          "case": "widened_tolerance",
+          "rejected": true,
+          "diagnostic": "tolerance.atol serialized literal must be 2e-05"
+        },
+        {
+          "case": "fabricated_group_pass",
+          "rejected": true,
+          "diagnostic": "grouping_comparisons[8].failures disagrees with packed-output recomputation"
+        },
+        {
+          "case": "altered_bank_hash",
+          "rejected": true,
+          "diagnostic": "reported bank SHA-256 mismatch: group.contiguous.g2.fold.raw"
+        }
+      ]
+    },
+    "rejected_checker_attempts": [
+      {
+        "run": "verify-v1",
+        "reason": "Compared shortest-serialized Float32 tolerance directly as binary64; checker failure, no native threshold changed."
+      },
+      {
+        "run": "verify-v2",
+        "reason": "Python memoryview rejected direct Float32-to-U32 cast; corrected through byte view in v3."
+      }
+    ],
+    "packet_validation": "JSON parse and exact artifact/source identity checks; these index evidence and do not establish neural correctness."
+  },
+  "guards": {
+    "group-v1": {
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 64809.313825,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "exit": {
+        "event": "finished",
+        "monotonic": 64810.37964775,
+        "returncode": 0
+      },
+      "minimum_sampled_cache_aware_headroom_bytes": 37356142592,
+      "max_sampled_swap_growth_bytes": 0,
+      "sample_count": 4,
+      "limitation": "Samples are not a peak-memory bound; named bytes exclude MPS and driver-private allocations."
+    },
+    "group-v2": {
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 64895.382876916,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "exit": {
+        "event": "finished",
+        "monotonic": 64895.932552041,
+        "returncode": 0
+      },
+      "minimum_sampled_cache_aware_headroom_bytes": 38283542528,
+      "max_sampled_swap_growth_bytes": 0,
+      "sample_count": 3,
+      "limitation": "Samples are not a peak-memory bound; named bytes exclude MPS and driver-private allocations."
+    }
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/admission-checks-v1.json",
+      "nbytes": 909,
+      "sha256": "1c4bd3b449f3ebcedc0bdcf15cc74895c2c6f507bbe2b9630a23c71294b68c85",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/checker-pressure-v1.json",
+      "nbytes": 623,
+      "sha256": "3626cf77344ed9e32e1d6bec10f36b4df167e9c4bea19aad697cc014420c08f2",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v1.json",
+      "nbytes": 67656,
+      "sha256": "d600be79f9dc93ab82005a605bf2c23a6aeee0ec3e05af31dffa43a3ed86477a",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v1.json.f32le",
+      "nbytes": 12824696,
+      "sha256": "ee12b3189b70c8fe7b291888cd500f51344a0654be90b924f235ce496e98ec93",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v2.json",
+      "nbytes": 67657,
+      "sha256": "3a239292011d2648c8d519ce9374b7c3dcf5199dc24ea6f8bc53078387768b48",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v2.json.f32le",
+      "nbytes": 12824696,
+      "sha256": "ee12b3189b70c8fe7b291888cd500f51344a0654be90b924f235ce496e98ec93",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/mini-quad-review-v1.json",
+      "nbytes": 1047,
+      "sha256": "3e334cfcbd1c079432521d848528a97cdfe86ac382d3d0776294c48b8714bd05",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/sidecar-only.json.f32le",
+      "nbytes": 29,
+      "sha256": "26949a988cb9e78bc5d532ebc64f79b4a8278d6cd97bf9b7e38fe0aff38dc670",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/terminal-verification-v3.json",
+      "nbytes": 1069,
+      "sha256": "3fe249dbe7cd11d276628512209382573271b8c4438f45ebb8582e9a1e8746ea",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/build-v1.argv.json",
+      "nbytes": 640,
+      "sha256": "084d30040543c966bca9150eeb2fc38d4dc8b2b3d494860003ac5c8bdda8ec23",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/build-v1.guard.jsonl",
+      "nbytes": 6261,
+      "sha256": "4e8bb6e3b45a75d0cc5a43a73ee116ba553909af75b1eba07d3c0f105739a500",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/build-v1.out",
+      "nbytes": 1209,
+      "sha256": "7f11df4441fbd8b131b0692e7531858b28164e06cc5aef3476aeafca0466f59f",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/checker-pressure-v1.argv.json",
+      "nbytes": 638,
+      "sha256": "06adbc2ce6bfd36a4e1ec1e040408742af55ea99e6070712c53d9582e49637c3",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/checker-pressure-v1.guard.jsonl",
+      "nbytes": 1656,
+      "sha256": "61768661f20322efdb896a0e1e489c040976c12eae561beb3c29e40023039dfb",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/checker-pressure-v1.out",
+      "nbytes": 527,
+      "sha256": "c101dc7a05633d0fa0af469488f913641e49dcc787a0fe26e153d9734761d956",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v1.argv.json",
+      "nbytes": 711,
+      "sha256": "bda6a4d1c55f4fcee2d09f2e7bcb0853611077675841314d24b93200511f8f16",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v1.guard.jsonl",
+      "nbytes": 1959,
+      "sha256": "73719a6de3d0d94bbc82888675565c09c6877d5733f7c24763965a48455433d2",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v1.out",
+      "nbytes": 424,
+      "sha256": "369703bed432d63072b6ab637a07ab751bc8c4d4b6d39ebcf3d2843f6e1d726f",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v2.argv.json",
+      "nbytes": 711,
+      "sha256": "a6fd5342ec0bc0611b35173c475f2d0a6aafc417bb62f25dbd83660cec6cfc97",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v2.guard.jsonl",
+      "nbytes": 1659,
+      "sha256": "ef06993cb363063d4d3607531e1e19869c41cf67df2fac5fc2dd3c3fd38e317d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/group-v2.out",
+      "nbytes": 424,
+      "sha256": "8109335cfcdb0fe6ba41b0ba81ef1f37ba71948aa3692eca8193032a76453035",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-budget-v1.argv.json",
+      "nbytes": 757,
+      "sha256": "e94330411f2057a40ea0da1e1f0e7b4ddd68c7f31da63c7ddb5da68cb2ba0e0a",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-budget-v1.guard.jsonl",
+      "nbytes": 1657,
+      "sha256": "f2398cab797333908412f7c442c010e268b25d01f972a89749fedae797183856",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-budget-v1.out",
+      "nbytes": 668,
+      "sha256": "62bd3ecff4e6c7c69b4cc20aef717aed97fb6c8780dc5f4fe0d9959b8e05162d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-report-v1.argv.json",
+      "nbytes": 716,
+      "sha256": "5ecb5dd1f892242abcb03bede0edc1506aeee29b19babd15c20a4fa9f3d6b180",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-report-v1.guard.jsonl",
+      "nbytes": 1352,
+      "sha256": "91ccdb3a14239e0252e17ec92b6f888b93d33e36d0782a9c713f822ca0a73a1b",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-report-v1.out",
+      "nbytes": 635,
+      "sha256": "0fc886c53764db6e52b4e2f0b80770421bf412e9af9e5455a5427fa38ad27d3b",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-sidecar-v1.argv.json",
+      "nbytes": 721,
+      "sha256": "af0d8d7b08857cd28a9bc088cdb330bae22a82a7aa1fbd5f7a39d8b5eb39b9e2",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-sidecar-v1.guard.jsonl",
+      "nbytes": 1354,
+      "sha256": "9f9d1bd3087a3ba95be64823dce6d50d29017119376d4424354bd1209122ced2",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/reject-sidecar-v1.out",
+      "nbytes": 643,
+      "sha256": "c1c3450f7ea290aba25d0a4724207dba0e25356d4221b4a5f1087e60f07e7f1b",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v1.argv.json",
+      "nbytes": 791,
+      "sha256": "376c585937a8afd68eaa8fcaf60a65792df865ca11be0747f4b74cd629242b27",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v1.guard.jsonl",
+      "nbytes": 1662,
+      "sha256": "e0e010dcb669a7aea95b5c15e592db776e77131411732ef531bac41f9d4b5bb1",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v1.out",
+      "nbytes": 62,
+      "sha256": "17bcba5ed06be23d21756565fb41c499f724bf14b32bbb019f0e861081f5a570",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v2.argv.json",
+      "nbytes": 791,
+      "sha256": "3f6cb2982ecabb8d20a166e4f0e94e039ac15b308a1984b1ffe9ad262ed59b09",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v2.guard.jsonl",
+      "nbytes": 1658,
+      "sha256": "7db507d02d9f6bb72753b47544dc823242970c8f5952342a0adc4cdb0bf0099c",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v2.out",
+      "nbytes": 907,
+      "sha256": "aa8523811363c78eb832db38e8acb9145f78958ab3c2b0a71775de2c4d0adfe6",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v3.argv.json",
+      "nbytes": 791,
+      "sha256": "23931ef185f26eb8170328d01f5f28779232f607006c7565ed5fdbb53ebe6143",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v3.guard.jsonl",
+      "nbytes": 3195,
+      "sha256": "cc8b6261f092b1688abcb0711847a2dc703d303f4f62d2aaafd8252c65d06da9",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/logs/verify-v3.out",
+      "nbytes": 548,
+      "sha256": "727e9710663e1eed7806defc7b24d365481edfde9438b3b67251ffc3acf96899",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/admission_checks_v1.py",
+      "nbytes": 2342,
+      "sha256": "9f7d2774043d6a23982ee10af9cb74cf50005e8a5df1e3b7268cc957f0c7bf5d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/checker_pressure_v1.py",
+      "nbytes": 1738,
+      "sha256": "560bb3f15acd7a8a3fdaf0bada69448e783981d135e52c2cf734e07653cb5014",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/native-v1-receipt.json",
+      "nbytes": 3031,
+      "sha256": "c7f9091e34da52a7f085780ec0f06916f44f231d4caaff78859ec205a7c12bf4",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/native-v1.json",
+      "nbytes": 3301,
+      "sha256": "3fde4549841e3d06b8f14d3e428424c1b3bff4252d5f04dfffa6461b55384815",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v1-rejected.py",
+      "nbytes": 27495,
+      "sha256": "58f69dca869bb3715ebce4a044379f8c22d99dfdfc0b8d0442bcc07b8e7b3a6d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v1.py",
+      "nbytes": 27495,
+      "sha256": "58f69dca869bb3715ebce4a044379f8c22d99dfdfc0b8d0442bcc07b8e7b3a6d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v2.py",
+      "nbytes": 33216,
+      "sha256": "bb72f146cd5b6081f743005a72cebf360bd1980ebaf738385ad551b44b4dbc63",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v3.py",
+      "nbytes": 33276,
+      "sha256": "e9555470090c232ec48507494cf78de179866556d6e7d1c1c30cd3e2265ee8c9",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/tmp/run_guarded.py",
+      "nbytes": 1161,
+      "sha256": "dc7f0e617781614b82b3aaa7fbdb6eaca83a068022815b53b7469f03b5565d17",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/build/hy_nomas_q4_grouping_probe-v1",
+      "nbytes": 1737304,
+      "sha256": "05ed0bccd7876fdf0f1597210b4eee0cfbc28a72f8dbc9b6da8f835752c6b63a",
+      "availability": "local external SSD"
+    }
+  ],
+  "next_falsifier": "Transfer contiguous two-way accumulation to direct packed-Q4 without global decoded weight storage; repeat same-operand and saved-upstream gates before timing/promotion.",
+  "rollback": "Revert this opt-in diagnostic commit; production kernels and defaults unchanged.",
+  "decay_triggers": [
+    "Changed or lost source/cache/fixture bytes",
+    "geometry/dtype/precision/quantizer changes",
+    "ownership/encode/transfer changes",
+    "compiler/SDK/OS/device/MPS runtime changes"
+  ],
+  "links": {
+    "frontier": "docs/hy-nomas-q4-reduction-frontier.md",
+    "ledger": "LANDMARKS.md",
+    "previous_packet": ".landmark/evidence/2026-10-25-hy-nomas-q4-reduction.json"
+  }
+}

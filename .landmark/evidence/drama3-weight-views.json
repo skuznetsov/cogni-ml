@@ -1,0 +1,797 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-weight-views-20261016",
+  "created_at_utc": "2026-10-16T20:32:58.118757+00:00",
+  "base_revision": "c37f4d9125ddb017ff2201b77ee6b206ef4f950b",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Current Context-mediated Resident terminal-only view/binding diagnostic, fixed-workload numerical/queue contract and descriptive one-Engine P/V/R comparison.",
+    "result": "View-only and wrapper-recreation interventions are qualified separately. All arms retain seconds-long first-driver spread; no stable speed gain or default promotion is established.",
+    "exclusions": [
+      "No internal driver registration, shader-dereference, physical-residency, performance-equivalence or causal speed claim.",
+      "No zero default overhead, GPU-content checksum, current alias-bypass injection, failed-native-bind/submit injection or concurrent/public-bank safety claim.",
+      "No fresh stock-MLX RNG/generation or general voice/prosody/DAC/long-speech parity. Known MoE39 full-intermediate failure remains open.",
+      "No fresh bridge build or reproducible-build attestation. Weight shards are metadata-qualified, not fully rehashed."
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/drama3-weight-views.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-views.md",
+      "docs/drama3-weight-wrappers.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_wrappers.py",
+      "spec/drama3_weight_wrappers_spec.cr",
+      "spec/drama3_weight_wrappers_driver_spec.py",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/resident_host_encoder.cr"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/drama3-weight-views.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-views.md",
+      "docs/drama3-weight-wrappers.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_wrappers.py",
+      "spec/drama3_weight_wrappers_spec.cr",
+      "spec/drama3_weight_wrappers_driver_spec.py",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/resident_host_encoder.cr"
+    ]
+  },
+  "risk_and_recovery": {
+    "tier": "CAUTION",
+    "failure_mode": "Raw view/Metal handle invalidation while GPU work still references it, or publication of a partial capture.",
+    "guards": "Context checks idle/terminal/no-workspace/no-pending/not-aborted; never drains for preparation. Seal after first existing successful submit, publish through terminal Context, discard on abort. Direct bank methods do not enforce this independently.",
+    "rollback": "Omit diagnostic enabling or revert this isolated slice; normal cache remains persistent.",
+    "execution": "Serial guarded runs, 15 percent memory floor, quiet-host off, unrelated processes untouched. Weights local SSD; raw/build/reference scratch external SSD."
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/commands.json",
+    "expected": "Focused graph0/2 numerical/boundary witnesses, 69 relevant Metal and 14 offline tests, 19 qualified requests, exact baseline and saved-MLX full codes, terminal hidden/logit prefill gates at unchanged tolerances.",
+    "observed": "PASS: required exit0 receipts and cross-artifact/source checks; initial old-API witness failed before implementation.",
+    "fallback": "Exact scalar/packed GPU witnesses, native endpoint bitwise comparison and saved-MLX pointwise endpoint metrics. Structural checks alone are not evidence of execution."
+  },
+  "lineage": {
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer_sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+      "indexed_shards": "model-00001-of-00005.safetensors,model-00002-of-00005.safetensors,model-00003-of-00005.safetensors,model-00004-of-00005.safetensors,model-00005-of-00005.safetensors",
+      "shard_sizes_bytes": "5498947446,5390036166,5402946528,5423590660,2277811252"
+    },
+    "mlx_audio_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "baseline_sha256": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+    "saved_inputs_sha256": {
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json.sampler_logits.npz": "5577c320dbbcb5d7e5f1892b2eca2a49a5b9438355c5bf9632b476fcd59b6686",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/gpu-kernels-20261016/compare_worker_upstream.py": "6f4bc0445bc93860934ee93df52da0ce8e43ad0808e1494921a449ca07b5b78b",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/compare_reference_pauses.py": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da"
+    },
+    "weight_pin_limit": "Indexed shard set, file sizes, config/index/tokenizer hashes and same-worker mmap backing qualified; full weight-file bytes were not rehashed.",
+    "current_source_and_input_pins": {
+      "baseline_sha256": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "binary": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/weight-views",
+      "binary_sha256": "dc2a644218bdb801f1a05a5fce2c2dea6290eb8434a5de6d3ceb31de17afa68e",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "mapped_bytes": 25867452416,
+      "mapped_files": [
+        {
+          "file_bytes": 5498947446,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00001-of-00005.safetensors",
+          "rounded_bytes": 5498961920
+        },
+        {
+          "file_bytes": 5390036166,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00002-of-00005.safetensors",
+          "rounded_bytes": 5390041088
+        },
+        {
+          "file_bytes": 5402946528,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00003-of-00005.safetensors",
+          "rounded_bytes": 5402951680
+        },
+        {
+          "file_bytes": 5423590660,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00004-of-00005.safetensors",
+          "rounded_bytes": 5423595520
+        },
+        {
+          "file_bytes": 2277811252,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00005-of-00005.safetensors",
+          "rounded_bytes": 2277818368
+        },
+        {
+          "file_bytes": 1874070622,
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors",
+          "rounded_bytes": 1874083840
+        }
+      ],
+      "mappings": 6,
+      "page_bytes": 16384,
+      "source_receipt_coverage": {
+        "manifest_only_verified_against_live_source": [
+          "scripts/drama3/measure_host_pairs.py"
+        ],
+        "outer_receipt_verified": [
+          {
+            "receipt_key": "scripts/drama3/measure_weight_wrappers.py",
+            "sha256": "b7c2742a079a7ccc57a00c7e996f0f4ae8d1404d45f4d9f85c02b2a3522e88c0",
+            "source": "scripts/drama3/measure_weight_wrappers.py"
+          },
+          {
+            "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_weight_wrappers.cr",
+            "sha256": "886b6a569cf3bd87473776c27b200f41544e240d15cbcb3d0390a757108c62c5",
+            "source": "examples/drama3_weight_wrappers.cr"
+          },
+          {
+            "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+            "sha256": "2f113bfd00c61473b61398a3ddbe53782eeb41b35c0437c037e9568d3f6f32d4",
+            "source": "src/ml/audio/drama3/resident.cr"
+          },
+          {
+            "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident_host_encoder.cr",
+            "sha256": "2666ee5345c0b38e5b2767af99c62df7be102d0c63096dbc0593aab7b83197cf",
+            "source": "src/ml/audio/drama3/resident_host_encoder.cr"
+          },
+          {
+            "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr",
+            "sha256": "aa953e148d446bffbf8efc6a40b35412044c779faddd89b4a6518fc8dd5ee4d0",
+            "source": "src/ml/audio/drama3/metal.cr"
+          },
+          {
+            "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/studio/engine.cr",
+            "sha256": "d86e2daca5cbc2047d7cdc1ee5da60c42a4ab81aa3a8f7eae168459b44877cee",
+            "source": "src/ml/audio/drama3/studio/engine.cr"
+          }
+        ]
+      },
+      "source_sha256": {
+        "examples/drama3_weight_wrappers.cr": "886b6a569cf3bd87473776c27b200f41544e240d15cbcb3d0390a757108c62c5",
+        "scripts/drama3/measure_host_pairs.py": "e9316fcee23948678ac6120dbace3ff66c366e40af98670413c9238591e642fb",
+        "scripts/drama3/measure_weight_wrappers.py": "b7c2742a079a7ccc57a00c7e996f0f4ae8d1404d45f4d9f85c02b2a3522e88c0",
+        "src/ml/audio/drama3/metal.cr": "aa953e148d446bffbf8efc6a40b35412044c779faddd89b4a6518fc8dd5ee4d0",
+        "src/ml/audio/drama3/resident.cr": "2f113bfd00c61473b61398a3ddbe53782eeb41b35c0437c037e9568d3f6f32d4",
+        "src/ml/audio/drama3/resident_host_encoder.cr": "2666ee5345c0b38e5b2767af99c62df7be102d0c63096dbc0593aab7b83197cf",
+        "src/ml/audio/drama3/studio/engine.cr": "d86e2daca5cbc2047d7cdc1ee5da60c42a4ab81aa3a8f7eae168459b44877cee"
+      }
+    },
+    "source_receipt_coverage": {
+      "manifest_only_verified_against_live_source": [
+        "scripts/drama3/measure_host_pairs.py"
+      ],
+      "outer_receipt_verified": [
+        {
+          "receipt_key": "scripts/drama3/measure_weight_wrappers.py",
+          "sha256": "b7c2742a079a7ccc57a00c7e996f0f4ae8d1404d45f4d9f85c02b2a3522e88c0",
+          "source": "scripts/drama3/measure_weight_wrappers.py"
+        },
+        {
+          "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_weight_wrappers.cr",
+          "sha256": "886b6a569cf3bd87473776c27b200f41544e240d15cbcb3d0390a757108c62c5",
+          "source": "examples/drama3_weight_wrappers.cr"
+        },
+        {
+          "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+          "sha256": "2f113bfd00c61473b61398a3ddbe53782eeb41b35c0437c037e9568d3f6f32d4",
+          "source": "src/ml/audio/drama3/resident.cr"
+        },
+        {
+          "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident_host_encoder.cr",
+          "sha256": "2666ee5345c0b38e5b2767af99c62df7be102d0c63096dbc0593aab7b83197cf",
+          "source": "src/ml/audio/drama3/resident_host_encoder.cr"
+        },
+        {
+          "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr",
+          "sha256": "aa953e148d446bffbf8efc6a40b35412044c779faddd89b4a6518fc8dd5ee4d0",
+          "source": "src/ml/audio/drama3/metal.cr"
+        },
+        {
+          "receipt_key": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/studio/engine.cr",
+          "sha256": "d86e2daca5cbc2047d7cdc1ee5da60c42a4ab81aa3a8f7eae168459b44877cee",
+          "source": "src/ml/audio/drama3/studio/engine.cr"
+        }
+      ]
+    },
+    "bridge_object_sha256": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49"
+  },
+  "experiment": {
+    "actual_predecessor_transition_counts": {
+      "fresh": {
+        "fresh": 2,
+        "persistent": 2,
+        "views": 2
+      },
+      "persistent": {
+        "fresh": 2,
+        "persistent": 1,
+        "views": 3
+      },
+      "views": {
+        "fresh": 2,
+        "persistent": 3,
+        "views": 1
+      }
+    },
+    "cycles": 1,
+    "modes": {
+      "fresh": "clear views and retire/recreate raw mapped Metal wrappers",
+      "persistent": "retain raw mapped TensorBuffer views and Metal wrappers",
+      "views": "clear and rebuild raw TensorBuffer views while retaining Metal wrappers"
+    },
+    "name": "balanced-views",
+    "prime_requests": 1,
+    "schedule": "all six P/V/R permutations once, seeded order",
+    "seed": 8421,
+    "transition_count_includes_prime_to_first_warm": true,
+    "warm_requests": 18,
+    "warm_requests_per_mode": 6,
+    "workers": 1,
+    "within_triplet_request_differences": [
+      {
+        "order": [
+          "fresh",
+          "persistent",
+          "views"
+        ],
+        "jobs": [
+          10,
+          11,
+          12
+        ],
+        "fresh_minus_persistent": 5.136057958006859,
+        "fresh_minus_views": 5.615816248580813,
+        "views_minus_persistent": -0.4797582905739546
+      },
+      {
+        "order": [
+          "fresh",
+          "views",
+          "persistent"
+        ],
+        "jobs": [
+          16,
+          17,
+          18
+        ],
+        "fresh_minus_persistent": -1.0499085844494402,
+        "fresh_minus_views": 0.1729862908832729,
+        "views_minus_persistent": -1.2228948753327131
+      },
+      {
+        "order": [
+          "persistent",
+          "fresh",
+          "views"
+        ],
+        "jobs": [
+          4,
+          5,
+          6
+        ],
+        "fresh_minus_persistent": 0.0016256659291684628,
+        "fresh_minus_views": -3.024013209156692,
+        "views_minus_persistent": 3.0256388750858605
+      },
+      {
+        "order": [
+          "persistent",
+          "views",
+          "fresh"
+        ],
+        "jobs": [
+          13,
+          14,
+          15
+        ],
+        "fresh_minus_persistent": 6.465244416613132,
+        "fresh_minus_views": 6.019616042263806,
+        "views_minus_persistent": 0.4456283743493259
+      },
+      {
+        "order": [
+          "views",
+          "fresh",
+          "persistent"
+        ],
+        "jobs": [
+          1,
+          2,
+          3
+        ],
+        "fresh_minus_persistent": -0.038383458741009235,
+        "fresh_minus_views": -8.756479082629085,
+        "views_minus_persistent": 8.718095623888075
+      },
+      {
+        "order": [
+          "views",
+          "persistent",
+          "fresh"
+        ],
+        "jobs": [
+          7,
+          8,
+          9
+        ],
+        "fresh_minus_persistent": -0.8436798751354218,
+        "fresh_minus_views": -1.7718561249785125,
+        "views_minus_persistent": 0.9281762498430908
+      }
+    ]
+  },
+  "observations": {
+    "warm_arm_distributions": {
+      "fresh": {
+        "preparation_seconds": {
+          "maximum": 0.00114125,
+          "mean": 0.0010607708333333333,
+          "median": 0.001075104,
+          "minimum": 0.000968125,
+          "n": 6
+        },
+        "first_driver_seconds": {
+          "maximum": 6.374574541579932,
+          "mean": 2.9424686178875468,
+          "median": 2.56987320818007,
+          "minimum": 0.37730837473645806,
+          "n": 6
+        },
+        "first_gpu_seconds": {
+          "maximum": 0.1928596249781549,
+          "mean": 0.17377044439005354,
+          "median": 0.16756822913885117,
+          "minimum": 0.16642866656184196,
+          "n": 6
+        },
+        "request_wall_seconds": {
+          "maximum": 30.085655458271503,
+          "mean": 26.634562680187326,
+          "median": 26.996420811861753,
+          "minimum": 23.329066791106015,
+          "n": 6
+        }
+      },
+      "persistent": {
+        "preparation_seconds": {
+          "maximum": 3e-06,
+          "mean": 2.4238333333333334e-06,
+          "median": 2.542e-06,
+          "minimum": 1.5e-06,
+          "n": 6
+        },
+        "first_driver_seconds": {
+          "maximum": 5.861921499948949,
+          "mean": 1.3879796945645164,
+          "median": 0.4863413334824145,
+          "minimum": 0.3912576250731945,
+          "n": 6
+        },
+        "first_gpu_seconds": {
+          "maximum": 0.19868270820006728,
+          "mean": 0.17446518735960126,
+          "median": 0.16998312482610345,
+          "minimum": 0.16578799998387694,
+          "n": 6
+        },
+        "request_wall_seconds": {
+          "maximum": 29.581637708004564,
+          "mean": 25.022736659816776,
+          "median": 23.759372333297506,
+          "minimum": 23.327441125176847,
+          "n": 6
+        }
+      },
+      "views": {
+        "preparation_seconds": {
+          "maximum": 6.916e-06,
+          "mean": 4.132e-06,
+          "median": 3.917e-06,
+          "minimum": 2.958e-06,
+          "n": 6
+        },
+        "first_driver_seconds": {
+          "maximum": 9.053786417003721,
+          "mean": 3.1395695904114596,
+          "median": 1.2117412502411753,
+          "minimum": 0.39276499999687076,
+          "n": 6
+        },
+        "first_gpu_seconds": {
+          "maximum": 0.1975721251219511,
+          "mean": 0.17483709023023644,
+          "median": 0.17147904145531356,
+          "minimum": 0.16795129189267755,
+          "n": 6
+        },
+        "request_wall_seconds": {
+          "maximum": 32.12189970770851,
+          "mean": 26.92521765269339,
+          "median": 25.7174887501169,
+          "minimum": 23.418575334362686,
+          "n": 6
+        }
+      }
+    },
+    "first_warm_command_bindings": {
+      "buffer_bindings": 5442,
+      "command_index": 122,
+      "observed": true,
+      "raw_weight_bindings": 862,
+      "shards": [
+        {
+          "bindings": 100,
+          "mapped_bytes": 2277818368,
+          "shard": 1
+        },
+        {
+          "bindings": 183,
+          "mapped_bytes": 5498961920,
+          "shard": 2
+        },
+        {
+          "bindings": 198,
+          "mapped_bytes": 5423595520,
+          "shard": 3
+        },
+        {
+          "bindings": 190,
+          "mapped_bytes": 5390041088,
+          "shard": 4
+        },
+        {
+          "bindings": 191,
+          "mapped_bytes": 5402951680,
+          "shard": 5
+        },
+        {
+          "bindings": 0,
+          "mapped_bytes": 1874083840,
+          "shard": 6
+        }
+      ],
+      "submitted": true
+    },
+    "binding_scope": "Host API return counts only; warm histogram exact across all 18 jobs. Terminal-known mappings include zeros.",
+    "converted_cache": {
+      "after_count": 566,
+      "before_count": 566,
+      "unchanged": true
+    },
+    "mappings": 6,
+    "declared_mapped_bytes": 25867452416,
+    "timeline_command_events": 2318,
+    "unchanged_graph": {
+      "completed": 122,
+      "completion_waits": 122,
+      "depth": 2,
+      "max_pending": 2,
+      "max_retained_bytes": 31892098828,
+      "pending": 0,
+      "retained_bytes": 0,
+      "submitted": 122
+    },
+    "unchanged_readbacks": {
+      "control": 496,
+      "terminal": 494160
+    },
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d"
+  },
+  "numerical_gates": {
+    "metal_examples": 69,
+    "offline_examples": 14,
+    "saved_mlx_full_codes_all_modes": true,
+    "prefill_candidates": {
+      "views": {
+        "prompt_rows": 158,
+        "tolerances": {
+          "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+          "atol": 3e-05,
+          "rtol": 0.0003,
+          "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+        },
+        "stages": [
+          {
+            "name": "prompt.backbone.hidden",
+            "shape": [
+              1,
+              2048
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 2048,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.05126616,
+            "passes": true
+          },
+          {
+            "name": "prompt.main_logits",
+            "shape": [
+              1,
+              4097
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 4097,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.0079710195,
+            "passes": true
+          }
+        ],
+        "graph": {
+          "fresh_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "workspace_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "submits_and_waits_equal": true,
+          "before_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          },
+          "after_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          }
+        },
+        "readbacks": {
+          "control": 16,
+          "diagnostic": 40
+        },
+        "scope": "158-row resident prefill; token embedding, tower.embed_backbone, and backbone.step use the backbone workspace; the 157 non-final teacher_force calls use a separate tower.prefill workspace. Teacher-force outputs are discarded. Final hidden/logits are copied to persistent buffers before both workspaces are released. No activation CPU reads; only terminal reduced GPU comparison metrics are read."
+      },
+      "fresh": {
+        "prompt_rows": 158,
+        "tolerances": {
+          "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+          "atol": 3e-05,
+          "rtol": 0.0003,
+          "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+        },
+        "stages": [
+          {
+            "name": "prompt.backbone.hidden",
+            "shape": [
+              1,
+              2048
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 2048,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.05126616,
+            "passes": true
+          },
+          {
+            "name": "prompt.main_logits",
+            "shape": [
+              1,
+              4097
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 4097,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.0079710195,
+            "passes": true
+          }
+        ],
+        "graph": {
+          "fresh_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "workspace_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "submits_and_waits_equal": true,
+          "before_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          },
+          "after_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          }
+        },
+        "readbacks": {
+          "control": 16,
+          "diagnostic": 40
+        },
+        "scope": "158-row resident prefill; token embedding, tower.embed_backbone, and backbone.step use the backbone workspace; the 157 non-final teacher_force calls use a separate tower.prefill workspace. Teacher-force outputs are discarded. Final hidden/logits are copied to persistent buffers before both workspaces are released. No activation CPU reads; only terminal reduced GPU comparison metrics are read."
+      }
+    }
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Bounded current Context-mediated instrumentation, executed numerical/queue contract and descriptive observations only.",
+    "review_kind": "Correlated same-lineage source/measurement review plus root inspection and executed falsifiers, not independent replication.",
+    "residual": "Public bank bypass/future aliases outside scope; optional callback cost unmeasured. Active-host order/carryover remains; bindings do not identify driver registration."
+  },
+  "artifacts": {
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/analysis.json": "00114adc8fe27d107272fe69d0efa58b30e276e522e58a8ba55b1ec680a72057",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/analyze.py": "99c22a35e1860e586a34f0530bfbf080b3504b80610c5444da90a0ec2d7add11",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/verify_raw.py": "bb8b644937b2af3c6a395037e4f7872323a547bb1d761aac315cb9020bb22cd9",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/static_checks.json": "56614848f01e50a170b305482489e47cf87b7d09cd93c3ce8c1e13df51d2c42e",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/make_packet.py": "4d20127d4246059451584b4d6a8e3a7df8ef80fe8b34a4bee2087b391d30e8ad",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/verify_packet.py": "70af981e76656d38b002abdfaa314aecab2341ffdc437dfc7af18cc27c997395",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/prefill_views.cr": "fef464d7bcedcb53fc5cc76a630c413086392446fe7a081a94251e47dd293be5",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/prefill-views.json": "39cb587d72d122ee986507ef5c4ca4be7cd1a6c8d351f4b5f836562a1b76848d",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/prefill-fresh.json": "86ebff104ab7dd5dd9c98885e8901fd1f5a0b683f1d449f214daa47816a29e8a",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-persistent.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-views.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-fresh.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/pairs/views-worker.json": "f9482a4bc1b38a1bb1e2d1436cd9ffe5a5931fc6e525911a279fcca8eec72b5b",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/pairs/views-worker0.stderr": "0d71cdebf8c0e61365e8b91ad0eb1fc28c706bf03e752cc659485230634cccd6",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/run.py": "befc19407c7511cc54fc1fcdb2c7cfa625916d0e62cc3a0a13e748f55cb71359",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/bridge.o": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49"
+  },
+  "execution_receipts": [
+    {
+      "name": "red-views",
+      "exit_code": 1,
+      "wrapper_seconds": 0.7340981247834861,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/red-views.log",
+      "log_sha256": "8951bdd5390db2375f6192b5c2e65ee91db121ab3ea77f39c88ca585cdeb43db"
+    },
+    {
+      "name": "green-views",
+      "exit_code": 0,
+      "wrapper_seconds": 2.997727207839489,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/green-views.log",
+      "log_sha256": "1cc0337d38305b77b3765754fbb0d87123ea75e756cc50a6e7fa94dd32d8e2ab"
+    },
+    {
+      "name": "metal-suite",
+      "exit_code": 0,
+      "wrapper_seconds": 7.4584670420736074,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/metal-suite.log",
+      "log_sha256": "228943b7fe06703eb21633456ca96a38ab48afda29f8409f74893cfeee3317e3"
+    },
+    {
+      "name": "build-worker",
+      "exit_code": 0,
+      "wrapper_seconds": 11.935418333858252,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/build-worker.log",
+      "log_sha256": "b8653e1a728bb35411538bf6348c2b4912a9fe2fa00811073be4a94c9569e80c"
+    },
+    {
+      "name": "build-prefill",
+      "exit_code": 0,
+      "wrapper_seconds": 9.143487167079002,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/build-prefill.log",
+      "log_sha256": "bef98d0298ccac0d599d20c9f9d98f93e81c6f3ef08ac7b77e65b36b30705747"
+    },
+    {
+      "name": "prefill-views",
+      "exit_code": 0,
+      "wrapper_seconds": 65.35821350011975,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/prefill-views.log",
+      "log_sha256": "01e9596cd49d045e5f9b46606f8709ad7804ae0f0e961d70254aa9c48fa5e886"
+    },
+    {
+      "name": "prefill-fresh",
+      "exit_code": 0,
+      "wrapper_seconds": 64.77095145825297,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/prefill-fresh.log",
+      "log_sha256": "ca22a63330af3041caa68bb9ebcacea65273a92e8578f7af86fb066b8c8f2725"
+    },
+    {
+      "name": "offline-driver",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7205671248957515,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/offline-driver.log",
+      "log_sha256": "a2901c9c52c8e75d412e57e2bd10faf91a6f3c874735d40a6d1fb59765aadfdd"
+    },
+    {
+      "name": "balanced-views",
+      "exit_code": 0,
+      "wrapper_seconds": 512.2429316658527,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/balanced-views.log",
+      "log_sha256": "9182b6e6962022142c3152744389039668b9100ef5fe8a2748ee5159bd95ed08"
+    },
+    {
+      "name": "analyze-views",
+      "exit_code": 1,
+      "wrapper_seconds": 0.7293595420196652,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/analyze-views.log",
+      "log_sha256": "036df88218480fa6cb16080073f3c3ff81e64414c56a58f424aa180d5aa9778e"
+    },
+    {
+      "name": "upstream-persistent",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7338527920655906,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-persistent.log",
+      "log_sha256": "33212882c643ded2813539d547f7801def57609175fbeaab6049d7cfe09aa479"
+    },
+    {
+      "name": "upstream-views",
+      "exit_code": 0,
+      "wrapper_seconds": 0.8329246253706515,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-views.log",
+      "log_sha256": "e5fc67581679f10710f8459a36cf4cb57a4cd8ec1b4768825aad63baf7d19b00"
+    },
+    {
+      "name": "upstream-fresh",
+      "exit_code": 0,
+      "wrapper_seconds": 0.8021699171513319,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/upstream-fresh.log",
+      "log_sha256": "e5fc67581679f10710f8459a36cf4cb57a4cd8ec1b4768825aad63baf7d19b00"
+    },
+    {
+      "name": "analyze-views-v2",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7177766249515116,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/analyze-views-v2.log",
+      "log_sha256": "6473dade53966e439d89e00b51790587c3830db55b93567401db92a88283b6e0"
+    },
+    {
+      "name": "static-checks",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7252746247686446,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/static-checks.log",
+      "log_sha256": "1a39011d85d4a52d5493db113794599e32c11f33fd97cc0bf7036fa87f93b529"
+    }
+  ],
+  "continuation": {
+    "decision": "Keep ordinary persistent cache; no speed/default promotion.",
+    "next_falsifier": "A separately gated whole-shard versus narrower page-aligned no-copy resource-extent control could test declared-resource granularity; same ownership/range/numerical/queue gates required.",
+    "return_frontier": "MoE39/common-prefix and DAC post-module numerical investigation remain open.",
+    "decay": "Source/shader/model/layout/input/tape/tolerance/observer/queue/device/OS drift, contradiction or artifact eviction.",
+    "refresh": "Re-execute affected numerical gates, source/metadata qualification and matched descriptive matrix before promotion.",
+    "failure_policy": "Downgrade dependent claims; disable diagnostic or revert isolated slice. Do not infer safety from failed drain."
+  }
+}

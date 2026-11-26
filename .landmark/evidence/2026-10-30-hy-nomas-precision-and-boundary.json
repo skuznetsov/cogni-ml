@@ -1,0 +1,172 @@
+{
+  "schema": "cogni_ml.hy_nomas.precision_and_boundary_evidence/v1",
+  "date": "2026-10-30",
+  "parent_revision": "dbb761d9faaa83b05aacc126e916734d8cfa0c13",
+  "user_goal_status": "IN_PROGRESS: unstable eyes and uneven continuation motion remain open",
+  "scope": "Authenticated real-Echo arithmetic controls and paired initial-segment precision preview; no production default changes",
+  "sources": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "control_script_sha256": "e711f50dcde9e037b04334938eb9d0a1ad899381f2dd74069bc88d858379356d",
+    "weights": "original BF16 checkpoint cache, not Q4",
+    "cache_index_sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0"
+  },
+  "claims": [
+    {
+      "level": "VERIFIED",
+      "scope": "First Echo segment final latent, 54 source blocks / four steps, native F32 model-body arithmetic with BF16 checkpoint values and native BF16 Euler boundaries",
+      "signal": "138240 values bit-exact to frozen native first30; unchanged atol=rtol=2e-5",
+      "adversary": "ROBUST within this final-output scope; reviewer is same-lineage/correlated"
+    },
+    {
+      "level": "VERIFIED",
+      "scope": "Default source-BF16 control repeat after adding F32 mode",
+      "signal": "payload SHA75488dafd836485afa93d99b2cdfb1aec5fb15a5e6d584eba9b7ff97247cf07c unchanged"
+    },
+    {
+      "level": "VERIFIED",
+      "scope": "Writer0/reader1 captured block0 F32 QKV/history-attention only",
+      "signal": "bit-exact to pinned source with chunked MPS SDPA adapter; no later residual/MLP comparison"
+    },
+    {
+      "level": "VERIFIED",
+      "scope": "Physical BF16 PatchEmbed on already BF16-aligned real input",
+      "signal": "8847360 values bit-exact for BF16-graph and F32-accum physical-store variants"
+    },
+    {
+      "level": "IN_PROGRESS",
+      "scope": "Perceptual eye and continuation-motion quality",
+      "signal": "Selected paired precision frames retain unstable pupils in both arms; no visual fix established"
+    }
+  ],
+  "guard": {
+    "runtime_floor_percent": 10,
+    "accounting": "file-cache",
+    "full_control_process_cap_gib": 26,
+    "swap_growth_stop_mib": 64,
+    "deadline_seconds": 1200,
+    "native_f32_sampled_peak_gib": 18.565706335008144,
+    "native_f32_minimum_headroom_gib": 22.582595825195312,
+    "native_f32_swap_growth_bytes": 0,
+    "caveat": "sampled process/OS observations do not bound between-sample spikes"
+  },
+  "verification": {
+    "cpu_command": "python3 -B -m unittest spec/hy_nomas_bf16_dit_quality_control_test.py spec/hy_nomas_boundary_attention_reference_test.py spec/hy_nomas_bf16_linear_reference_test.py spec/hy_nomas_real_attention_reference_test.py",
+    "cpu_signal": "36 tests passed",
+    "gpu_commands": "Frozen launch.json and completion.json per artifact; all runs separately guarded",
+    "control_implementation": "one reusable F32 block, authenticated resident BF16 source blocks, GPU-only neural math, one terminal export; not stock CUDA/Magi"
+  },
+  "limitations": [
+    "Final output equality is not equality of every intermediate or all possible inputs.",
+    "First-segment equality does not qualify continuation writer/history precision or second-segment output.",
+    "MPS SDPA adapter is disclosed; no unmodified Magi/CUDA parity is claimed.",
+    "Precision preview changes arithmetic and therefore generated latent; pixel distance is not a quality metric.",
+    "Standalone five-second decode has no future lookahead past its final latent; only first100 saved frames are claimed equal.",
+    "Higher-resolution geometry and two-segment control are separate next experiments."
+  ],
+  "refresh": {
+    "triggers": [
+      "source changes",
+      "input/prompt/noise changes",
+      "weights or dtype changes",
+      "geometry or schedule changes",
+      "backend/device/toolchain changes",
+      "artifact loss"
+    ],
+    "operation": "authenticate pinned source and inputs again, rerun scoped control and adversary, admit memory from fresh telemetry",
+    "failure_policy": "reopen dependent claims; keep original default and memory guard"
+  },
+  "artifacts": {
+    "first_step_real_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030/final-controls-v2/full-oracle/report.json",
+      "sha256": "a8f1f5ba58b73ff998fbe1c9a65aecac24bd1c2572792e8514ee87166e9eb9f7",
+      "bytes": 86048
+    },
+    "boundary_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-real-boundary-20261030/oracle/report.json",
+      "sha256": "0bb84bfeb8c40c91c124d9cc15697a0b20effd5e7c3dcdbab5eda37fcc4ea52c",
+      "bytes": 7789
+    },
+    "physical_patch_bf16": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030/bf16-patch-remap-v3/bf16-graph",
+      "scope": "directory; per-file reports and frozen launch pins are retained here"
+    },
+    "native_f32_control": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-f32-control-v1/control.json",
+      "sha256": "11771b15eb7fff35db2246d2632153555701c0826c730a26d883220d4bb9a6e6",
+      "bytes": 20220
+    },
+    "native_f32_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-f32-control-v1/native-latent-comparison.json",
+      "sha256": "ef893e9cbbae65a7eca76c4c792b04a03834aab4f3d46bc01b32464c49620894",
+      "bytes": 843
+    },
+    "native_f32_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-f32-control-v1/launch.json",
+      "sha256": "b7fc510e1da1b176c1aea1e73975e17cb7680f4f6ec865cbe5c7f717f40d9a88",
+      "bytes": 11473
+    },
+    "native_f32_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-f32-control-v1/completion.json",
+      "sha256": "d35e2433f0ea144050bf2418e5943ea7f3125f5fb694aff31d1479184ac3b2e2",
+      "bytes": 108
+    },
+    "source_bf16_control": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/dit-control-v4/control.json",
+      "sha256": "2654a6cbc0b4917457bf4bda1fcdab075cdbf34243c2c9249a4db19724b44bc5",
+      "bytes": 19826
+    },
+    "source_bf16_repeat": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/source-bf16-repeat-v1/control.json",
+      "sha256": "7db16f80753d6df9fd6d03ebcabadfd85b61548d31bfe4ca358db2dfaf1de00f",
+      "bytes": 20009
+    },
+    "source_bf16_repeat_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/source-bf16-repeat-v1/completion.json",
+      "sha256": "fae7973183bb9041afe80b3a78a791077557caf6171a760920248dac6474ecaa",
+      "bytes": 244
+    },
+    "latent_precision_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/latent-precision-comparison.json",
+      "sha256": "6e6eff360df972308594480959b33507e8d5a0de13f8a2692e735e12530f9a3e",
+      "bytes": 473
+    },
+    "native_decode_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-decode-v1/completion.json",
+      "sha256": "80c6d51f6847779e0d282b5e17a741ba6fcc9959675c4bc5115b28affc883474",
+      "bytes": 587
+    },
+    "native_decode_saved_prefix": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-decode-v1/saved-prefix-validation.json",
+      "sha256": "d1fc0caec27039870b466190af27637722d334bb5e5102e15a36becf2e5f2ffa",
+      "bytes": 356
+    },
+    "bf16_decode_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/bf16-decode-v1/completion.json",
+      "sha256": "19f2c1117f218fc6358b4d84586fe22def122801a2f7af26ec4a55ac6c088956",
+      "bytes": 587
+    },
+    "media_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/comparison-v1/comparison.json",
+      "sha256": "4d475d4a76a37499dbee0ae6bf26fe50a70b28a4521e062f45775eaec95401d4",
+      "bytes": 1083
+    },
+    "paired_video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/comparison-v1/native-f32-vs-source-bf16-5s.mp4",
+      "sha256": "1d784e5dcfa67ef86088a56ad8d2f51f50caee0fc39de65a3858c8e418d83d5d",
+      "bytes": 1116811
+    },
+    "decoder_authentication": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/decoder-auth-v2/results.json",
+      "sha256": "bf6624f3c42e819934af2e3bf093d0c8044b16bf377ff520fdca8d65a541bc40",
+      "bytes": 546
+    }
+  },
+  "post_run_formatting": {
+    "path": "spec/support/hy_nomas_real_attention_reference.py",
+    "frozen_sha256": "5addc8a1424e7f230b839cfd651e838afa6e8b3bb0d601ae6edb7f98ed7ad814",
+    "committed_sha256": "9d64a9b6929a14c0aee1d0b6d4219828a5ffe5954bd879ce78226c82ef377a80",
+    "operation": "remove extra blank line at EOF only",
+    "python_ast_unchanged": true,
+    "limitation": "runtime claims remain bound to the recorded pre-format launch pins"
+  }
+}

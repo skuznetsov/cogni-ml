@@ -1,0 +1,447 @@
+{
+  "schema": "cogni_ml.hy_nomas_cinematic_quality_evidence/v1",
+  "date": "2026-10-31",
+  "claim": "The explicit camera/action-off Cinematic BF16 cache matches the pinned upstream merge on all 54 blocks and is consumed by the native four-step quality probe; the candidate same-latent decoder replay matches the admitted source-MPS oracle exactly.",
+  "claim_limits": [
+    "No full candidate DiT trajectory equivalence is established.",
+    "No unmodified CUDA/FlexAttention equivalence is established.",
+    "No perceptual eye or temporal-quality fix, general quality gain, or speedup is established."
+  ],
+  "source_state": {
+    "base_commit": "d55ea8dede14f43741ef269036be8454c57e70be",
+    "source_sha256": {
+      "examples/hy_nomas_generate.cr": "be0dce1087e27b4d1afae24c4096f7c9f63d3533c7e3b950f2f8402f04f15ad9",
+      "examples/support/hy_nomas_generation.cr": "cf094fe8a16dc4c09d26558dde31ca5203d8f1e41c62d6f7801ccef6c789f206",
+      "examples/support/hy_nomas_cinematic.cr": "ac771c173b2cc5047425774f26db6727cb3a4911cf423b9512043b2af7c1c138",
+      "examples/support/hy_nomas_cinematic_cache.py": "e68549c8589eb438c7d46bf0d025c1065860292c5fc970d76b3df4d259cf459d",
+      "spec/hy_nomas_cinematic_spec.cr": "ab4d89d93b4e2621d14d07aef8f35b8a6cbfc619e387b0a6bf035ff1384b05f6",
+      "spec/hy_nomas_cinematic_cache_test.py": "88dc9feafdc3e302bc8edeeb6c59a3310b5ddf2d2bb2d7b566ff46061e1bf454",
+      "spec/hy_nomas_cinematic_reference_test.py": "e01aef2a359183f993b075f657d10e4c03aab462980f6d1708a06948235e4976",
+      "spec/support/hy_nomas_cinematic_reference.py": "3e947a0c75c33c388164e1f0d21455e0fa70df21fbb3816e8bd1e3423eef5581",
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": "d0b1d9e1b870052019dcdf5473026f919f1de2b604f6768030dfc8e7daf044db"
+    },
+    "tested_release_binary": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1/hy_nomas_generate",
+      "sha256": "60c7b4d099b217d90c4229cc8fa9c64b5c71f8bd16801f174fb5064b22330c8a",
+      "bytes": 2745312
+    },
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+  },
+  "problem_risk_and_rollback": {
+    "risk": "CAUTION",
+    "reason": "Separate decoder arithmetic correction from the official style adapter without silently changing precision or defaults.",
+    "strongest_failure_mode": "Accurate lineage metadata can bind an incorrectly merged cache; runtime admission proves identity/inventory, while external upstream recomputation qualifies the tested cache math.",
+    "guards": [
+      "Original index and BF16 default remain unchanged when both opt-in arguments are absent.",
+      "Reject incomplete lineage identity, Q4/adapter combinations, camera/action conditioning, wrong base/adapter provenance, and malformed cache inventory before GPU allocation.",
+      "Offline producer and reference recheck authenticated file identities during consumption/publication; four mutation/symlink falsifiers cover the reference ledger."
+    ],
+    "rollback": "Omit both Cinematic flags for the original checkpoint; revert the atomic opt-in change if its admission is faulty."
+  },
+  "adapter_cache": {
+    "official_adapter": {
+      "alpha": 512.0,
+      "bytes": 6122591632,
+      "config_sha256": "f656c2866953e7a90a785a5c51ce127a79ea61c4217ef30e3cd2d69afcd3d998",
+      "path": "DiT/lora_weights/cinematic/adapter.safetensors",
+      "rank": 256,
+      "repo": "tencent/Hy-Nomas",
+      "revision": "bb6a8ca451bfe84947f0ea1c6d51957f983ffffe",
+      "sha256": "765426a6c417eed70a57d72f67cfe002076cfc92b6b35fe185091012ba80c7c2"
+    },
+    "base_index_sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0",
+    "base_source_sha256": "73819bcf3b82b090116dd1a1748795de95eef703c304e7443963d00ea8aa4d70",
+    "merge": {
+      "action_conditioning": false,
+      "active_targets": 756,
+      "formula": "bf16(base_f32 + (B_f32 @ A_f32) * 2)",
+      "skipped_action_targets": 162
+    },
+    "merge_runtime": {
+      "device": "mps",
+      "fallback": "0",
+      "is_available": true,
+      "is_built": true,
+      "torch_version": "2.8.0"
+    },
+    "upstream_merge": {
+      "bytes": 5983,
+      "device": "mps",
+      "function": "merge()",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024/scripts/train/merge_lora.py",
+      "repo": "tencent/Hy-Nomas",
+      "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+      "sha256": "92e24f385660a2d37c2e23c23fd4f66f3ba1b0f8195a9e59ba500ff15a7bbee4"
+    },
+    "derived_index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/cinematic-cache-v1/index.json",
+      "sha256": "f1284a3a624ed9f1424a89f784571f1a0debc0ce8c83e6842c52be24341860d2",
+      "bytes": 22089
+    },
+    "lineage": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/cinematic-cache-v1/cinematic-lineage.json",
+      "sha256": "fb16e1322bc1ae294a381c4973af39ebb02fdd3405305c80b31c934f776625a8",
+      "bytes": 44035
+    },
+    "bf16_block_file_bytes": 16314338848,
+    "block_count": 54,
+    "tensors_per_block": 32,
+    "shared_asset_policy": "Unchanged Q4 and global files are hardlinks; these are lineage/inventory siblings, not quantized inference residents.",
+    "offline_only": "F32 MPS merge and one BF16 cast, completion fences and file serialization happen during packing, never inference encode."
+  },
+  "qualification": {
+    "cpu_checks": {
+      "crystal": {
+        "suites": [
+          "spec/hy_nomas_generation_admission_spec.cr",
+          "spec/hy_nomas_cinematic_spec.cr"
+        ],
+        "observed": "22 examples, 0 failures",
+        "evidence_scope": "Observed in current-turn tool output; no separate persisted test launcher/log."
+      },
+      "packer": {
+        "suite": "spec/hy_nomas_cinematic_cache_test.py",
+        "observed": "10 tests passed",
+        "evidence_scope": "Observed in current-turn tool output; no separate persisted test launcher/log."
+      },
+      "reference_identity": {
+        "suite": "spec/hy_nomas_cinematic_reference_test.py",
+        "observed": "4 tests passed",
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-identity-check-v1/completion.json",
+          "sha256": "a3d3a50c9932bbd19dca14dd7c129bfd59d04f1691b178bd2182ca1c52287256",
+          "bytes": 426
+        },
+        "console": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-identity-check-v1/console.log",
+          "sha256": "120fcf1e1b1ef6883b716f1b33b4fbea79c7089f1d1ff950e98c9608d82abb42",
+          "bytes": 102
+        }
+      }
+    },
+    "packer_plan_only": {
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/packing-plan-v1/completion.json",
+        "sha256": "846f26c13f4f1c80a71edb7b0d8a168b39b00f60ac39c7727b2639794acd0aa8",
+        "bytes": 59
+      },
+      "scope": "Pinned original F32 source, adapter, config and inventory authenticated before Torch/device construction."
+    },
+    "cache_build": {
+      "launch": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/packing-build-v1/launch.json",
+        "sha256": "0a1a8862b1d9d54f4928d3f26ab679fb35bcd4de3a04bf45aa0e4c23e557a8eb",
+        "bytes": 1048
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/packing-build-v1/completion.json",
+        "sha256": "46efcce64fe26ac6c0270fcfa060ff1172db20fd9f2a075a1d3e1d4c04e22f2b",
+        "bytes": 59
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/packing-build-v1/guard.jsonl",
+        "sha256": "61c58d7743d36e125104defa04de106e9a42325476c53df9d290549cd922336e",
+        "bytes": 121273
+      },
+      "exit_code": 0,
+      "wall_seconds": 203.36736604204634,
+      "cap_bytes": 6442450944,
+      "physical_reserve_pct": 10,
+      "memory_accounting": "file-cache",
+      "swap_growth_stop_bytes": 67108864,
+      "deadline_seconds": 1200,
+      "sampled_peak_footprint_bytes": 1508919168,
+      "minimum_cache_aware_headroom_bytes": 38200082432,
+      "observed_swap_growth_bytes": 0,
+      "sampling_limit": "Between-poll spikes and dirty file-cache reclaimability are not proven by sampled headroom."
+    },
+    "upstream_weight_reference": {
+      "run": {
+        "launch": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-v2/launch.json",
+          "sha256": "07ea3baeed787c8f7c81946024cc22ba27bcba5ab549b2253bb7687eb42b5eae",
+          "bytes": 1872
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-v2/completion.json",
+          "sha256": "2c00a13d6c3362ab4e29025258e15d8390756974035aa858d6179722b8678caa",
+          "bytes": 59
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-v2/guard.jsonl",
+          "sha256": "e8470a03d54351bcbcb15d1f3b28374d357d8113a61a2764d61ad4def6ec053f",
+          "bytes": 121159
+        },
+        "exit_code": 0,
+        "wall_seconds": 205.19684033404337,
+        "cap_bytes": 8589934592,
+        "physical_reserve_pct": 10,
+        "memory_accounting": "file-cache",
+        "swap_growth_stop_bytes": 67108864,
+        "deadline_seconds": 1200,
+        "sampled_peak_footprint_bytes": 1945668536,
+        "minimum_cache_aware_headroom_bytes": 41514172416,
+        "observed_swap_growth_bytes": 0,
+        "sampling_limit": "Between-poll spikes and dirty file-cache reclaimability are not proven by sampled headroom."
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/reference-v2/qualification.json",
+        "sha256": "068a0d6c476b4e1164fa44b8462c069d294ba753c36b5cfbd19e4d96a721a3b3",
+        "bytes": 1070503
+      },
+      "blocks_checked": 54,
+      "active_targets_merged": 756,
+      "unchanged_tensors_per_block": 18,
+      "bf16_values_compared": 8157072384,
+      "mismatch_count": 0,
+      "shared_assets_checked": 109,
+      "shared_assets_byte_equal": true,
+      "tool_sha256": "3e947a0c75c33c388164e1f0d21455e0fa70df21fbb3816e8bd1e3423eef5581",
+      "identity_check_scope": "The executed hardened verifier captures/rechecks dev, inode, size and mtime_ns around authenticated reads and report publication, and serializes 334 file-identity records. It does not guard malicious identical-metadata change-and-restore within one read.",
+      "scope": "Cached words only; all active merges and unchanged block tensors. Not a full DiT trajectory.",
+      "identity_records_serialized": 334
+    },
+    "native_candidate": {
+      "run": {
+        "launch": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/native-run-v1/launch.json",
+          "sha256": "5d42e697d39b621932c9fcd2589a96d455eda2cd35aa9d901a3fce755b69dc23",
+          "bytes": 3439
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/native-run-v1/completion.json",
+          "sha256": "e9104a3b178b91a7197069687550cc9e4f78e03fbeb02420ed45480030ccc6c7",
+          "bytes": 59
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/native-run-v1/guard.jsonl",
+          "sha256": "5540757f17b29c95ce9cf616cb595557db551be212c139d307067bdee974fd3c",
+          "bytes": 232766
+        },
+        "exit_code": 0,
+        "wall_seconds": 408.61499262496363,
+        "cap_bytes": 27917287424,
+        "physical_reserve_pct": 10,
+        "memory_accounting": "file-cache",
+        "swap_growth_stop_bytes": 67108864,
+        "deadline_seconds": 1200,
+        "sampled_peak_footprint_bytes": 25843692216,
+        "minimum_cache_aware_headroom_bytes": 13387857920,
+        "observed_swap_growth_bytes": 0,
+        "sampling_limit": "Between-poll spikes and dirty file-cache reclaimability are not proven by sampled headroom."
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/native-v1/receipt.json",
+        "sha256": "639e013cbf4e74c5e623ca66c98955e63a51cc0cf400021534447fcea2809f45",
+        "bytes": 5937
+      },
+      "plan_guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/native-run-v1/plan-guard.jsonl",
+        "sha256": "2e5f1f2c82e965d8d44c714081cebae80bc389426aff8e0ddca859ceadfb3e7f",
+        "bytes": 5011
+      },
+      "original_default_plan_guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/original-plan.guard.jsonl",
+        "sha256": "352019d1fc362008a22fb4ab91cf9a72cb90b89124ea30b05c73758a78ca3276",
+        "bytes": 5036
+      },
+      "inputs_manifest_sha256": "dcbe51749742701a2ee1a6d09a10e2f20e663f3ff54f646d801c743e17c7a104",
+      "dit_variant": "cinematic-active-blocks",
+      "steps": 4,
+      "decoder_steps": 1,
+      "geometry": {
+        "frames": 120,
+        "fps": 24,
+        "width": 768,
+        "height": 416
+      },
+      "timings": {
+        "preflight_seconds": 2.565250458,
+        "dit_setup_seconds": 19.924047917,
+        "dit_wall_seconds": 63.858943667,
+        "dit_gpu_seconds": 63.76418729440775,
+        "decoder_setup_seconds": 22.914583166,
+        "decoder_wall_seconds": 295.519297041,
+        "decoder_gpu_seconds": 295.4204097071197,
+        "total_seconds": 404.266436125,
+        "request_seconds": 406.880757625
+      },
+      "metrics": {
+        "dit_encode_allocations": 0,
+        "dit_encode_readbacks": 0,
+        "dit_preterminal_waits": 0,
+        "dit_segments": 17285,
+        "dit_waits": 1,
+        "decoder_encode_allocations": 0,
+        "decoder_encode_readbacks": 0,
+        "decoder_preterminal_waits": 0,
+        "decoder_segments": 11731,
+        "decoder_waits": 1
+      },
+      "metric_scope": "allocation/readback counters cover instrumented MetalBuffer methods; opaque MPS resources and direct terminal pixel-file export are excluded",
+      "handoffs": "GPU latent retained across one explicit drained weight-phase boundary",
+      "timing_limits": "Saved conditioning; excludes live Qwen encoding and MP4 export. Unpaired observation, no speedup claim."
+    },
+    "same_latent_decoder": {
+      "run": {
+        "launch": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/decoder-source-run-v1/launch.json",
+          "sha256": "21a6bd8a528c77ebd027ebca7cd789fd6690f344037b261dceacc3b91ffeefbf",
+          "bytes": 1508
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/decoder-source-run-v1/completion.json",
+          "sha256": "0e649bbc182b15c4683b92cbf6a36d575e667a1240e6e8580e72fd51fce5b0a5",
+          "bytes": 58
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/decoder-source-run-v1/guard.jsonl",
+          "sha256": "9cd11a182087593a30f7531bc3b5991472d6389c840bed07a69b7f0961faba79",
+          "bytes": 188869
+        },
+        "exit_code": 0,
+        "wall_seconds": 319.6429630420171,
+        "cap_bytes": 27917287424,
+        "physical_reserve_pct": 10,
+        "memory_accounting": "file-cache",
+        "swap_growth_stop_bytes": 67108864,
+        "deadline_seconds": 1200,
+        "sampled_peak_footprint_bytes": 8954923648,
+        "minimum_cache_aware_headroom_bytes": 19903807488,
+        "observed_swap_growth_bytes": 0,
+        "sampling_limit": "Between-poll spikes and dirty file-cache reclaimability are not proven by sampled headroom."
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/cinematic-20261031-v1/decoder-source.json",
+        "sha256": "a91ad030b8cd682f4ca6c00ebfad41c4a3ea56a9bcff41155318f6fb12d2ea7e",
+        "bytes": 7128
+      },
+      "oracle_runtime": "System Torch 2.6.0/MPS; CPU fallback disabled",
+      "scope": {
+        "raw_pixels_before_display_normalization": true,
+        "display_pixels_after_pinned_bf16_postprocess": true,
+        "attention_adapter": "gathered_spatial_tiles_qk_softmax_pv_fp32_accum",
+        "unmodified_eager_flex_attention_parity": false,
+        "runtime_dtype": "BF16",
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      "source_weight_word_checks": 468,
+      "values_per_raw_or_display_output": 115015680,
+      "raw_pixels_sha256": "78bf62a84ed4361c4b3c0a01d8ddde0513df062401936be7beb368d143d2402c",
+      "display_pixels_sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+      "metrics": {
+        "max_abs_error": 0.0,
+        "mean_abs_error": 0.0,
+        "any_value_outside_tolerance": false,
+        "all_values_finite": true,
+        "raw_pixels": {
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "any_value_outside_tolerance": false,
+          "all_values_finite": true
+        },
+        "display_pixels": {
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "any_value_outside_tolerance": false,
+          "all_values_finite": true
+        },
+        "all_source_weights_match_bf16_cache": true,
+        "first_unblended_20_frames": {
+          "max_abs_error": 0.0,
+          "mean_abs_error": 0.0,
+          "any_value_outside_tolerance": false,
+          "all_values_finite": true
+        },
+        "result": "match"
+      },
+      "limitations": "Candidate latent/noise, 36 blocks + head, five windows; not candidate DiT trajectory or unmodified CUDA/FlexAttention parity."
+    }
+  },
+  "media": {
+    "old_vs_corrected_decoder": {
+      "manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/decoder-pair-v1/manifest.json",
+        "sha256": "bd6009b139166f282d7d4ecc8595b3a3e26b58d3762a73c149cf34c2b875cc9d",
+        "bytes": 14352
+      },
+      "paired_mp4": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/decoder-pair-v1/old-left-qk-fixed-right.mp4",
+        "sha256": "1138c7dda14f62b9e0db9292d520222c7c908c37598e76bf9d659cf1147de2d2",
+        "bytes": 1661454
+      },
+      "left": "old native PixelUMM",
+      "right": "Q/K-corrected native PixelUMM",
+      "controlled": "Same saved original-BF16 terminal latent and decoder noise."
+    },
+    "original_vs_cinematic": {
+      "manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-v1/manifest.json",
+        "sha256": "5c1d9b09908381ab9cd138cbc52a612be0d06c61b4f0942d8b5991e46a561392",
+        "bytes": 11690
+      },
+      "paired_mp4": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-v1/original-bf16-left-cinematic-right.mp4",
+        "sha256": "d9a628631f05b18961a8a0ae146c5b92488fd9bae64f4e15236d702902c7199f",
+        "bytes": 1535932
+      },
+      "left": "original BF16 DiT, corrected decoder",
+      "right": "Cinematic active-block BF16 DiT, corrected decoder",
+      "controlled": "Same authenticated full input payload, decoder noise, seed42, 4 DiT steps, 1 decoder step, geometry, decoder weights; distinct intentional DiT cache identity.",
+      "export_run": {
+        "launch": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-run-v1/launch.json",
+          "sha256": "912f197ec0b7d922f1b6b18b8aa15a2804b2d7bc64614203491d161d17963c09",
+          "bytes": 986
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-run-v1/completion.json",
+          "sha256": "b7af3ca9bb286de7616e900cfa7d341402b86b2ecec0d111eb9dc9e51ca044f5",
+          "bytes": 58
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-run-v1/guard.jsonl",
+          "sha256": "eded884ffd5aa44a6a3d5ab93096021e6b761254f6449da46522cf8de5d1823b",
+          "bytes": 5040
+        },
+        "exit_code": 0,
+        "wall_seconds": 6.412384791998193,
+        "cap_bytes": 2147483648,
+        "physical_reserve_pct": 10,
+        "memory_accounting": "file-cache",
+        "swap_growth_stop_bytes": 67108864,
+        "deadline_seconds": 180,
+        "sampled_peak_footprint_bytes": 301401528,
+        "minimum_cache_aware_headroom_bytes": 45905428480,
+        "observed_swap_growth_bytes": 0,
+        "sampling_limit": "Between-poll spikes and dirty file-cache reclaimability are not proven by sampled headroom."
+      }
+    },
+    "parent_visual_review": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/media-v1/parent-review.md",
+      "sha256": "79cf81d38fb3c9e555b9614349dd821da0e220ada4161d98013d3ca09f1a8783",
+      "bytes": 1878
+    },
+    "perceptual_acceptance": false,
+    "observations": "Sparse selected frames: decoder correction has small local changes without a convincing eye fix; Cinematic changes composition/lighting and apparent detail. Natural eyes, motion and general fidelity remain unproven."
+  },
+  "adversary": {
+    "review_type": "Same-lineage correlated code and completed-run review plus primary GPU/byte checks; not independent model validation.",
+    "status": "ROBUST for the tested opt-in cache admission, all-54 merge outputs, measured counter scope and same-latent adapted source-MPS decoder replay. Full candidate DiT parity and perceptual improvement remain open.",
+    "strongest_remaining_counterexample": "Correctly merged weights and exact decoder replay can still yield unnatural eyes or poor temporal behavior because neither proves full DiT execution equivalence or model perceptual capability."
+  },
+  "refresh_and_retention": {
+    "return_pointer": "docs/hy-nomas-generation-frontier.md",
+    "decay_triggers": [
+      "Source/producer/reference or graph changes",
+      "Weights/adapter/index/lineage changes",
+      "Input latent/noise/prompt or geometry/dtype changes",
+      "Runtime/backend/device changes",
+      "Artifact loss or hash mismatch"
+    ],
+    "refresh": "Re-admit memory, rebuild/requalify the offline cache against actual upstream merge, rerun affected same-input native/oracle gates, and review full motion before widening quality claims.",
+    "failure_policy": "Keep original BF16 default; reject altered/unqualified cache identity and reopen affected numerical claims. Do not widen tolerances.",
+    "retention": "Keep pinned commands, reports, guard records, cache lineage and MP4 pairs. Large native/oracle F32 outputs are external reproducibility artifacts, not repository contents."
+  }
+}

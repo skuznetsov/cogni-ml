@@ -1,0 +1,430 @@
+{
+  "schema": "cogni_ml.hy_nomas_connected_bf16_attention_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "7d530c1287bfc8f08dd81254428824b44dcc512c",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "One source-exact block0 T0 V263 input, connected native general-263 attention plan with a false default; pinned MPS adapter only.",
+    "result": "Native context and diagnostic P match actual-source main256 exactly after an explicit final GPU RNE expansion. Actual vector tail remains failed and separately reported.",
+    "not_claimed": [
+      "Native implementation of query chunks 256 + 7",
+      "Actual source tail probabilities",
+      "Complete refiner parity or generation wiring",
+      "Physical BF16 store, hidden accumulation dtype or backend dispatch count",
+      "Motion, quality or speed improvement"
+    ]
+  },
+  "boundaries": {
+    "risk_tier": "CAUTION",
+    "allowed_paths": [
+      "src/ml/video/hy_nomas_attention_mps.cr",
+      "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json"
+    ],
+    "changed_paths": [
+      "src/ml/video/hy_nomas_attention_mps.cr",
+      "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json"
+    ],
+    "production_source_changed": true,
+    "default_control": false,
+    "refiner_wiring_changed": false,
+    "geometry": {
+      "batches": 1,
+      "query_rows": 263,
+      "key_rows": 263,
+      "heads": 16,
+      "head_dim": 128
+    },
+    "source_query_chunks": [
+      256,
+      7
+    ],
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_check_tolerance": 0.0,
+    "execution": "Native Metal/MPS graph; comparison metrics Torch MPS with fallback disabled. CPU does admission, hashes, serialization and terminal diagnostic export.",
+    "synchronization": "Zero application read APIs or waits during native encode; one native terminal wait. Metrics have one packed terminal export. Opaque backend activity is outside counters.",
+    "full_refiner_executed": false,
+    "full_generation_executed": false,
+    "studio_started": false,
+    "rollback": "Leave bf16_boundaries_control false; revert this atomic commit to remove the opt-in path and its probe coverage."
+  },
+  "lineage": {
+    "external_run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80",
+    "source_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Inherited caller-pinned Hy-Nomas PyTorch 2.8.0 MPS-adapter replay; not recreated this turn and not stock CUDA/Magi.",
+    "source_replay_sha256": "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+    "source_payload_sha256": "2ffb11f00d5fa8db69dff92a84c150363191c8ca697510561cd855e221fee7f0",
+    "source_runtime": {
+      "torch_version": "2.8.0",
+      "macos_version": "26.6.2",
+      "os_build": "Darwin Kernel Version 25.6.0: Fri Jul 31 19:18:48 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6020",
+      "device": "mps"
+    },
+    "selected_source_pins_per_version": 390,
+    "retained_source_versions": [
+      "source-01",
+      "source-02"
+    ],
+    "native_manifest_selected_pins": 10,
+    "pin_scope": "Selected source fingerprints, not an exhaustive binary/toolchain/dependency closure. Guarded stages check pins before and after execution.",
+    "final_native_binary_sha256": "334ff6c1842fdc9e1e046557ea49717979f67b8428bf4ebc534d7d36955d29c0",
+    "artifact_index": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/qualified-artifacts-final.json",
+      "sha256": "fb8470e7f61062c634047dbeadc0d21381fc3b1d124133a0ebee104f63ac67ed",
+      "artifact_count": 894,
+      "readback": "All 894 selected artifact lengths and SHA-256 digests re-read; both source snapshots checked, and final selected source pins match the working tree."
+    }
+  },
+  "falsifier": {
+    "rejected_route": "Plain BF16 context cast followed by F32 output expansion in a connected graph.",
+    "observed": [
+      {
+        "kind": "connected_main256_gate",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.030776023864746094,
+        "mae": 0.0010503084631636739,
+        "rms": 0.0019122223602607846,
+        "mismatch_count": 458766,
+        "passed": false,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_general_control",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.030776023864746094,
+        "mae": 0.0010555819608271122,
+        "rms": 0.0019176703644916415,
+        "mismatch_count": 471996,
+        "passed": false,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_instrumented_context",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_main256_gate",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_general_control",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "source_tail_actual",
+        "count": 14336,
+        "finite_count": 14336,
+        "max_abs": 0.438747763633728,
+        "mae": 0.007351838983595371,
+        "rms": 0.020430997014045715,
+        "mismatch_count": 12111,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "discriminator": [
+      {
+        "kind": "native_context_is_bf16_expanded",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.030776023864746094,
+        "mae": 0.0010555819608271122,
+        "rms": 0.0019176703644916415,
+        "mismatch_count": 471996,
+        "passed": false,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "context_final_bf16_vs_source_general",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "context_vs_native_common_p_f32_pv",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "context_final_bf16_vs_native_common_p_final_bf16",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      }
+    ],
+    "pivot": "Keep the exact scaled-logit/P chain; add explicit UInt32 ties-to-even BF16 round-expand at the final context output only. No extra external buffer, CPU read or wait.",
+    "qualification_changed": false
+  },
+  "results": {
+    "connected_rows": [
+      {
+        "kind": "connected_main256_gate",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_general_control",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_instrumented_context",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_main256_gate",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_general_control",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "source_tail_actual",
+        "count": 14336,
+        "finite_count": 14336,
+        "max_abs": 0.4375,
+        "mae": 0.007066424936056137,
+        "rms": 0.02053731679916382,
+        "mismatch_count": 7499,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "tail_gate_open": true,
+    "tail_not_a_connected_main_qualification_gate": true,
+    "native_default_named_bytes": 83049088,
+    "native_control_named_bytes": 113447680,
+    "native_encode_counters": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "counter_scope": "Tracked named-buffer APIs only; excludes opaque MPS resources and terminal capture.",
+    "repeat_and_default_preservation": {
+      "schema": "cogni_ml.hy_nomas_native_repeat_and_default_preservation/v1",
+      "native_repeat_tensors": 13,
+      "repeat_payload_exact": true,
+      "old_ten_record_preservation": {
+        "default-02": true,
+        "bf16-02": true,
+        "bf16-repeat-02": true
+      },
+      "native_binary_sha256": "334ff6c1842fdc9e1e046557ea49717979f67b8428bf4ebc534d7d36955d29c0"
+    }
+  },
+  "verification": {
+    "dod": "Fresh guarded native build, exact main256/context/P comparisons, exact general control and instrumentation check, F32 localization/perturbation controls, byte-identical native repeat, unchanged default F32/input records.",
+    "stage_runner": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/execute.py",
+    "stage_commands": "Each <stage>.command.json and matching .result.json and logs are retained and hashed in the artifact index.",
+    "successful_stages": [
+      "cpu-02",
+      "python-02",
+      "build-02",
+      "native-default-02",
+      "native-bf16-02",
+      "native-bf16-repeat-02",
+      "compare-default-02",
+      "compare-bf16-02",
+      "cpu-regression-02"
+    ],
+    "commands": [
+      [
+        "make",
+        "hy_nomas_refiner_attention_probe",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/build"
+      ],
+      [
+        "crystal",
+        "spec",
+        "-D",
+        "cpu_only",
+        "spec/hy_nomas_text_refiner_spec.cr",
+        "spec/hy_nomas_reference_refiner_trace_spec.cr",
+        "spec/hy_nomas_reference_refiner_blocks_trace_spec.cr",
+        "spec/hy_nomas_refiner_attention_probe_spec.cr"
+      ],
+      [
+        "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "spec",
+        "-p",
+        "hy_nomas_reference_refiner*spec.py"
+      ],
+      [
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/build/hy_nomas_refiner_attention_probe",
+        "--inputs",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+        "--inputs-sha256",
+        "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+        "--output",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/native-bf16-02.json",
+        "--max-named-bytes",
+        "536870912",
+        "--bf16-boundaries-control"
+      ],
+      [
+        "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python",
+        "-B",
+        "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_reference_refiner_attention_compare.py",
+        "--native",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/native-bf16-02.json",
+        "--native-sha256",
+        "acd650b241b701e24518e641abd5a909155887a95402c9aa05d992208b4cd2bf",
+        "--replay",
+        "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+        "--replay-sha256",
+        "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+        "--output",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80/compare-bf16-02.json"
+      ]
+    ],
+    "observed": "32 Crystal examples and 71 Python tests pass; five exact connected comparison gates and the sensitivity positive/negative controls pass. Actual tail remains failed at unchanged mixed tolerance. Fresh-process repeat of all 13 records and entire payload is exact.",
+    "guards": {
+      "runtime_floor_pct": 10,
+      "max_footprint_bytes": 6442450944,
+      "max_swap_growth_bytes": 67108864,
+      "observed_max_swap_growth_bytes": 0,
+      "sampled_peak_group_footprint_bytes": 797280080,
+      "minimum_sampled_headroom_bytes": 25078005760,
+      "sampling_limitation": "Short native captures can fall between samples; sampled peak is not an exact peak."
+    },
+    "repository_graph_validator_available": false,
+    "fallback_packet_validation": "JSON parsed, allowed/changed path inventory checked against the actual diff; all selected external hashes and source snapshots re-read. This authenticates bytes, not the truth of review statements."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Default-off connected main256 P/context qualification and unchanged legacy controls; full refiner and tail are explicitly outside the passed claim.",
+    "checks": [
+      "Read-only ABI, retained-buffer lifetime, output target ordering and exact named-memory accounting review",
+      "Read-only final UInt32 RNE review: signs, ties, subnormals, finite overflow, infinities and NaN quieting",
+      "Guarded actual graph run confirms result target ordering and identical instrumented/context-only outputs",
+      "Original metric perturbation fails as expected; exact main checks cannot pass by relaxing tolerance",
+      "Fresh-process repeat and off/on original ten-record equality"
+    ],
+    "independence": "Same-lineage mini-Quad model reviews are correlated; observed GPU results are the numerical evidence."
+  },
+  "trust": {
+    "F": "Executed GPU numerical checks at declared tolerances plus admission tests and source-linked snapshots; no formal backend equivalence proof.",
+    "G": "One frozen block0 input and one pinned MPS runtime; not all inputs, masks, shapes, weights or backends.",
+    "R": "A/A native payload exact and default controls preserved; opaque backend internals and sampled memory limit precision remain unobserved."
+  },
+  "residual_risks": [
+    "Actual vector-tail context differs on 7499/14336 values with max error 0.4375; keep the control default off.",
+    "Probabilities qualify only the instrumented graph; context-only internal P is not independently exposed.",
+    "The caller-pinned inherited source replay is trusted provenance; runtime identity is descriptive, not a pinned PyTorch binary build.",
+    "Sampled memory guard cannot exclude between-poll spikes; file-backed headroom estimates reclaimability."
+  ],
+  "next_falsifier": "Reproduce the actual seven-query vector context on identical Q/K/V at unchanged tolerances without consuming its invalid P return, then qualify a default-off connected refiner path.",
+  "decay_trigger": "Any source/binary/runtime/input/weight/mask/layout/precision change, or artifact loss/mutation.",
+  "refresh": "Repeat authenticated admission, source/runtime matching, guarded native capture, main/P/PV and independent actual-tail comparisons. Reopen dependent claims on failure."
+}

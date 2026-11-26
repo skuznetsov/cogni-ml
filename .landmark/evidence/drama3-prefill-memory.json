@@ -1,0 +1,439 @@
+{
+  "format": "drama3-prefill-memory-evidence-v1",
+  "date": "2026-10-18",
+  "claim": "One pinned F32 upstream 269-row prefill completed without reproducing multi-GiB per-row growth; the historical incident cause is unresolved.",
+  "native_base": "eca2c3cedb96ac8d88e11e250dbed5bc7004997e",
+  "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+  "runtime": {
+    "mlx": "0.31.1",
+    "mlx-metal": "0.31.1",
+    "numpy": "1.26.4",
+    "torch": "2.6.0",
+    "safetensors": "0.5.3"
+  },
+  "source_sha256": {
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/bounded_prefill.py": "a6bb4550922a079c016e4e8adcf3ca94d807e302cc84e97b9f5c5ad5d20be2dc",
+    "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/mlx_memory.py": "c715d9bd86065bf804445298c5420c1a132a5aac6f3b5dfa3bc3184abc7802ab",
+    "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+    "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/generate_mlx_control.py": "6da10f4be3fe38d2e90f5cc178802533ee7b7e7a7c7c5424720e55aa8779dd0a",
+    "/opt/mldata_ssd/cogni-ml/drama3-voice-diagnosis-20261018/fixed_coarse_probe.py": "8b7c087dc3c7f01f9cb138619154c2425845457b8fa9b9b1f3f39940ef273b33",
+    "/opt/mldata_ssd/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/tts/models/fish_omni/fish_omni.py": "3b0eb71f765c6696055f5f2bdd0810dd31cd75c9385ff0202fb452938f246441",
+    "/opt/mldata_ssd/cogni-ml/drama3-reference-20261014/mlx-audio/mlx_audio/lm/models/cache.py": "ab41054c4564784e7e131d7bd9c9e42a91b951bb4478d3a7ce8017ed3028e632"
+  },
+  "private_artifact_directory": "/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246",
+  "artifact_sha256": {
+    "bounded_prefill.py": "a6bb4550922a079c016e4e8adcf3ca94d807e302cc84e97b9f5c5ad5d20be2dc",
+    "manifest.json": "71776336db2208fa0ba648a36f1aec8a30a5565d5acf70fef4d6eb31a543e8fe",
+    "run-config.json": "1fd8fbc091fe3dfa384f52a40065b4a997a0ca48ddbefb4224a097cb48e8f139",
+    "preflight.json": "f93c31278fe367b6d199784a850bd7b16e88c4097eff46882ccaa9f2ccf12db0",
+    "postflight.json": "706f1c81b98adc344fab4218c40308eb9360b28be9045f0175920236ebfd62e6",
+    "memory.jsonl": "b1fcbc7198241cac02ac3cb3673f0be46866ce9604917ddb39fd2cfbfc8eff06",
+    "result.json": "d3cb52982874b27e680323a3cd4fccd2c6527a8cec83c6aa82d3e6a1a1f80153",
+    "analysis.json": "2997e50891963ccb7f2b742a6d26335e3a7e4d27c9a1d29d7f3cd1a0d37a62ae",
+    "run.log": "9e6ba7ff93e7811c8f0cc9d0fef26eeeb66914f09d3d42c195af937ab80bc108",
+    "pressure.jsonl": "9834e000fa8db40ef80bf9d1a11371cffbad72940cecaa4067ae6da8d2fd0d17"
+  },
+  "run_config": {
+    "timeout_seconds": 900,
+    "rss_tree_limit_mib": 40960,
+    "system_free_floor_pct": 15,
+    "observed_budget_bytes": 42949672960,
+    "python_optimize": 0,
+    "tmpdir": "/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/tmp",
+    "studio": false,
+    "model_instances": 1,
+    "prefill_rows": 269,
+    "tail_replay_rows": 1
+  },
+  "exit_code": 0,
+  "row_coverage": {
+    "all_budget_records_pass": true,
+    "first_completed_rows": 0,
+    "last_completed_rows": 269,
+    "count": 270,
+    "every_row_once_in_order": true
+  },
+  "analysis": {
+    "records": 285,
+    "row_records": 270,
+    "trace_elapsed_seconds": 82.08732850011438,
+    "pre_prefill_seconds": 48.43900137534365,
+    "prefill_trace_seconds": 33.5460055838339,
+    "max_active_bytes": 33745956468,
+    "max_cached_bytes": 268217306,
+    "max_peak_active_bytes": 33811534504,
+    "max_active_plus_cached_bytes": 33987306918,
+    "max_rss_bytes": 3733618688,
+    "rows_2_256_active_min_bytes": 33633303052,
+    "rows_2_256_active_max_bytes": 33637385789,
+    "row2_to256_active_delta_bytes": 76812,
+    "cache_256_bytes": 89980928,
+    "cache_257_bytes": 114098176,
+    "last_preclone_row": 268,
+    "tail_checkpoint_logical_bytes": 86835200,
+    "rows_2_256_active_plus_cached_min_bytes": 33901520358,
+    "rows_2_256_active_plus_cached_max_bytes": 33901913574,
+    "rows_2_256_rss_min_bytes": 1364475904,
+    "rows_2_256_rss_max_bytes": 1372209152,
+    "prefill_only_peak_active_bytes": 33749598124
+  },
+  "selected_memory_records": [
+    {
+      "stage": "runtime_imported",
+      "completed_rows": null,
+      "mlx_active_bytes": 36,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 36,
+      "process_rss_bytes": 87654400,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "model_constructed",
+      "completed_rows": null,
+      "mlx_active_bytes": 11932,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 11932,
+      "process_rss_bytes": 97320960,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "model_quantized",
+      "completed_rows": null,
+      "mlx_active_bytes": 11932,
+      "mlx_cached_bytes": 24,
+      "mlx_peak_active_bytes": 11956,
+      "process_rss_bytes": 98385920,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_shard_1",
+      "completed_rows": null,
+      "mlx_active_bytes": 6723071232,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 6723073692,
+      "process_rss_bytes": 3088891904,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_shard_2",
+      "completed_rows": null,
+      "mlx_active_bytes": 13342331008,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 13342333440,
+      "process_rss_bytes": 3405611008,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_shard_3",
+      "completed_rows": null,
+      "mlx_active_bytes": 19987410640,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 19987413120,
+      "process_rss_bytes": 2338275328,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_shard_4",
+      "completed_rows": null,
+      "mlx_active_bytes": 26807996984,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 26807999440,
+      "process_rss_bytes": 3644801024,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_shard_5",
+      "completed_rows": null,
+      "mlx_active_bytes": 31363568164,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 31363570232,
+      "process_rss_bytes": 3733159936,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "core_loaded",
+      "completed_rows": null,
+      "mlx_active_bytes": 31363568164,
+      "mlx_cached_bytes": 0,
+      "mlx_peak_active_bytes": 31363570232,
+      "process_rss_bytes": 3733618688,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "codec_hook_complete",
+      "completed_rows": null,
+      "mlx_active_bytes": 33543241272,
+      "mlx_cached_bytes": 268194424,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1354301440,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "parameters_evaluated",
+      "completed_rows": null,
+      "mlx_active_bytes": 33543241272,
+      "mlx_cached_bytes": 268194424,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1354612736,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "prompt_built",
+      "completed_rows": null,
+      "mlx_active_bytes": 33543268784,
+      "mlx_cached_bytes": 268178036,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1356808192,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {}
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 0,
+      "mlx_active_bytes": 33543268784,
+      "mlx_cached_bytes": 268178036,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1356808192,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 0,
+        "tower": 0
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 1,
+      "mlx_active_bytes": 33634482700,
+      "mlx_cached_bytes": 267037658,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1363034112,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 76349440,
+        "tower": 13631488
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 2,
+      "mlx_active_bytes": 33637235212,
+      "mlx_cached_bytes": 264285146,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1364475904,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 76349440,
+        "tower": 13631488
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 128,
+      "mlx_active_bytes": 33637352992,
+      "mlx_cached_bytes": 264183750,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1370914816,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 76349440,
+        "tower": 13631488
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 256,
+      "mlx_active_bytes": 33637312024,
+      "mlx_cached_bytes": 264216526,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1372209152,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 76349440,
+        "tower": 13631488
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 257,
+      "mlx_active_bytes": 33663551016,
+      "mlx_cached_bytes": 266155950,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1372241920,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 258,
+      "mlx_active_bytes": 33661352460,
+      "mlx_cached_bytes": 266120138,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1372340224,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 268,
+      "mlx_active_bytes": 33661437472,
+      "mlx_cached_bytes": 249520010,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1372340224,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976
+      }
+    },
+    {
+      "stage": "tail_checkpoint_copied",
+      "completed_rows": 268,
+      "mlx_active_bytes": 33657420300,
+      "mlx_cached_bytes": 253537178,
+      "mlx_peak_active_bytes": 33683976048,
+      "process_rss_bytes": 1372356608,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976,
+        "tail_replay": 86835200
+      }
+    },
+    {
+      "stage": "prefill",
+      "completed_rows": 269,
+      "mlx_active_bytes": 33745956468,
+      "mlx_cached_bytes": 241350450,
+      "mlx_peak_active_bytes": 33749598124,
+      "process_rss_bytes": 1372356608,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976
+      }
+    },
+    {
+      "stage": "prefill_complete",
+      "completed_rows": null,
+      "mlx_active_bytes": 33744255500,
+      "mlx_cached_bytes": 243051418,
+      "mlx_peak_active_bytes": 33749598124,
+      "process_rss_bytes": 1372356608,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976
+      }
+    },
+    {
+      "stage": "terminal_checks",
+      "completed_rows": null,
+      "mlx_active_bytes": 33744227226,
+      "mlx_cached_bytes": 227751859,
+      "mlx_peak_active_bytes": 33811534504,
+      "process_rss_bytes": 1373077504,
+      "budget_bytes": 42949672960,
+      "budget_exceeded": false,
+      "cache_backing_bytes": {
+        "backbone": 86835200,
+        "tower": 27262976,
+        "tail_replay": 86835200
+      }
+    }
+  ],
+  "numerical_receipt": {
+    "format": "drama3-bounded-prefill-result-v1",
+    "prompt_shape": [
+      269,
+      11
+    ],
+    "reference_shape": [
+      10,
+      178
+    ],
+    "completed_rows": 269,
+    "prefill_host_seconds_with_telemetry": 33.55377837503329,
+    "loaded_core_tensors": 1167,
+    "core_shards": 5,
+    "official_prompt_equal": true,
+    "finite": true,
+    "tail_hidden_and_backbone_cache_max_abs": 0.0,
+    "negative_control_max_abs": 1.0,
+    "tail_absolute_tolerance": 0.0,
+    "deepcopy_mutation_isolated": true,
+    "numerical_scope": "Official input builder and one-row tail replay on pinned upstream; no saved full-prompt golden or native comparison.",
+    "guard_note": "Observed 40GiB budget and external run_safe 15pct floor; intra-eval peaks cannot be interrupted by row observer."
+  },
+  "postflight": {
+    "time_unix": 1792363991.419988,
+    "probe_pid": 36118,
+    "probe_pid_exists": false,
+    "matching_model_processes": [],
+    "studio_ports_listening": {
+      "8787": false,
+      "8788": false
+    },
+    "system_free_pct": 82,
+    "exit_code": 0
+  },
+  "limitations": [
+    "Single pass and first prefill only; no Studio/native generation, audio, repeated requests, teacher cache or paired trajectories.",
+    "Budget checks max(active+cached, cumulative active peak, RSS) at recorded boundaries; external run_safe checks 15pct system-free floor and process-tree RSS. Neither is an instantaneous hard physical-memory cap.",
+    "Row268 cache copy is lazy and retains 82.8125MiB of logical backbone state through row269; its physical increment was not isolated. Final peak includes tail replay and terminal GPU reductions.",
+    "deepcopy_mutation_isolated is a tiny [1,2] array source-mutation control; the cloned backbone cache layouts were not mutation-tested.",
+    "GPU reductions and one terminal compact receipt establish official prompt equality and tail self-consistency; no matching saved269-row golden or new independent upstream/native gate exists.",
+    "RSS, allocator counters and system free percentage overlap/differ in meaning and must not be added; sparse pressure polls do not establish a continuous minimum.",
+    "Source hashes and local checkpoint config/index are recorded; checkpoint tensor payloads were loaded as-is, not rehashed by this run.",
+    "run_safe approximately56s is a loop estimate; monotonic trace elapsed82.087s and instrumented prefill33.554s are diagnostic timings, not a speed benchmark."
+  ],
+  "refresh_on": [
+    "source",
+    "checkpoint contents",
+    "precision",
+    "chunk schedule",
+    "MLX/Metal/driver",
+    "device",
+    "input",
+    "additional processes; repeat host-dependent memory measurements"
+  ]
+}
