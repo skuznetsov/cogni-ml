@@ -8,6 +8,10 @@ require "../../qwen35/metal/engine"
 # deliberately narrow boundary supports exact one-block CPU/Metal parity before
 # the full block is fused or made resident on-device.
 module ML::GGUF
+  {% unless flag?(:cpu_only) %}
+    private QWEN_IMAGE21_METAL_SOURCE = {{ read_file("#{__DIR__}/../../../metal/kernels/qwen_image21/qwen_image21.metal") }}
+  {% end %}
+
   module QwenImage21MetalBF16
     {% if flag?(:cpu_only) %}
       def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
@@ -42,7 +46,7 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/../../../metal/kernels/qwen_image21/qwen_image21.metal") }}
+      SOURCE = QWEN_IMAGE21_METAL_SOURCE
 
       def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
         return nil unless qw.type.bf16? && rows > 0
@@ -262,7 +266,7 @@ module ML::GGUF
         false
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/../../../metal/kernels/qwen_image21/qwen_image21.metal") }}
+      SOURCE = QWEN_IMAGE21_METAL_SOURCE
 
       def self.encode_matmul_to_buffer(
         encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
@@ -974,7 +978,7 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       end
     {% else %}
-      SOURCE = {{ read_file("#{__DIR__}/../../../metal/kernels/qwen_image21/qwen_image21.metal") }}
+      SOURCE = QWEN_IMAGE21_METAL_SOURCE
 
       private def self.phase_boundary(
         probe : QwenImage21MetalPhaseRecorder?,
