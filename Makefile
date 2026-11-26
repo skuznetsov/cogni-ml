@@ -57,7 +57,8 @@ COGNIGRAPH_NATIVE_HEADERS := src/ml/metal/cognigraph_native.h src/ml/metal/cogni
 VIDEO_METAL_SOURCES := $(wildcard $(addsuffix /*.metal,$(addprefix src/ml/metal/kernels/,dcae_v hy_nomas pixelumm shared video)))
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr) $(VIDEO_METAL_SOURCES)
 MODEL_FORMAT_SOURCES := $(wildcard src/ml/formats/gguf/*.cr src/ml/formats/safetensors/*.cr)
-QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr) $(MODEL_FORMAT_SOURCES) $(VIDEO_METAL_SOURCES)
+QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr \
+	src/ml/models/qwen25_vl/*.cr src/ml/models/qwen25_vl/metal/*.cr) $(MODEL_FORMAT_SOURCES) $(VIDEO_METAL_SOURCES)
 INKLING2_SOURCES := $(wildcard src/ml/models/inkling2/*.cr src/ml/models/inkling2/*/*.cr \
 	src/ml/metal/kernels/inkling2/*.metal src/ml/serve/*.cr)
 QWEN35_BENCHMARK_SOURCES := $(wildcard src/ml/models/qwen35/*.cr src/ml/models/qwen35/*/*.cr src/ml/models/qwen35/qbit/metal/*.cr \
@@ -129,7 +130,7 @@ $(HY_NOMAS_COMPACT_ATTENTION_OBJ): src/ml/video/hy_nomas_attention_compact_bridg
 $(HY_NOMAS_HISTORY_ATTENTION_OBJ): src/ml/video/hy_nomas_history_attention_bridge.mm | $(BUILD_SENTINEL)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(QWEN25_MPS_OBJ): src/ml/gguf/qwen25_mps_bridge.mm | $(BUILD_SENTINEL)
+$(QWEN25_MPS_OBJ): src/ml/models/qwen25_vl/metal/bridge.mm | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Qwen2.5-VL MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
