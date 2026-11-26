@@ -1,5 +1,5 @@
 require "../../../core/buffer"
-require "../../../video/metal_mps_command_chain"
+require "../../../metal/mps_command_chain"
 require "set"
 
 {% unless flag?(:cpu_only) %}

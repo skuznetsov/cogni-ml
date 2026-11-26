@@ -16,7 +16,7 @@
 #include <memory>
 #include <time.h>
 #include <vector>
-#include "mps_api_profile.h"
+#include "../metal/mps_api_profile.h"
 #include "../metal/cognigraph_native.h"
 
 extern "C" int32_t gs_mps_chain_root_count(void *, int32_t *);

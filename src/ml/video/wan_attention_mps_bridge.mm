@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <limits>
 #define GS_MPS_API_PROFILE_WEAK_FALLBACK_IMPLEMENTATION
-#include "mps_api_profile.h"
+#include "../metal/mps_api_profile.h"
 #undef GS_MPS_API_PROFILE_WEAK_FALLBACK_IMPLEMENTATION
 
 // This bridge is also linked by targets that omit the optional command-chain

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mps_api_profile.h"
+#include "../metal/mps_api_profile.h"
 
 // Optional MPSGraph API timing around one executable encode call. The weak
 // imports keep bridges that omit the command-chain profiler linkable, and the

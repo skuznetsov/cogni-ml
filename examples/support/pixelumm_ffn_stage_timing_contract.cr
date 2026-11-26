@@ -50,8 +50,8 @@ module PixelUMMFFNStageTimingContract
     "examples/support/pixelumm_ffn_dense.metal",
     "src/ml/video/pixelumm_decoder_block_mps.cr",
     "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
-    "src/ml/video/metal_mps_command_chain.cr",
-    "src/ml/video/metal_mps_command_chain.mm",
+    "src/ml/metal/mps_command_chain.cr",
+    "src/ml/metal/mps_command_chain.mm",
     "src/ml/metal/bridge.mm",
   ]
 

@@ -40,7 +40,7 @@ source_paths = [
   "examples/support/pixelumm_ffn_dense.metal", "examples/support/pixelumm_ffn_isolated_probe.cr",
   "examples/support/pixelumm_ffn_weight_reuse_probe.cr", "examples/support/wan_memory_guard.py",
   "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
-  "src/ml/video/metal_mps_command_chain.cr", "src/ml/video/metal_mps_command_chain.mm",
+  "src/ml/metal/mps_command_chain.cr", "src/ml/metal/mps_command_chain.mm",
 ]
 source_hashes = source_paths.to_h { |path| {path, I.sha_file(path)} }
 reference = File.realpath(reference)

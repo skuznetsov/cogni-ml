@@ -29,6 +29,11 @@ LLAMA_LIB_DIR ?= $(firstword \
 OBJC_SOURCES := src/ml/metal/bridge.mm
 BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 WAN_MPS_CHAIN_OBJ := $(BUILD_DIR)/metal_mps_command_chain.o
+MPS_COMMAND_CHAIN_SOURCES := \
+	src/ml/metal/mps_command_chain.cr \
+	src/ml/metal/mps_api_profile.cr \
+	src/ml/metal/mps_command_phase_profile.cr \
+	src/ml/metal/mps_continuation_trace.cr
 WAN_STAGE_IO_OBJ := $(BUILD_DIR)/metal_stage_io.o
 WAN_T5_MPS_OBJ := $(BUILD_DIR)/wan_t5_mps_bridge.o
 WAN_T5_RMS_MPS_OBJ := $(BUILD_DIR)/wan_t5_rms_mps_bridge.o
@@ -92,7 +97,7 @@ $(BRIDGE_OBJ): $(OBJC_SOURCES) | $(BUILD_SENTINEL)
 		-std=c++17 -fobjc-arc -fPIC
 
 
-$(WAN_T5_MPS_OBJ): src/ml/video/wan_t5_mps_bridge.mm | $(BUILD_SENTINEL)
+$(WAN_T5_MPS_OBJ): src/ml/video/wan_t5_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -100,11 +105,11 @@ $(WAN_T5_RMS_MPS_OBJ): src/ml/video/wan_t5_rms_mps_bridge.mm | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(DCAE_V_MPS_OBJ): src/ml/video/dcae_v_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(DCAE_V_MPS_OBJ): src/ml/video/dcae_v_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "DCAE-V MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(DCAE_V_NORM_MPS_OBJ): src/ml/video/dcae_v_norm_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(DCAE_V_NORM_MPS_OBJ): src/ml/video/dcae_v_norm_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "DCAE-V MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -112,7 +117,7 @@ $(WAN_T5_ATTENTION_MPS_OBJ): src/ml/video/wan_t5_attention_mps_bridge.mm | $(BUI
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(WAN_ATTENTION_MPS_OBJ): src/ml/video/wan_attention_mps_bridge.mm | $(BUILD_SENTINEL)
+$(WAN_ATTENTION_MPS_OBJ): src/ml/video/wan_attention_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -139,20 +144,20 @@ $(QWEN25_MPS_OBJ): src/ml/models/qwen25_vl/metal/bridge.mm | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Qwen2.5-VL MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(PIXELUMM_MPS_OBJ): src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_MPS_OBJ): src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 .PHONY: pixelumm_decoder_head_probe spec_pixelumm_decoder_head
 pixelumm_decoder_head_probe: $(BUILD_DIR)/pixelumm_decoder_head_probe
 
-$(PIXELUMM_HEAD_OBJ): src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_HEAD_OBJ): src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM head MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 # The head translation unit reuses the block graph helpers and includes its ABI.
 # Do not also link PIXELUMM_MPS_OBJ into this diagnostic executable.
-$(BUILD_DIR)/pixelumm_decoder_head_probe: examples/pixelumm_decoder_head_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_head_probe: examples/pixelumm_decoder_head_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -163,7 +168,7 @@ spec_pixelumm_decoder_head:
 pixelumm_decoder_integrated_probe: $(BUILD_DIR)/pixelumm_decoder_integrated_probe
 
 # The head object includes the block ABI; do not link PIXELUMM_MPS_OBJ twice.
-$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_cpu_diagnostic_probe.cr examples/support/pixelumm_tiled_gate_up_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_decoder_profile.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_cpu_diagnostic_probe.cr examples/support/pixelumm_tiled_gate_up_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_profile.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -192,11 +197,11 @@ pixelumm_ffn_isolated_probe: $(BUILD_DIR)/pixelumm_ffn_isolated_probe
 spec_pixelumm_ffn_isolated_probe:
 	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_isolated_probe_spec.cr
 
-$(PIXELUMM_FFN_PROBE_OBJ): examples/support/pixelumm_ffn_projection_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_PROBE_OBJ): examples/support/pixelumm_ffn_projection_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(PIXELUMM_FFN_ISOLATED_PROBE_OBJ): examples/support/pixelumm_ffn_isolated_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_ISOLATED_PROBE_OBJ): examples/support/pixelumm_ffn_isolated_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM isolated FFN probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -218,19 +223,19 @@ pixelumm_ffn_weight_reuse_probe: $(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe
 spec_pixelumm_ffn_weight_reuse_probe:
 	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_weight_reuse_probe_spec.cr $(ARGS)
 
-$(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN weight-reuse probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(PIXELUMM_PACKED_GATE_UP_OBJ): examples/support/pixelumm_packed_gate_up_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_PACKED_GATE_UP_OBJ): examples/support/pixelumm_packed_gate_up_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM packed gate/up probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(PIXELUMM_FFN_ORIENTATION_OBJ): examples/support/pixelumm_ffn_orientation_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_ORIENTATION_OBJ): examples/support/pixelumm_ffn_orientation_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN orientation probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(PIXELUMM_QUERY_PAIR_OBJ): examples/support/pixelumm_query_pair_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_QUERY_PAIR_OBJ): examples/support/pixelumm_query_pair_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM query pair probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -238,7 +243,7 @@ $(PIXELUMM_QUERY_PAIR_OBJ): examples/support/pixelumm_query_pair_bridge.mm examp
 pixelumm_window_batch_probe: $(BUILD_DIR)/pixelumm_window_batch_probe
 pixelumm_window_batch_full_probe: $(BUILD_DIR)/pixelumm_window_batch_full_probe
 
-$(PIXELUMM_WINDOW_BATCH_OBJ): examples/support/pixelumm_window_batch_bridge.mm src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
+$(PIXELUMM_WINDOW_BATCH_OBJ): examples/support/pixelumm_window_batch_bridge.mm src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM window batch probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -259,13 +264,13 @@ $(BUILD_DIR)/pixelumm_window_batch_full_probe: examples/pixelumm_window_batch_fu
 spec_pixelumm_window_batch_full_probe:
 	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr $(ARGS)
 
-$(PIXELUMM_FFN_DIRECT_MPS_OBJ): examples/support/pixelumm_ffn_direct_mps_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_DIRECT_MPS_OBJ): examples/support/pixelumm_ffn_direct_mps_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM direct MPS FFN probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 # This diagnostic translation unit includes the production block bridge;
 # linking PIXELUMM_MPS_OBJ would duplicate its C ABI symbols.
-$(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe: examples/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
+$(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe: examples/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
@@ -334,12 +339,12 @@ $(BUILD_DIR)/pixelumm_output_only_pv_probe: examples/pixelumm_output_only_pv_pro
 
 # This diagnostic translation unit includes the weight-reuse bridge, which
 # includes the production block ABI. Do not also link either included object.
-$(BUILD_DIR)/pixelumm_packed_gate_up_probe: examples/pixelumm_packed_gate_up_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_PACKED_GATE_UP_OBJ)
+$(BUILD_DIR)/pixelumm_packed_gate_up_probe: examples/pixelumm_packed_gate_up_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/metal/mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_PACKED_GATE_UP_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_PACKED_GATE_UP_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # The orientation wrapper includes the ordinary diagnostic and production ABIs.
-$(BUILD_DIR)/pixelumm_ffn_orientation_probe: examples/pixelumm_ffn_orientation_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ORIENTATION_OBJ)
+$(BUILD_DIR)/pixelumm_ffn_orientation_probe: examples/pixelumm_ffn_orientation_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/metal/mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ORIENTATION_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_ORIENTATION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
@@ -350,40 +355,40 @@ pixelumm_query_pair_probe: $(BUILD_DIR)/pixelumm_query_pair_probe
 pixelumm_ffn_direct_mps_probe: $(BUILD_DIR)/pixelumm_ffn_direct_mps_probe
 
 # This wrapper includes the ordinary diagnostic and production ABIs once.
-$(BUILD_DIR)/pixelumm_ffn_direct_mps_probe: examples/pixelumm_ffn_direct_mps_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_DIRECT_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_ffn_direct_mps_probe: examples/pixelumm_ffn_direct_mps_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/metal/mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_DIRECT_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_DIRECT_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # The query-pair wrapper includes the ordinary diagnostic and production ABIs.
-$(BUILD_DIR)/pixelumm_query_pair_probe: examples/pixelumm_query_pair_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_QUERY_PAIR_OBJ)
+$(BUILD_DIR)/pixelumm_query_pair_probe: examples/pixelumm_query_pair_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/metal/mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_QUERY_PAIR_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_QUERY_PAIR_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # Uses the ordinary FFN-owner diagnostic object, which includes the production
 # PixelUMM ABI and the opt-in dual-output K/V gather selector exactly once.
-$(BUILD_DIR)/pixelumm_fused_kv_gather_probe: examples/pixelumm_fused_kv_gather_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
+$(BUILD_DIR)/pixelumm_fused_kv_gather_probe: examples/pixelumm_fused_kv_gather_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/metal/mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # Independent native Plans bind one diagnostic-owned Workspace. The normal
 # production bridge has no per-Graph resource collector in this experiment.
-$(BUILD_DIR)/pixelumm_plan_reuse_probe: examples/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_plan_reuse_probe: examples/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ): examples/support/pixelumm_connected_resource_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ): examples/support/pixelumm_connected_resource_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM connected resource probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 # The diagnostic bridge includes the production decoder-block bridge exactly
 # once so its resource hook can wrap the unchanged graph encode body.
-$(BUILD_DIR)/pixelumm_connected_resource_probe: examples/pixelumm_connected_resource_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_connected_resource_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr src/ml/video/metal_mps_command_chain.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ)
+$(BUILD_DIR)/pixelumm_connected_resource_probe: examples/pixelumm_connected_resource_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_connected_resource_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr src/ml/metal/mps_api_profile.cr src/ml/metal/mps_command_phase_profile.cr src/ml/metal/mps_continuation_trace.cr src/ml/metal/mps_command_chain.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # The diagnostic bridge includes the production bridge translation unit.
 # Linking PIXELUMM_MPS_OBJ here would duplicate its existing C ABI symbols.
-$(BUILD_DIR)/pixelumm_ffn_projection_probe: examples/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_PROBE_OBJ)
+$(BUILD_DIR)/pixelumm_ffn_projection_probe: examples/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -406,7 +411,7 @@ spec_pixelumm_ffn_aa_probe:
 	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_aa_contract_spec.cr
 
 # Includes the production bridge once; no other PixelUMM bridge object is linked.
-$(PIXELUMM_FFN_AA_OBJ): examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_AA_OBJ): examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 $(BUILD_DIR)/pixelumm_ffn_aa_probe: examples/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_AA_OBJ)
@@ -421,7 +426,7 @@ spec_pixelumm_ffn_graph_probe:
 
 # The whole-FFN diagnostic includes the AA and production bridges in one TU.
 # Linking their separate objects would duplicate the production C ABI symbols.
-$(PIXELUMM_FFN_GRAPH_OBJ): examples/support/pixelumm_ffn_graph_bridge.mm examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
+$(PIXELUMM_FFN_GRAPH_OBJ): examples/support/pixelumm_ffn_graph_bridge.mm examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/metal/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 $(BUILD_DIR)/pixelumm_ffn_graph_probe: examples/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_GRAPH_OBJ)
@@ -465,27 +470,27 @@ spec_pixelumm_thirty_six_block_probe:
 spec_pixelumm_memory_probe:
 	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_memory_probe_spec.cr
 
-$(BUILD_DIR)/pixelumm_decoder_eight_block_probe: examples/pixelumm_decoder_eight_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_eight_block_probe: examples/pixelumm_decoder_eight_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
-$(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe: examples/pixelumm_decoder_sixteen_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe: examples/pixelumm_decoder_sixteen_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
-$(BUILD_DIR)/pixelumm_decoder_thirty_six_block_probe: examples/pixelumm_decoder_thirty_six_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_thirty_six_block_probe: examples/pixelumm_decoder_thirty_six_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
-$(BUILD_DIR)/pixelumm_decoder_two_block_probe: examples/pixelumm_decoder_two_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_two_block_probe: examples/pixelumm_decoder_two_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
-$(BUILD_DIR)/pixelumm_decoder_four_block_probe: examples/pixelumm_decoder_four_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_four_block_probe: examples/pixelumm_decoder_four_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
-$(BUILD_DIR)/pixelumm_decoder_block_probe: examples/pixelumm_decoder_block_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_block_probe: examples/pixelumm_decoder_block_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(MPS_COMMAND_CHAIN_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -502,7 +507,7 @@ spec_pixelumm_sixteen_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM
 	$(SPEC_RUNNER) spec spec/pixelumm_two_block_probe_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
-$(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+$(WAN_MPS_CHAIN_OBJ): src/ml/metal/mps_command_chain.mm src/ml/metal/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS command chain requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 

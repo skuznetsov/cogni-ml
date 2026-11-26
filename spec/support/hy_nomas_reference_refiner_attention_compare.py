@@ -75,7 +75,7 @@ COMPILED_SOURCE_FILES = (
     "spec/support/hy_nomas_mps_reductions.cr",
     "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
     "src/ml/video/hy_nomas_attention_mps.cr",
-    "src/ml/video/metal_mps_command_chain.cr",
+    "src/ml/metal/mps_command_chain.cr",
     "src/ml/video/metal_ops.cr", "src/ml/core/buffer.cr",
     "src/ml/metal/device.cr", "src/ml/video/hy_nomas_block.cr",
     "src/ml/video/hy_nomas_vector_attention.cr",
