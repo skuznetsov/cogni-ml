@@ -1,6 +1,7 @@
 require "./spec_helper"
 require "../src/ml/gguf/gemma4_meta"
 require "../src/ml/gguf/gemma4_weights"
+require "./support/gemma4_weights_spec_lifecycle"
 
 GEMMA4_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 
@@ -41,10 +42,14 @@ describe ML::GGUF::Gemma4Hparams do
 end
 
 describe ML::GGUF::Gemma4Weights do
+  after_each do
+    Gemma4WeightsSpecLifecycle.close_all
+  end
+
   it "maps local Gemma4 tensors structurally without dequantizing large weights" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_12B_Q4KM)
 
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_12B_Q4KM)
     hp = w.hparams
 
     w.token_embd.in_dim.should eq(3840)

@@ -8,7 +8,8 @@ require "./metadata"
 # Structural Gemma4 GGUF weight loader.
 #
 # This first slice maps tensor names and keeps the mmap alive. It does not
-# implement forward math yet.
+# implement forward math yet. QuantWeight.raw slices are non-owning views and
+# are invalidated when the owning Gemma4Weights is explicitly closed.
 module ML::GGUF
   struct Gemma4LayerWeights
     getter attn_norm : Array(Float32)
@@ -64,8 +65,19 @@ module ML::GGUF
 
     # Keep the mmap alive for QuantWeight raw slices.
     @gguf : GGUFFile
+    @closed : Bool
+    @close_mutex : Mutex
+    {% unless flag?(:cpu_only) %}
+      @mmap_base : Pointer(UInt8)?
+    {% end %}
 
     def initialize(@gguf : GGUFFile, @hparams : Gemma4Hparams)
+      @closed = false
+      @close_mutex = Mutex.new
+      {% unless flag?(:cpu_only) %}
+        @mmap_base = nil
+      {% end %}
+
       @token_embd = load_qw(@gguf, "token_embd.weight")
       @output_norm = load_f32(@gguf, "output_norm.weight")
       @rope_freqs = @gguf.tensor("rope_freqs.weight") ? load_f32(@gguf, "rope_freqs.weight") : nil
@@ -77,6 +89,7 @@ module ML::GGUF
           if region = @gguf.mmap_region
             base, size = region
             Qwen35Metal.register_mmap(base, size)
+            @mmap_base = base
           end
         end
       {% end %}
@@ -84,8 +97,32 @@ module ML::GGUF
 
     def self.from_gguf(path : String) : Gemma4Weights
       g = GGUFFile.new(path)
-      hp = Gemma4Hparams.new(g)
-      Gemma4Weights.new(g, hp)
+      begin
+        hp = Gemma4Hparams.new(g)
+        Gemma4Weights.new(g, hp)
+      rescue ex
+        g.close
+        raise ex
+      end
+    end
+
+    # Release the whole-mmap Metal wrapper before unmapping its backing bytes.
+    # Callers must quiesce in-flight Metal work and stop using every raw tensor
+    # view before close returns. No finalizer is provided because these public
+    # non-owning views do not keep Gemma4Weights alive.
+    def close : Nil
+      @close_mutex.synchronize do
+        return if @closed
+
+        {% unless flag?(:cpu_only) %}
+          if base = @mmap_base
+            Qwen35Metal.unregister_mmap(base)
+            @mmap_base = nil
+          end
+        {% end %}
+        @gguf.close
+        @closed = true
+      end
     end
 
     private def load_layer(g : GGUFFile, il : Int32) : Gemma4LayerWeights

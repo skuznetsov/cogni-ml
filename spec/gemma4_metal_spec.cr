@@ -2,6 +2,7 @@ require "./spec_helper"
 require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/qwen35_metal"
+require "./support/gemma4_weights_spec_lifecycle"
 
 GEMMA4_METAL_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 
@@ -235,8 +236,12 @@ describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
+  after_each do
+    Gemma4WeightsSpecLifecycle.close_all
+  end
+
   it "dequantizes a Q6_K token embedding row on Metal like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     w.token_embd.type.q6_k?.should be_true
 
     token_id = 42
@@ -252,7 +257,7 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "zeros an out-of-range Q6_K token embedding request" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     gpu = ML::GGUF::Qwen35Metal.embedding_q6k_from_token_id(w.token_embd, w.token_embd.out_dim).not_nil!
 
     gpu.size.should eq(w.hparams.n_embd)
@@ -260,7 +265,7 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "projects SWA-layer Q/K/V with matmul_many like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     lw = w.layers[0]
     x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
@@ -279,7 +284,7 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "projects full-attention Q/K and preserves the K-as-V structural boundary" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     lw = w.layers[5]
     lw.attn_v_qw.should be_nil
@@ -296,7 +301,7 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "normalizes and RoPEs a SWA projection like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     lw = w.layers[0]
     x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
@@ -313,7 +318,7 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "normalizes and RoPEs a full-attention projection with Gemma4 frequency factors" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     lw = w.layers[5]
     x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
@@ -330,67 +335,67 @@ describe "Gemma4 Metal primitives" do
   end
 
   it "computes ungated SWA GQA attention context like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_context_parity(w, 0, [42, 43, 44], "gemma4_swa_attn")
   end
 
   it "computes ungated full-layer GQA attention context like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_context_parity(w, 5, [42, 43, 44], "gemma4_full_attn")
   end
 
   it "projects SWA attention context through the output weight like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_attn_output_projection_parity(w, 0, "gemma4_swa_attn_out_proj")
   end
 
   it "projects full-attention context through the output weight like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_attn_output_projection_parity(w, 5, "gemma4_full_attn_out_proj")
   end
 
   it "runs the SWA post-attention and GELU FFN tail like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_layer_tail_parity(w, 0, "gemma4_swa_layer_tail")
   end
 
   it "runs the full-attention post-attention and GELU FFN tail like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_layer_tail_parity(w, 5, "gemma4_full_layer_tail")
   end
 
   it "runs one composed SWA layer like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_forward_layer_parity(w, 0, "gemma4_swa_forward_layer")
   end
 
   it "runs one composed full-attention layer like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_forward_layer_parity(w, 5, "gemma4_full_forward_layer")
   end
 
   it "projects a hidden vector through output norm, tied head, and softcap like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_logits_topk_parity(w, "gemma4_logits_topk")
   end
 
   it "runs a bounded multi-layer hidden pass like the CPU reference" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_forward_hidden_parity(w, 6, "gemma4_stop6_forward_hidden")
   end
 
   it "keeps prefix K/V caches resident while matching the CPU hidden path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_forward_hidden_resident_cache_parity(w, 2, "gemma4_stop2_resident_cache")
   end

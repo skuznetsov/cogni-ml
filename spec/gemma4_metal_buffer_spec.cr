@@ -2,6 +2,7 @@ require "./spec_helper"
 require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/qwen35_metal"
+require "./support/gemma4_weights_spec_lifecycle"
 
 GEMMA4_METAL_BUFFER_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 
@@ -32,6 +33,10 @@ describe "Gemma4 resident Metal matmul buffers" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_BUFFER_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
+  after_each do
+    Gemma4WeightsSpecLifecycle.close_all
+  end
+
   it "keeps the graph-backed FFN elementwise tail aligned with existing helpers" do
     gate = Array(Float32).new(128) { |i| Math.sin(i.to_f32 * 0.031_f32).to_f32 }
     up = Array(Float32).new(128) { |i| Math.cos(i.to_f32 * 0.017_f32).to_f32 }
@@ -47,7 +52,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "embeds Q6 token-id batches like the existing per-token Metal path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     token_ids = [42_i32, 43_i32, 44_i32, 45_i32]
     hidden = w.hparams.n_embd
     scale = Math.sqrt(hidden.to_f64).to_f32
@@ -68,7 +73,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "projects Q4 and Q6 Gemma4 weights from resident input buffers like the array path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     lw = w.layers[0]
     x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
@@ -81,7 +86,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "runs the Gemma4 layer tail through resident intermediate buffers like the array path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     lw = w.layers[0]
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     scale = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
@@ -96,7 +101,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps the graph-backed Gemma4 layer tail aligned with resident buffers" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     lw = w.layers[0]
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     scale = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
@@ -116,7 +121,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "replays the Gemma4 layer-tail graph plan like resident buffers" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     lw = w.layers[0]
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
     scale = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
@@ -138,7 +143,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "runs the Gemma4 layer tail over prompt rows like serial resident tails" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     lw = w.layers[0]
     batch = 4
     hidden = w.hparams.n_embd
@@ -163,7 +168,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "runs Gemma4 resident layer rows like serial resident layer steps" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     batch = 4
     hidden = w.hparams.n_embd
     scale = Math.sqrt(hidden.to_f64).to_f32
@@ -196,7 +201,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "prefills Gemma4 prompt chunks through resident layer rows like serial resident prefill" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     prompt = [42_i32, 43_i32, 44_i32, 45_i32, 46_i32, 47_i32, 48_i32, 49_i32]
     stop_layer = 6
 
@@ -220,7 +225,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps the stop-layer resident-cache hidden path aligned after resident tail promotion" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
     resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     host = [] of Float32
@@ -237,7 +242,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps the one-command-buffer decode wave aligned with resident decode" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     wave_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     resident = [] of Float32
@@ -254,7 +259,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps resident top2 decode aligned with hidden-wave top2 projection" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     top2_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     token_id = 42
@@ -272,7 +277,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps the graph-backed no-norm top1 head aligned with the existing head path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     token_id = 42
     stop_layer = 6
@@ -287,7 +292,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps resident allowed-token top1 aligned with full hidden-wave top2 projection" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     allowed_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     token_id = 42
@@ -317,7 +322,7 @@ describe "Gemma4 resident Metal matmul buffers" do
   end
 
   it "keeps full-attention K-as-V semantics aligned in the resident hidden path" do
-    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    w = Gemma4WeightsSpecLifecycle.load(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
     resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
     host = [] of Float32
