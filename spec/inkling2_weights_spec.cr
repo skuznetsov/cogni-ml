@@ -123,11 +123,13 @@ private def inkling2_test_tensors(
   core_end : Int32,
   sliding_pattern : Array(Bool),
   quantized_experts : Bool,
+  quantized_output : Bool,
 ) : Array(Inkling2TestTensor)
   tensors = [] of Inkling2TestTensor
   add = ->(name : String, dims : Array(Int64)) do
     elements = dims.product(1_i64)
-    type = quantized_experts && name.ends_with?("_exps.weight") ? ML::GGUF::TensorType::Q8_0 : ML::GGUF::TensorType::F32
+    quantized = (quantized_experts && name.ends_with?("_exps.weight")) || (quantized_output && name == "output.weight")
+    type = quantized ? ML::GGUF::TensorType::Q8_0 : ML::GGUF::TensorType::F32
     bytes = (elements // type.block_elements * type.block_bytes).to_i32
     tensors << {name: name, dims: dims, type_id: type.value, offset: 0_u64, bytes: bytes}
   end
@@ -218,6 +220,7 @@ private def write_inkling2_test_gguf(
   include_truncated_embedding : Bool = false,
   patterned_weights : Bool = false,
   quantized_experts : Bool = false,
+  quantized_output : Bool = false,
 ) : Nil
   entries = inkling2_test_metadata(
     n_layer: n_layer, n_embd: n_embd, n_head: n_head, n_head_kv: n_head_kv, head_dim: head_dim,
@@ -233,7 +236,7 @@ private def write_inkling2_test_gguf(
               inkling2_test_tensors(
                 n_layer, n_embd, n_head, n_head_kv, head_dim, rel_dim, rel_extent,
                 sliding_window, conv_size, n_expert, expert_dim, vocab_size,
-                padded_vocab_size, core_start, core_end, sliding_pattern, quantized_experts,
+                padded_vocab_size, core_start, core_end, sliding_pattern, quantized_experts, quantized_output,
               )
             elsif include_truncated_embedding
               [{name: "token_embd.weight", dims: [n_embd.to_i64, padded_vocab_size.to_i64], type_id: 0_u32,
@@ -554,57 +557,60 @@ describe ML::GGUF::Inkling2Engine do
       end
     end
 
-    it "guides capped LoopCD logits with the two-pass reference while preserving target KV" do
-      pending! "Metal unavailable" unless ML::Metal::Device.init!
+    [ML::GGUF::TensorType::F32, ML::GGUF::TensorType::Q8_0].each do |output_type|
+      it "guides capped LoopCD logits with the two-pass reference while preserving target KV (#{output_type})" do
+        pending! "Metal unavailable" unless ML::Metal::Device.init!
 
-      path = File.tempname("inkling2-loopcd-logits", ".gguf")
-      write_inkling2_test_gguf(path, n_layer: 24, n_embd: 2304, expert_dim: 32,
-        core_start: 6, core_end: 18, res_block_size: 6, varying: true,
-        sliding_pattern: Array(Bool).new(24) { |layer| layer % 3 != 1 },
-        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+        path = File.tempname("inkling2-loopcd-logits", ".gguf")
+        write_inkling2_test_gguf(path, n_layer: 24, n_embd: 2304, expert_dim: 32,
+          core_start: 6, core_end: 18, res_block_size: 6, varying: true,
+          sliding_pattern: Array(Bool).new(24) { |layer| layer % 3 != 1 },
+          include_all_tensors: true, patterned_weights: true, quantized_experts: true, quantized_output: output_type.q8_0?)
 
-      strength = 0.25_f32
-      loopcd = ML::GGUF::Inkling2LoopCD.new(ML::GGUF::Inkling2LoopCD::Mode::Logits, strength)
-      target = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, prefill_tile: 2)
-      reference = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, passes: 2, prefill_tile: 2)
-      guided = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, prefill_tile: 2, greedy_verifier: nil, loopcd: loopcd)
-      guided.greedy_verifier?.should be_false
-      expect_raises(ArgumentError, /exactly three passes/) do
-        ML::GGUF::Inkling2Engine.new(path, 16, metal: true, passes: 2, loopcd: loopcd)
-      end
-      prefix = [2, 5, 1, 6, 3]
-
-      check = ->(actual : Array(Float32), final : Array(Float32), early : Array(Float32)) do
-        actual.size.should eq(final.size)
-        actual.each_with_index do |score, id|
-          score.should be_close(final[id] + strength * (final[id] - early[id]), 1e-5_f32)
+        strength = 0.25_f32
+        loopcd = ML::GGUF::Inkling2LoopCD.new(ML::GGUF::Inkling2LoopCD::Mode::Logits, strength)
+        target = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, prefill_tile: 2)
+        reference = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, passes: 2, prefill_tile: 2)
+        guided = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, prefill_tile: 2, greedy_verifier: nil, loopcd: loopcd)
+        guided.weights.output.type.should eq(output_type)
+        guided.greedy_verifier?.should be_false
+        expect_raises(ArgumentError, /exactly three passes/) do
+          ML::GGUF::Inkling2Engine.new(path, 16, metal: true, passes: 2, loopcd: loopcd)
         end
-      end
-      check.call(guided.prefill(prefix), target.prefill(prefix), reference.prefill(prefix))
-      {guided, target, reference}.each { |engine| engine.forward(4, logits: false).should be_nil }
-      scores = guided.forward(0).not_nil!
-      final = target.forward(0).not_nil!
-      check.call(scores, final, reference.forward(0).not_nil!)
-      scores.should_not eq(final)
+        prefix = [2, 5, 1, 6, 3]
 
-      target.layer_visits.times do |visit|
-        guided.kv_count(visit).should eq(target.kv_count(visit))
-        target.kv_count(visit).times do |index|
-          expect_inkling2_kv_bits(guided.key_value_at(visit, index), target.key_value_at(visit, index))
+        check = ->(actual : Array(Float32), final : Array(Float32), early : Array(Float32)) do
+          actual.size.should eq(final.size)
+          actual.each_with_index do |score, id|
+            score.should be_close(final[id] + strength * (final[id] - early[id]), 1e-5_f32)
+          end
         end
+        check.call(guided.prefill(prefix), target.prefill(prefix), reference.prefill(prefix))
+        {guided, target, reference}.each { |engine| engine.forward(4, logits: false).should be_nil }
+        scores = guided.forward(0).not_nil!
+        final = target.forward(0).not_nil!
+        check.call(scores, final, reference.forward(0).not_nil!)
+        scores.should_not eq(final)
+
+        target.layer_visits.times do |visit|
+          guided.kv_count(visit).should eq(target.kv_count(visit))
+          target.kv_count(visit).times do |index|
+            expect_inkling2_kv_bits(guided.key_value_at(visit, index), target.key_value_at(visit, index))
+          end
+        end
+        expected_id = ML::GGUF::Inkling2Engine.greedy_token_id(scores)
+        guided.reset
+        guided.prefill(prefix)
+        guided.forward(4, logits: false)
+        guided.forward_greedy(0).should eq(expected_id)
+        expect_raises(ArgumentError, /LoopCD/) { guided.decode_block4(StaticArray[0, 1, 2, 3]) }
+        guided.position.should eq(prefix.size + 2)
+      ensure
+        guided.try(&.close)
+        reference.try(&.close)
+        target.try(&.close)
+        File.delete?(path) if path
       end
-      expected_id = ML::GGUF::Inkling2Engine.greedy_token_id(scores)
-      guided.reset
-      guided.prefill(prefix)
-      guided.forward(4, logits: false)
-      guided.forward_greedy(0).should eq(expected_id)
-      expect_raises(ArgumentError, /LoopCD/) { guided.decode_block4(StaticArray[0, 1, 2, 3]) }
-      guided.position.should eq(prefix.size + 2)
-    ensure
-      guided.try(&.close)
-      reference.try(&.close)
-      target.try(&.close)
-      File.delete?(path) if path
     end
 
     it "keeps prompt history intact before the final row in both hidden LoopCD modes" do

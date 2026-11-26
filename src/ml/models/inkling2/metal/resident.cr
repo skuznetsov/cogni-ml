@@ -93,7 +93,6 @@ module ML::GGUF
     @float_offsets = {} of UInt64 => Int64
     @shared = [] of ML::MetalBuffer
     @depth_checkpoint : ML::MetalBuffer? = nil
-    @loopcd_reference_logits : ML::MetalBuffer? = nil
     @depth_speculation : Bool
     @depth_frontier = 0_i32
     @depth_block_start : Int32? = nil
@@ -361,8 +360,6 @@ module ML::GGUF
       @shared.clear
       @depth_checkpoint.try(&.release)
       @depth_checkpoint = nil
-      @loopcd_reference_logits.try(&.release)
-      @loopcd_reference_logits = nil
       @scratch.close
       @linear.close
     end
@@ -607,8 +604,10 @@ module ML::GGUF
       visit = encode_prelude(tile, prelude)
 
       previous_bank = nil
-      reference_logits = nil
       loopcd = @loopcd
+      # Keep the head inputs outside the reference epilogue's scratch mark.
+      # Row zero is the target and row one is the pass-two reference.
+      loopcd_inputs = @scratch.take(2 * tile.width) if logits && loopcd && loopcd.mode.logits?
       @passes.times do |pass|
         visit = encode_core_pass(tile, visit, prelude, previous_bank, restore_prelude: pass > 0)
         if pass + 1 < @passes
@@ -621,14 +620,11 @@ module ML::GGUF
         if @depth_speculation && pass + 1 == DEPTH_DRAFT_PASSES
           # Pass 4 restores the saved prelude and block count before it resumes
           # the target path, so the shallow epilogue can reuse this tile.
-          encode_epilogue_branch(tile, @reference_epilogue_visits, nil)
+          encode_epilogue_branch(tile, @reference_epilogue_visits)
         elsif loopcd && loopcd.mode.logits? && pass + 1 == 2
-          if logits
-            reference_logits = @loopcd_reference_logits ||= allocate_private(@config.vocab_size.to_i64 * sizeof(Float32))
-          end
           # Keep the reference convolution and KV history contiguous across
           # prefill tiles, including tiles where no logit row is requested.
-          encode_epilogue_branch(tile, @reference_epilogue_visits, reference_logits)
+          encode_epilogue_branch(tile, @reference_epilogue_visits, normalized: loopcd_inputs.try(&.slice(tile.width)))
         end
       end
 
@@ -640,7 +636,7 @@ module ML::GGUF
         encode_layer(physical, visit, tile, nil)
         visit += 1
       end
-      encode_logits(tile, logits, greedy: greedy, reference_logits: reference_logits) if logits
+      encode_logits(tile, logits, greedy: greedy, loopcd_inputs: loopcd_inputs) if logits
     end
 
     private def encode_hidden_guidance(tile : Tile, previous_bank : Inkling2View, loopcd : Inkling2LoopCD) : Nil
@@ -663,22 +659,34 @@ module ML::GGUF
       end
     end
 
-    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false,
-                              reference_logits : ML::MetalBuffer? = nil) : Nil
-      encoder = tile.encoder
-      rows = tile.decode_block? ? tile.rows : 1
+    private def encode_output_normalized(tile : Tile, rows : Int32, output : Inkling2View? = nil) : Inkling2View
       mixed = mix(tile, tile.current, @weights.output_res_query, 1)
       selected = mixed.slice((tile.rows - rows) * tile.width)
-      normalized = @scratch.take(rows * tile.width)
-      MathOps.rms(encoder, selected, normalized, constant(@weights.output_norm), tile.width, rows, @config.rms_eps)
+      normalized = output || @scratch.take(rows * tile.width)
+      MathOps.rms(tile.encoder, selected, normalized, constant(@weights.output_norm), tile.width, rows, @config.rms_eps)
+      normalized
+    end
+
+    private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false,
+                              loopcd_inputs : Inkling2View? = nil) : Nil
+      encoder = tile.encoder
+      rows = tile.decode_block? ? tile.rows : 1
+      normalized = encode_output_normalized(tile, rows, loopcd_inputs)
       padded_vocab = @weights.output.out_dim
       vocab = @config.vocab_size
-      logits = @scratch.take(rows * padded_vocab)
-      @linear.project(encoder, @weights.output, normalized, logits, rows, decode_block: tile.decode_block?)
+      projection_rows = loopcd_inputs && @weights.output.type.q8_0? ? 2 : rows
+      logits = @scratch.take((loopcd_inputs ? 2 : rows) * padded_vocab)
+      @linear.project(encoder, @weights.output, normalized, logits, projection_rows, decode_block: tile.decode_block?)
       output = Inkling2View.new(buffer)
-      if reference_logits
+      if loopcd_inputs
+        reference = logits.slice(padded_vocab)
+        if projection_rows == 1
+          # Preserve the scalar reduction for F32 output weights.
+          @linear.project(encoder, @weights.output, loopcd_inputs.slice(tile.width), reference, 1)
+        end
+        MathOps.softcap(encoder, reference, reference, @config.logit_softcap, vocab)
         scores = greedy ? logits : output
-        MathOps.extrapolate(encoder, logits, Inkling2View.new(reference_logits), scores, vocab,
+        MathOps.extrapolate(encoder, logits, reference, scores, vocab,
           @loopcd.not_nil!.strength, cap: @config.logit_softcap)
         if greedy
           MathOps.greedy_ids(encoder, @scratch, scores, output, 0_f32, vocab, padded_vocab, 1)
@@ -769,7 +777,8 @@ module ML::GGUF
       MathOps.rms(tile.encoder, tile.current, terminal, nil, tile.width, tile.rows, DEPTH_EPS)
     end
 
-    private def encode_epilogue_branch(tile : Tile, visits : Array(Visit), logits : ML::MetalBuffer?) : Nil
+    private def encode_epilogue_branch(tile : Tile, visits : Array(Visit), logits : ML::MetalBuffer? = nil,
+                                       *, normalized : Inkling2View? = nil) : Nil
       mark = @scratch.mark
       begin
         visit = 0
@@ -777,8 +786,10 @@ module ML::GGUF
           encode_layer(physical, visit, tile, nil, visits)
           visit += 1
         end
-        if output = logits
-          encode_logits(tile, output)
+        if normalized
+          encode_output_normalized(tile, 1, normalized)
+        elsif logits
+          encode_logits(tile, logits)
         end
       ensure
         @scratch.rewind(mark)

@@ -75,18 +75,27 @@ inference, including automatic n-gram verification when applicable.
 | `hidden` | The same extrapolation on the two unit-RMS terminal states before the epilogue | The final row of each prefill call and each decode input can change the target epilogue KV. |
 | `hidden-blocks` | Terminal guidance plus extrapolation on the corresponding nonshared normalized core blocks | The same prediction rows as `hidden`. |
 
-The logit combination uses only the unpadded vocabulary and applies the model
-softcap once per branch, before combining. Hidden modes draw their reference
-from the existing core bank. Group a prompt into a single prefill call when
-comparing quality, because each prefill call guides its final row.
+For Q8_0 output weights, the two normalized epilogue rows share a single
+two-row projection. The logit combination uses only the unpadded vocabulary
+and applies the model softcap once per branch, before combining. Hidden modes
+draw their reference from the existing core bank. Group a prompt into a
+single prefill call when comparing quality, because each prefill call guides
+its final row.
 
 On 30 fresh N-Hop prompts with the research IQ4_NL checkpoint, `logits` at
 strength 0.25 corrected one answer (15/30 to 16/30). Both hidden modes produced
-the same answers as ordinary three-pass inference. On a matched 1022-token
-prefix and 192 forced decode inputs on an M2 Max, scalar greedy throughput
-was 30.03 tok/s with ordinary inference, 25.55 tok/s with `logits`, and about
-30 tok/s with either hidden mode. These rates are a single warmed measurement
-per mode. Broader quality and free-generation evidence is needed for a preset.
+the same answers as ordinary three-pass inference. With the original
+separate projections, a warmed M2 Max run on a 1022-token prefix and 192
+forced decode inputs measured 30.03 tok/s for ordinary scalar greedy decode,
+25.55 tok/s for `logits`, and about 30 tok/s for either hidden mode. Broader
+quality and free-generation evidence is needed for a preset.
+
+With the paired Q8_0 projection on the same model and M2 Max, median scalar
+greedy decode rose from 28.48 to 29.60 tok/s on 81 prompt tokens and from
+25.51 to 26.24 tok/s on 1022 prompt tokens, each followed by 48 fixed decode
+inputs. The median paired saving was about 1.2 ms per token in both cases.
+The 1022-token check matched logits, greedy IDs, and both epilogue histories
+bit for bit through the KV ring boundary.
 
 ```sh
 ./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
