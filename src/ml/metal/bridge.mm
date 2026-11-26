@@ -821,6 +821,12 @@ extern "C" int32_t gs_pipeline_max_threads(void* pipeline) {
     return pipeline_max_threads_impl(pipeline);
 }
 
+extern "C" int32_t gs_pipeline_thread_execution_width(void* pipeline_handle) {
+    if (pipeline_handle == nullptr) return 0;
+    id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)pipeline_handle;
+    return (int32_t)pipeline.threadExecutionWidth;
+}
+
 // MetalDispatchFFI (compute encoder)
 extern "C" void* gs_create_compute_encoder(void* cmd) {
     return create_compute_encoder_impl(cmd);

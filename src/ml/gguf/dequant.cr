@@ -1,7 +1,7 @@
 # Dequantization routines for GGUF quantized tensors.
 # Ported from llama.cpp ggml-quants.c
 #
-# Supports: F32, F16, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL.
+# Supports: F32, F16, BF16, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL.
 # QK_K = 256 elements per super-block; QK4_NL = 32 elements per IQ4_NL block.
 
 module ML::GGUF::Dequant
@@ -20,6 +20,7 @@ module ML::GGUF::Dequant
     case type
     when .f32?  then dequantize_f32(data, n_elements)
     when .f16?  then dequantize_f16(data, n_elements)
+    when .bf16? then dequantize_bf16(data, n_elements)
     when .q4_k? then dequantize_q4_k(data, n_elements)
     when .q5_k? then dequantize_q5_k(data, n_elements)
     when .q6_k? then dequantize_q6_k(data, n_elements)
@@ -44,6 +45,16 @@ module ML::GGUF::Dequant
     result = Array(Float32).new(n, 0.0_f32)
     n.times do |i|
       result[i] = fp16_to_f32(data[i * 2, 2])
+    end
+    result
+  end
+
+  # BF16: the stored 16 bits are the high half of an IEEE-754 Float32.
+  def self.dequantize_bf16(data : Bytes, n : Int32) : Array(Float32)
+    result = Array(Float32).new(n, 0.0_f32)
+    n.times do |i|
+      high = IO::ByteFormat::LittleEndian.decode(UInt16, data[i * 2, 2])
+      result[i] = (high.to_u32 << 16).unsafe_as(Float32)
     end
     result
   end
