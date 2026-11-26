@@ -866,7 +866,6 @@ kernel void inkling2_resident_attention_split_parallel(
     constant uint& sliding              [[buffer(20)]],
     constant uint& partitions           [[buffer(21)]],
     constant uint& query_row_offset     [[buffer(22)]],
-    constant uint& score_slots         [[buffer(23)]],
     threadgroup float* cached_scores   [[threadgroup(0)]],
     ushort lane [[thread_index_in_simdgroup]],
     ushort group [[simdgroup_index_in_threadgroup]],
@@ -908,6 +907,8 @@ kernel void inkling2_resident_attention_split_parallel(
     const uint first_end = sliding != 0 ? min(cache_end, capacity - first_slot) : cache_end;
     const uint first_tile_row = max(start, key_begin) - start;
 
+    threadgroup float group_maxima[groups];
+    float local_max = -INFINITY;
     // Keep the group's original stride across span boundaries.
     for (uint i = group; i < count;) {
         const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
@@ -931,20 +932,20 @@ kernel void inkling2_resident_attention_split_parallel(
                 }
                 score += simd_sum(relative_partial);
             }
-            if (lane == 0) cached_scores[i] = score - head_sink;
+            if (lane == 0) {
+                const float stored_score = score - head_sink;
+                cached_scores[i] = stored_score;
+                local_max = max(local_max, stored_score);
+            }
         }
     }
+
+    // Each SIMD group publishes its maximum alongside its cached scores.
+    if (lane == 0) group_maxima[group] = local_max;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Scan the same contiguous partition in the same order as the single-SIMD kernel.
-    if (group == 0 && lane == 0) {
-        float max_score = -INFINITY;
-        for (uint i = 0; i < count; ++i) max_score = max(max_score, cached_scores[i]);
-        cached_scores[score_slots] = max_score;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    const float max_score = cached_scores[score_slots];
+    const float max_score = max(max(group_maxima[0], group_maxima[1]),
+                                max(group_maxima[2], group_maxima[3]));
     const uint channel = group * 32 + lane;
     for (uint i = channel; i < count; i += groups * 32) {
         cached_scores[i] = exp(cached_scores[i] - max_score);

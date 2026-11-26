@@ -1111,13 +1111,11 @@ module ML::GGUF
         if parallel
           split_pipeline = "inkling2_resident_attention_split_parallel"
           threads = SPLIT_PARALLEL_THREADS
-          score_slots = partition_size
-          shared_floats = score_slots + 1 # One extra float for the partition maximum.
+          shared_floats = partition_size
         else
           split_pipeline = "inkling2_resident_attention_split"
           threads = 32
-          score_slots = Math.min(partition_size, SPLIT_SCORE_CACHE_LIMIT)
-          shared_floats = score_slots
+          shared_floats = Math.min(partition_size, SPLIT_SCORE_CACHE_LIMIT)
         end
         encoder.set_pipeline(pipeline(split_pipeline))
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
@@ -1125,7 +1123,7 @@ module ML::GGUF
         encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
         encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
         encoder.set_value(query_row_offset.to_u32, 22)
-        encoder.set_value(score_slots.to_u32, 23)
+        encoder.set_value(shared_floats.to_u32, 23) unless parallel
         encoder.set_threadgroup_memory(((shared_floats + 3) // 4) * 16, 0)
         encoder.dispatch({threads * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {threads, 1, 1})
 
