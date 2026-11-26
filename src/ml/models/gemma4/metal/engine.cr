@@ -394,8 +394,7 @@ module ML::GGUF
         def run! : ML::MetalBuffer
           cmd = ML::Metal::CommandBuffer.new
           @graph.encode(cmd)
-          cmd.commit
-          cmd.wait
+          cmd.commit_and_wait
           @out_buf
         end
 
@@ -815,8 +814,7 @@ module ML::GGUF
         ok = encode_layer_tail_resident_buffer_inputs(enc, x_buf, attn_projected_buf, out_buf, lw, hp, scratch)
         enc.end_encoding
         return nil unless ok
-        cmd.commit
-        cmd.wait
+        cmd.commit_and_wait
         out_buf
       end
 
@@ -837,8 +835,7 @@ module ML::GGUF
 
         cmd = ML::Metal::CommandBuffer.new
         graph.encode(cmd)
-        cmd.commit
-        cmd.wait
+        cmd.commit_and_wait
         out_buf
       end
 

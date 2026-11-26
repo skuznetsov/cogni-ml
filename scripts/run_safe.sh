@@ -24,6 +24,7 @@ set -m 2>/dev/null || true
 BINARY="${1:-}"
 TIMEOUT="${2:-120}"
 MAX_MEM="${3:-8192}"
+MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
 if [ "$#" -ge 3 ]; then
   shift 3
 else
@@ -34,12 +35,20 @@ if [ -z "$BINARY" ]; then
   echo "Usage: $0 <binary> [timeout_sec=120] [max_mem_mb=8192] [args...]"
   exit 1
 fi
+if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]{0,8}$ && "$MAX_MEM" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then
+  echo "[ABORT] run_safe needs a positive timeout and a non-negative RSS limit (0 disables RSS limiting)" >&2
+  exit 2
+fi
+if ! [[ "$MIN_FREE_PCT" =~ ^(100|[1-9]?[0-9])$ ]]; then
+  echo "[ABORT] COGNI_RUN_SAFE_MIN_FREE_PCT must be an integer between 0 and 100" >&2
+  exit 2
+fi
 
 STDOUT_TMP=$(mktemp /tmp/run_safe_stdout.XXXXXX)
 STDERR_TMP=$(mktemp /tmp/run_safe_stderr.XXXXXX)
 WATCHDOG_PID=""
+PRESSURE_TOOL=""
 PASSTHROUGH_STDIO="${RUN_SAFE_PASSTHROUGH_STDIO:-0}"
-MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
 WAIT_QUIET_SEC="${COGNI_RUN_SAFE_WAIT_QUIET_SEC:-0}"
 QUIET_POLL_SEC="${COGNI_RUN_SAFE_QUIET_POLL_SEC:-1}"
 QUIET_PROC_PCT="${COGNI_RUN_SAFE_QUIET_PROC_PCT:-50}"
@@ -175,11 +184,9 @@ rss_tree_kb() {
 }
 
 system_free_pct() {
-  if ! command -v memory_pressure >/dev/null 2>&1; then
-    echo ""
-    return 0
-  fi
-  memory_pressure -Q 2>/dev/null | awk -F': ' '/System-wide memory free percentage/ {gsub(/%/, "", $2); print $2; exit}'
+  local snapshot
+  snapshot=$(LC_ALL=C "$PRESSURE_TOOL" -Q 2>/dev/null) || return 1
+  awk '/System-wide memory free percentage:/ { sub(/%$/, "", $NF); print $NF }' <<< "$snapshot"
 }
 
 require_memory_headroom() {
@@ -187,13 +194,17 @@ require_memory_headroom() {
   if [ "$MIN_FREE_PCT" -le 0 ]; then
     return 0
   fi
-  free_pct=$(system_free_pct)
-  if [ -z "$free_pct" ]; then
-    if command -v memory_pressure >/dev/null 2>&1; then
-      log_line "[ABORT] Cannot read system memory pressure before launch"
+  if ! PRESSURE_TOOL=$(command -v memory_pressure); then
+    if [ "$(uname -s)" = Darwin ]; then
+      log_line "[ABORT] Cannot find memory_pressure before launch"
       exit 75
     fi
     return 0
+  fi
+  free_pct=$(system_free_pct)
+  if ! [[ "$free_pct" =~ ^(100|[1-9]?[0-9])$ ]]; then
+    log_line "[ABORT] Cannot read system memory pressure before launch"
+    exit 75
   fi
   if [ "$free_pct" -le "$MIN_FREE_PCT" ]; then
     log_line "[ABORT] Insufficient system memory headroom before launch: free ${free_pct}% <= ${MIN_FREE_PCT}%"
@@ -246,25 +257,18 @@ stop_watchdog() {
 }
 
 kill_tree_briefly() {
-  local pids
+  local target="$PID"
   if [ "$TREE_STOPPED" -eq 1 ]; then
     return 0
   fi
   TREE_STOPPED=1
-  pids=$(process_tree | tr ' ' '\n' | awk 'NF {print}' | sort -rn)
   if [ "$CAN_KILL_PGID" -eq 1 ]; then
-    kill -TERM "-$PGID" 2>/dev/null || true
+    target="-$PGID"
   fi
-  if [ -n "$pids" ]; then
-    kill -TERM $pids 2>/dev/null || true
-  fi
+  [ -n "$target" ] || return 0
+  kill -TERM "$target" 2>/dev/null || true
   sleep 0.5
-  if [ "$CAN_KILL_PGID" -eq 1 ]; then
-    kill -KILL "-$PGID" 2>/dev/null || true
-  fi
-  if [ -n "$pids" ]; then
-    kill -KILL $pids 2>/dev/null || true
-  fi
+  kill -KILL "$target" 2>/dev/null || true
 }
 
 cleanup() {
@@ -308,7 +312,9 @@ finish_launch() {
 
 timeout_wrapper() {
   trap '' HUP INT QUIT TERM USR1
+  log_line "[KILL] Timeout after ${TIMEOUT}s"
   kill_tree_briefly
+  dump_captured_output
   exit 1
 }
 
@@ -360,30 +366,28 @@ fi
 finish_launch
 set +m 2>/dev/null || true
 RUN_SAFE_PID=$$
+STARTED=$SECONDS
+DEADLINE=$((STARTED + TIMEOUT))
 
 (
   WATCHDOG_SELF=$(/bin/sh -c 'printf "%s\n" "$PPID"')
-  WATCHDOG_TICKS=0
-  WATCHDOG_MAX_TICKS=$(((TIMEOUT + 2) * 2))
-  while [ "$WATCHDOG_TICKS" -lt "$WATCHDOG_MAX_TICKS" ]; do
+  while :; do
     WATCHDOG_PARENT=$(/bin/ps -o ppid= -p "$WATCHDOG_SELF" 2>/dev/null | tr -d ' ')
     if [ "$WATCHDOG_PARENT" != "$RUN_SAFE_PID" ]; then
       kill -KILL "-$PGID" 2>/dev/null || true
       exit 0
     fi
+    if (( SECONDS >= DEADLINE )); then break; fi
     sleep 0.5
-    WATCHDOG_TICKS=$((WATCHDOG_TICKS + 1))
   done
+  kill -USR1 "$RUN_SAFE_PID" 2>/dev/null || true
   kill -TERM "-$PGID" 2>/dev/null || true
   sleep 0.5
   kill -KILL "-$PGID" 2>/dev/null || true
-  kill -USR1 "$RUN_SAFE_PID" 2>/dev/null || true
 ) &
 WATCHDOG_PID=$!
 
-HALF_SECS=0
-MAX_HALF_SECS=$((TIMEOUT * 2))
-while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
+while (( SECONDS < DEADLINE )); do
   if [ "$PARENT_DONE" -eq 0 ] && ! kill -0 "$PID" 2>/dev/null; then
     wait "$PID"
     PARENT_EXIT=$?
@@ -395,47 +399,49 @@ while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
     dump_captured_output
     if [ $PARENT_EXIT -eq 139 ]; then log_line "[CRASH] Segfault (exit 139)"; fi
     if [ $PARENT_EXIT -eq 134 ]; then log_line "[CRASH] Abort (exit 134)"; fi
-    SECS=$((HALF_SECS / 2))
+    SECS=$((SECONDS - STARTED))
     log_line "[EXIT: $PARENT_EXIT] after ~${SECS}s"
     exit "$PARENT_EXIT"
   fi
 
-  FREE_PCT=$(system_free_pct)
-
-  if [ -n "$FREE_PCT" ] && [ "$MIN_FREE_PCT" -gt 0 ] && [ "$FREE_PCT" -le "$MIN_FREE_PCT" ]; then
-    SECS=$((HALF_SECS / 2))
-    log_line "[KILL] System memory pressure: free ${FREE_PCT}% <= ${MIN_FREE_PCT}% after ~${SECS}s"
-    kill_tree_briefly
-    dump_captured_output
-    exit 1
+  if [ -n "$PRESSURE_TOOL" ]; then
+    FREE_PCT=$(system_free_pct)
+    if ! [[ "$FREE_PCT" =~ ^(100|[1-9]?[0-9])$ ]]; then
+      log_line "[KILL] Cannot read system memory pressure during execution"
+      kill_tree_briefly
+      dump_captured_output
+      exit 1
+    fi
+    if [ "$FREE_PCT" -le "$MIN_FREE_PCT" ]; then
+      log_line "[KILL] System memory pressure: free ${FREE_PCT}% <= ${MIN_FREE_PCT}% after ~$((SECONDS - STARTED))s"
+      kill_tree_briefly
+      dump_captured_output
+      exit 1
+    fi
   fi
 
   FD_COUNT=$(fd_tree_count)
-  RSS=$(rss_tree_kb)
 
   if [ -n "$FD_COUNT" ] && [ "$FD_COUNT" -gt 1000 ]; then
-    SECS=$((HALF_SECS / 2))
+    SECS=$((SECONDS - STARTED))
     log_line "[KILL] FD leak detected in process tree: $FD_COUNT FDs after ~${SECS}s"
     kill_tree_briefly
     dump_captured_output
     exit 1
   fi
 
-  if [ -n "$RSS" ] && [ "$RSS" -gt $((MAX_MEM * 1024)) ]; then
-    SECS=$((HALF_SECS / 2))
-    log_line "[KILL] Memory limit for process tree: ${RSS}KB > ${MAX_MEM}MB after ~${SECS}s"
-    kill_tree_briefly
-    dump_captured_output
-    exit 1
+  if [ "$MAX_MEM" -gt 0 ]; then
+    RSS=$(rss_tree_kb)
+    if [ -n "$RSS" ] && [ "$RSS" -gt $((MAX_MEM * 1024)) ]; then
+      SECS=$((SECONDS - STARTED))
+      log_line "[KILL] Memory limit for process tree: ${RSS}KB > ${MAX_MEM}MB after ~${SECS}s"
+      kill_tree_briefly
+      dump_captured_output
+      exit 1
+    fi
   fi
 
   sleep 0.5
-  HALF_SECS=$((HALF_SECS + 1))
 done
 
-FD_COUNT=$(fd_tree_count)
-RSS=$(rss_tree_kb)
-log_line "[KILL] Timeout after ${TIMEOUT}s (tree FDs: ${FD_COUNT:-?}, tree RSS: ${RSS:-?}KB)"
-kill_tree_briefly
-dump_captured_output
-exit 1
+timeout_wrapper

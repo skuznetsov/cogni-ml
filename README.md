@@ -1416,6 +1416,33 @@ make build_cpu
 make spec_cpu
 ```
 
+`make spec` and `make spec_cpu` run the Crystal command in an isolated
+process group with a 900-second deadline, a 16 GiB RSS limit, and a 25% free
+memory floor on macOS. Specs that load `spec_helper.cr` also have a
+120-second limit per example, including example hooks. This watchdog runs
+outside the test process so it can report the example and stop the process
+even if Crystal is blocked in a native call. A failed resource check or a
+timeout exits nonzero with the reason. The macOS memory pressure check covers
+system-wide pressure, including unified memory that may not appear in RSS.
+
+For a targeted run, pass Crystal's spec filters through `ARGS`.
+
+```sh
+make spec ARGS='spec/gemma4_metal_buffer_spec.cr --example "graph-backed Gemma4 layer tail"'
+```
+
+Set `COGNI_SPEC_SUITE_TIMEOUT_SEC`, `COGNI_SPEC_EXAMPLE_TIMEOUT_SEC`,
+`COGNI_SPEC_MAX_RSS_MB`, or `COGNI_SPEC_MIN_FREE_PCT` to adjust the limits.
+Set the example timeout, RSS limit, or memory floor to `0` to disable that
+limit. Direct `crystal spec` runs that load the shared helper also honor
+`COGNI_SPEC_RSS_POLL_SEC` (0.5 seconds by default) and
+`COGNI_SPEC_RSS_GUARD=0` to disable the in-spec watchdog. The guards rely on
+the OS continuing to schedule processes during failures. Verify them without
+a model by running `bash scripts/spec_watchdog_check.sh`.
+
+`COGNI_METAL_COMMAND_TIMEOUT_MS` controls the Metal watchdog for synchronous
+submissions through `commit_and_wait`, including submission and completion.
+
 llama.cpp helper targets:
 
 ```sh

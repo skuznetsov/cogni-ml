@@ -6,6 +6,11 @@ BUILD_SENTINEL := $(BUILD_DIR)/.dir
 ARGS ?=
 UNAME_S := $(shell uname -s)
 IS_DARWIN := $(filter Darwin,$(UNAME_S))
+COGNI_SPEC_SUITE_TIMEOUT_SEC ?= 900
+COGNI_SPEC_MAX_RSS_MB ?= 16384
+COGNI_SPEC_MIN_FREE_PCT ?= $(if $(IS_DARWIN),25,0)
+SPEC_RUNNER = COGNI_RUN_SAFE_MIN_FREE_PCT="$(COGNI_SPEC_MIN_FREE_PCT)" RUN_SAFE_PASSTHROUGH_STDIO=1 \
+	scripts/run_safe.sh $(CRYSTAL) "$(COGNI_SPEC_SUITE_TIMEOUT_SEC)" "$(COGNI_SPEC_MAX_RSS_MB)"
 BREW_PREFIX := $(shell if command -v brew >/dev/null 2>&1; then brew --prefix; fi)
 LLAMA_LIB_DIR ?= $(firstword \
 	$(dir $(wildcard $(LLAMA_BUILD)/bin/libllama.*)) \
@@ -943,7 +948,7 @@ spec_hy_nomas_residency:
 	$(CRYSTAL) spec spec/hy_nomas_residency_plan_spec.cr $(ARGS)
 
 spec: $(BRIDGE_OBJ) $(VIDEO_SPEC_OBJS)
-	$(CRYSTAL) spec \
+	$(SPEC_RUNNER) spec \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(VIDEO_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)
@@ -1043,7 +1048,7 @@ $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: benchmarks/qwen35/benchm
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 
 spec_cpu:
-	$(CRYSTAL) spec -Dcpu_only
+	$(SPEC_RUNNER) spec -Dcpu_only $(ARGS)
 
 # Q4_K dequantization reference helper — links llama.cpp's libggml-base
 # so specs can bit-compare Crystal output against the reference.
