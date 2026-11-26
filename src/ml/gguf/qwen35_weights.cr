@@ -2,6 +2,7 @@ require "./reader"
 require "./compute" # for QuantWeight
 require "./qwen35_meta"
 {% unless flag?(:cpu_only) %}
+  require "./qwen35_weight_buffer_set"
   require "./qwen35_metal"
 {% end %}
 
@@ -88,6 +89,7 @@ module ML::GGUF
     @q4_gemv_x16_capability : Q4GemvX16Capability
     {% unless flag?(:cpu_only) %}
       @mmap_base : Pointer(UInt8)?
+      @weight_buffer_set : Qwen35WeightBufferSet?
     {% end %}
 
     def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
@@ -100,6 +102,7 @@ module ML::GGUF
       )
       {% unless flag?(:cpu_only) %}
         @mmap_base = nil
+        @weight_buffer_set = nil
       {% end %}
       @token_embd = load_qw(@gguf, "token_embd.weight")
       @output_norm = load_f32(@gguf, "output_norm.weight")
@@ -127,8 +130,16 @@ module ML::GGUF
         if Qwen35Metal.available?
           if region = @gguf.mmap_region
             base, size = region
-            Qwen35Metal.register_mmap(base, size)
-            @mmap_base = base
+            {% if flag?(:qwen_bounded_weight_views) %}
+              @weight_buffer_set = Qwen35WeightBufferSet.new(
+                base,
+                size,
+                quant_weights,
+              )
+            {% else %}
+              Qwen35Metal.register_mmap(base, size)
+              @mmap_base = base
+            {% end %}
           end
         end
       {% end %}
@@ -168,6 +179,10 @@ module ML::GGUF
         return if @closed
 
         {% unless flag?(:cpu_only) %}
+          if buffers = @weight_buffer_set
+            buffers.close
+            @weight_buffer_set = nil
+          end
           if base = @mmap_base
             Qwen35Metal.unregister_mmap(base)
             @mmap_base = nil
@@ -178,8 +193,56 @@ module ML::GGUF
       end
     end
 
+    {% unless flag?(:cpu_only) %}
+      def mmap_buffer_stats : NamedTuple(mode: Symbol, buffers: Int32, bytes: Int64,
+        planned_buffers: Int32, planned_bytes: Int64)
+        if buffers = @weight_buffer_set
+          buffers.stats
+        else
+          stats = Qwen35Metal.mmap_buffer_stats
+          {
+            mode:            stats[:mode],
+            buffers:         stats[:buffers],
+            bytes:           stats[:bytes],
+            planned_buffers: stats[:buffers],
+            planned_bytes:   stats[:bytes],
+          }
+        end
+      end
+    {% end %}
+
     def finalize
       close
+    end
+
+    private def quant_weights : Array(QuantWeight)
+      weights = [@token_embd, @output]
+      @layers.each do |layer|
+        case layer
+        when Qwen35FullAttnWeights
+          weights.concat([
+            layer.attn_q_qw,
+            layer.attn_k_qw,
+            layer.attn_v_qw,
+            layer.attn_output_qw,
+            layer.ffn_gate_qw,
+            layer.ffn_up_qw,
+            layer.ffn_down_qw,
+          ])
+        when Qwen35RecurrentWeights
+          weights.concat([
+            layer.attn_qkv_qw,
+            layer.attn_gate_qw,
+            layer.ssm_alpha_qw,
+            layer.ssm_beta_qw,
+            layer.ssm_out_qw,
+            layer.ffn_gate_qw,
+            layer.ffn_up_qw,
+            layer.ffn_down_qw,
+          ])
+        end
+      end
+      weights
     end
 
     private def load_full_attn_layer(g : GGUFFile, il : Int32) : Qwen35FullAttnWeights

@@ -337,9 +337,17 @@ begin
   raise "first-command diagnostic did not reach its stop boundary" if first_command
   ML::Metal::Device.synchronize
   if prefix_trace
+    prefix_state_sha256 = state_fingerprint(baseline, hp, prefix_count, validate_finite: true)
+    mmap_buffer_stats = loaded.mmap_buffer_stats
     puts({event: "prefix", phase: "end", tokens: prefix_count, capacity: capacity}.to_json)
     puts({event: "summary", mode: prefix_profile ? "prefix_profile" : "prefix_trace", passed: true,
-          scope: "prefix_completion_only_not_parity_speed_or_stability"}.to_json)
+          scope: "prefix_completion_with_exact_state_fingerprint_not_speed_or_stability",
+          prefix_state_sha256: prefix_state_sha256,
+          mmap_buffer_mode: mmap_buffer_stats[:mode],
+          mmap_buffer_count: mmap_buffer_stats[:buffers],
+          mmap_buffer_bytes: mmap_buffer_stats[:bytes],
+          mmap_planned_buffer_count: mmap_buffer_stats[:planned_buffers],
+          mmap_planned_buffer_bytes: mmap_buffer_stats[:planned_bytes]}.to_json)
   else
     candidate = CPU::State.new(hp, capacity, kv_cache_f16: false)
     states << candidate
@@ -392,9 +400,15 @@ begin
     end
   end
 rescue ex : ML::GGUF::QwenFirstCommandProbe::Completed
+  mmap_buffer_stats = weights.not_nil!.mmap_buffer_stats
   puts({event: "summary", mode: "first_command_only", passed: true,
         scope: "first_shared_command_only_not_prefix_completion_parity_speed_or_stability",
-        prefix_complete: false, state_reusable: false}.to_json)
+        prefix_complete: false, state_reusable: false,
+        mmap_buffer_mode: mmap_buffer_stats[:mode],
+        mmap_buffer_count: mmap_buffer_stats[:buffers],
+        mmap_buffer_bytes: mmap_buffer_stats[:bytes],
+        mmap_planned_buffer_count: mmap_buffer_stats[:planned_buffers],
+        mmap_planned_buffer_bytes: mmap_buffer_stats[:planned_bytes]}.to_json)
   STDOUT.flush
 rescue ex
   puts({event: "summary", passed: false, error: ex.message}.to_json)

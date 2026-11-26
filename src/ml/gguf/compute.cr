@@ -15,6 +15,14 @@ module ML::GGUF
     Qwen38
   end
 
+  {% unless flag?(:cpu_only) %}
+    # Model-owned resolver for zero-copy Metal weight bindings. Implementations
+    # retain the returned buffers until all inference is quiescent.
+    abstract class MetalWeightSlotProvider
+      abstract def slot_for(weight : QuantWeight) : {ML::MetalBuffer, Int64}?
+    end
+  {% end %}
+
   # Quantized weight: raw bytes + type for on-the-fly dequant during matmul.
   #
   # Reference semantics (class, not struct) so weights can cache a
@@ -31,12 +39,33 @@ module ML::GGUF
     getter q4_gemv_x16_capability : Q4GemvX16Capability
 
     @metal_buf : ML::MetalBuffer? = nil
+    {% unless flag?(:cpu_only) %}
+      @metal_slot_provider : MetalWeightSlotProvider? = nil
+    {% end %}
 
     def initialize(@raw, @type, @out_dim, @in_dim, @route_tag = nil,
                    @q4_gemv_x16_capability = Q4GemvX16Capability::Unknown)
     end
 
     {% unless flag?(:cpu_only) %}
+      def bind_metal_slot_provider(provider : MetalWeightSlotProvider) : Nil
+        current = @metal_slot_provider
+        if current && !current.same?(provider)
+          raise "quantized weight already belongs to another Metal slot provider"
+        end
+        @metal_slot_provider = provider
+      end
+
+      def unbind_metal_slot_provider(provider : MetalWeightSlotProvider) : Bool
+        return false unless @metal_slot_provider.try(&.same?(provider))
+        @metal_slot_provider = nil
+        true
+      end
+
+      def model_metal_slot : {ML::MetalBuffer, Int64}?
+        @metal_slot_provider.try(&.slot_for(self))
+      end
+
       # Per-weight MetalBuffer for raw bytes not covered by the model's
       # whole-mmap buffer (test code, ad-hoc tensors). Allocated and
       # populated via a single memcpy on first call, then reused.

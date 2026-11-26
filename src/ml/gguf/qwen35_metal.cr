@@ -1055,11 +1055,7 @@ module ML
               aligned_size.to_i64,
             )
 
-            if buf = @@mmap_buf
-              # Replace previous — release the ObjC wrapper (not the bytes).
-              # Callers must quiesce users before replacing a registration.
-              buf.release
-            end
+            release_mmap_buffer_locked
 
             @@mmap_base_addr = base.address
             @@mmap_size = aligned_size.to_i64
@@ -1080,8 +1076,7 @@ module ML
             buf = @@mmap_buf
             return false unless buf
 
-            buf.release
-            @@mmap_buf = nil
+            release_mmap_buffer_locked
             @@mmap_base_addr = 0_u64
             @@mmap_size = 0_i64
             ConstCache.clear
@@ -1094,19 +1089,37 @@ module ML
         # fall back to per-weight upload.
         private def self.mmap_slot_for(raw : Bytes) : {ML::MetalBuffer, Int64}?
           @@mmap_registry_mutex.synchronize do
-            return nil if @@mmap_buf.nil?
             base = @@mmap_base_addr
             size = @@mmap_size
+            return nil if @@mmap_buf.nil?
             addr = raw.to_unsafe.address
             return nil if addr < base
             off = (addr - base).to_i64
             return nil if off + raw.size > size
+
             {@@mmap_buf.not_nil!, off}
           end
         end
 
+        def self.mmap_buffer_stats : NamedTuple(mode: Symbol, buffers: Int32, bytes: Int64)
+          @@mmap_registry_mutex.synchronize do
+            buffer = @@mmap_buf
+            {mode: :whole, buffers: buffer ? 1 : 0,
+             bytes: buffer ? buffer.size : 0_i64}
+          end
+        end
+
+        private def self.release_mmap_buffer_locked : Nil
+          if buffer = @@mmap_buf
+            buffer.release
+            @@mmap_buf = nil
+          end
+        end
+
         private def self.weight_slot(qw : QuantWeight) : {ML::MetalBuffer, Int64}
-          if slot = mmap_slot_for(qw.raw)
+          if slot = qw.model_metal_slot
+            slot
+          elsif slot = mmap_slot_for(qw.raw)
             slot
           else
             {qw.fallback_metal_buffer, 0_i64}
@@ -3896,11 +3909,7 @@ module ML
           gate_buf.write(gate)
 
           cache_len = pos + 1
-          w_buf, w_off = if slot = mmap_slot_for(out_qw.raw)
-                           slot
-                         else
-                           {out_qw.fallback_metal_buffer, 0_i64}
-                         end
+          w_buf, w_off = weight_slot(out_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5237,11 +5246,7 @@ module ML
           z_buf.write(z)
           norm_buf.write(ssm_norm)
 
-          w_buf, w_off = if slot = mmap_slot_for(out_qw.raw)
-                           slot
-                         else
-                           {out_qw.fallback_metal_buffer, 0_i64}
-                         end
+          w_buf, w_off = weight_slot(out_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5314,11 +5319,7 @@ module ML
           mid_buf  = Scratch.get(:dn_out,      inner_dim.to_i64 * sizeof(Float32))
           proj_buf = Scratch.get(:dn_proj_out, out_qw.out_dim.to_i64 * sizeof(Float32))
 
-          w_buf, w_off = if slot = mmap_slot_for(out_qw.raw)
-                           slot
-                         else
-                           {out_qw.fallback_metal_buffer, 0_i64}
-                         end
+          w_buf, w_off = weight_slot(out_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5397,21 +5398,9 @@ module ML
           out_buf    = Scratch.get(:ffn_out,     down_qw.out_dim.to_i64 * sizeof(Float32))
           x_buf.write(x)
 
-          gate_w_buf, gate_w_off = if slot = mmap_slot_for(gate_qw.raw)
-                                     slot
-                                   else
-                                     {gate_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          up_w_buf, up_w_off = if slot = mmap_slot_for(up_qw.raw)
-                                 slot
-                               else
-                                 {up_qw.fallback_metal_buffer, 0_i64}
-                               end
-          down_w_buf, down_w_off = if slot = mmap_slot_for(down_qw.raw)
-                                     slot
-                                   else
-                                     {down_qw.fallback_metal_buffer, 0_i64}
-                                   end
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          down_w_buf, down_w_off = weight_slot(down_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5495,26 +5484,10 @@ module ML
           residual_buf.write(residual)
           norm_w_buf.write(norm_weight)
 
-          gate_w_buf, gate_w_off = if slot = mmap_slot_for(gate_qw.raw)
-                                     slot
-                                   else
-                                     {gate_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          up_w_buf, up_w_off = if slot = mmap_slot_for(up_qw.raw)
-                                 slot
-                               else
-                                 {up_qw.fallback_metal_buffer, 0_i64}
-                               end
-          down_w_buf, down_w_off = if slot = mmap_slot_for(down_qw.raw)
-                                     slot
-                                   else
-                                     {down_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          head_w_buf, head_w_off = if slot = mmap_slot_for(head_qw.raw)
-                                     slot
-                                   else
-                                     {head_qw.fallback_metal_buffer, 0_i64}
-                                   end
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          down_w_buf, down_w_off = weight_slot(down_qw)
+          head_w_buf, head_w_off = weight_slot(head_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5629,26 +5602,10 @@ module ML
           residual_buf.write(residual)
           norm_w_buf.write(norm_weight)
 
-          gate_w_buf, gate_w_off = if slot = mmap_slot_for(gate_qw.raw)
-                                     slot
-                                   else
-                                     {gate_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          up_w_buf, up_w_off = if slot = mmap_slot_for(up_qw.raw)
-                                 slot
-                               else
-                                 {up_qw.fallback_metal_buffer, 0_i64}
-                               end
-          down_w_buf, down_w_off = if slot = mmap_slot_for(down_qw.raw)
-                                     slot
-                                   else
-                                     {down_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          head_w_buf, head_w_off = if slot = mmap_slot_for(head_qw.raw)
-                                     slot
-                                   else
-                                     {head_qw.fallback_metal_buffer, 0_i64}
-                                   end
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          down_w_buf, down_w_off = weight_slot(down_qw)
+          head_w_buf, head_w_off = weight_slot(head_qw)
 
           cmd = ML::Metal::CommandBuffer.new
 
@@ -5770,31 +5727,11 @@ module ML
           ssm_a_buf.write(ssm_a)
           norm_buf.write(ssm_norm)
 
-          qkv_w_buf, qkv_w_off = if slot = mmap_slot_for(attn_qkv_qw.raw)
-                                   slot
-                                 else
-                                   {attn_qkv_qw.fallback_metal_buffer, 0_i64}
-                                 end
-          gate_w_buf, gate_w_off = if slot = mmap_slot_for(attn_gate_qw.raw)
-                                     slot
-                                   else
-                                     {attn_gate_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          alpha_w_buf, alpha_w_off = if slot = mmap_slot_for(ssm_alpha_qw.raw)
-                                       slot
-                                     else
-                                       {ssm_alpha_qw.fallback_metal_buffer, 0_i64}
-                                     end
-          beta_w_buf, beta_w_off = if slot = mmap_slot_for(ssm_beta_qw.raw)
-                                     slot
-                                   else
-                                     {ssm_beta_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          out_w_buf, out_w_off = if slot = mmap_slot_for(ssm_out_qw.raw)
-                                   slot
-                                 else
-                                   {ssm_out_qw.fallback_metal_buffer, 0_i64}
-                                 end
+          qkv_w_buf, qkv_w_off = weight_slot(attn_qkv_qw)
+          gate_w_buf, gate_w_off = weight_slot(attn_gate_qw)
+          alpha_w_buf, alpha_w_off = weight_slot(ssm_alpha_qw)
+          beta_w_buf, beta_w_off = weight_slot(ssm_beta_qw)
+          out_w_buf, out_w_off = weight_slot(ssm_out_qw)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -5982,46 +5919,14 @@ module ML
           ssm_norm_buf.write(ssm_norm)
           post_norm_buf.write(post_attention_norm)
 
-          qkv_w_buf, qkv_w_off = if slot = mmap_slot_for(attn_qkv_qw.raw)
-                                   slot
-                                 else
-                                   {attn_qkv_qw.fallback_metal_buffer, 0_i64}
-                                 end
-          gate_w_buf, gate_w_off = if slot = mmap_slot_for(attn_gate_qw.raw)
-                                     slot
-                                   else
-                                     {attn_gate_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          alpha_w_buf, alpha_w_off = if slot = mmap_slot_for(ssm_alpha_qw.raw)
-                                       slot
-                                     else
-                                       {ssm_alpha_qw.fallback_metal_buffer, 0_i64}
-                                     end
-          beta_w_buf, beta_w_off = if slot = mmap_slot_for(ssm_beta_qw.raw)
-                                     slot
-                                   else
-                                     {ssm_beta_qw.fallback_metal_buffer, 0_i64}
-                                   end
-          out_w_buf, out_w_off = if slot = mmap_slot_for(ssm_out_qw.raw)
-                                   slot
-                                 else
-                                   {ssm_out_qw.fallback_metal_buffer, 0_i64}
-                                 end
-          ffn_gate_w_buf, ffn_gate_w_off = if slot = mmap_slot_for(ffn_gate_qw.raw)
-                                             slot
-                                           else
-                                             {ffn_gate_qw.fallback_metal_buffer, 0_i64}
-                                           end
-          ffn_up_w_buf, ffn_up_w_off = if slot = mmap_slot_for(ffn_up_qw.raw)
-                                         slot
-                                       else
-                                         {ffn_up_qw.fallback_metal_buffer, 0_i64}
-                                       end
-          ffn_down_w_buf, ffn_down_w_off = if slot = mmap_slot_for(ffn_down_qw.raw)
-                                             slot
-                                           else
-                                             {ffn_down_qw.fallback_metal_buffer, 0_i64}
-                                           end
+          qkv_w_buf, qkv_w_off = weight_slot(attn_qkv_qw)
+          gate_w_buf, gate_w_off = weight_slot(attn_gate_qw)
+          alpha_w_buf, alpha_w_off = weight_slot(ssm_alpha_qw)
+          beta_w_buf, beta_w_off = weight_slot(ssm_beta_qw)
+          out_w_buf, out_w_off = weight_slot(ssm_out_qw)
+          ffn_gate_w_buf, ffn_gate_w_off = weight_slot(ffn_gate_qw)
+          ffn_up_w_buf, ffn_up_w_off = weight_slot(ffn_up_qw)
+          ffn_down_w_buf, ffn_down_w_off = weight_slot(ffn_down_qw)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -6970,26 +6875,10 @@ module ML
           qnorm_buf.write(q_norm)
           knorm_buf.write(k_norm)
 
-          q_w_buf, q_w_off = if slot = mmap_slot_for(q_qw.raw)
-                               slot
-                             else
-                               {q_qw.fallback_metal_buffer, 0_i64}
-                             end
-          k_w_buf, k_w_off = if slot = mmap_slot_for(k_qw.raw)
-                               slot
-                             else
-                               {k_qw.fallback_metal_buffer, 0_i64}
-                             end
-          v_w_buf, v_w_off = if slot = mmap_slot_for(v_qw.raw)
-                               slot
-                             else
-                               {v_qw.fallback_metal_buffer, 0_i64}
-                             end
-          out_w_buf, out_w_off = if slot = mmap_slot_for(out_qw.raw)
-                                   slot
-                                 else
-                                   {out_qw.fallback_metal_buffer, 0_i64}
-                                 end
+          q_w_buf, q_w_off = weight_slot(q_qw)
+          k_w_buf, k_w_off = weight_slot(k_qw)
+          v_w_buf, v_w_off = weight_slot(v_qw)
+          out_w_buf, out_w_off = weight_slot(out_qw)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -7171,41 +7060,13 @@ module ML
           knorm_buf.write(k_norm)
           post_norm_buf.write(post_attention_norm)
 
-          q_w_buf, q_w_off = if slot = mmap_slot_for(q_qw.raw)
-                               slot
-                             else
-                               {q_qw.fallback_metal_buffer, 0_i64}
-                             end
-          k_w_buf, k_w_off = if slot = mmap_slot_for(k_qw.raw)
-                               slot
-                             else
-                               {k_qw.fallback_metal_buffer, 0_i64}
-                             end
-          v_w_buf, v_w_off = if slot = mmap_slot_for(v_qw.raw)
-                               slot
-                             else
-                               {v_qw.fallback_metal_buffer, 0_i64}
-                             end
-          out_w_buf, out_w_off = if slot = mmap_slot_for(out_qw.raw)
-                                   slot
-                                 else
-                                   {out_qw.fallback_metal_buffer, 0_i64}
-                                 end
-          ffn_gate_w_buf, ffn_gate_w_off = if slot = mmap_slot_for(ffn_gate_qw.raw)
-                                             slot
-                                           else
-                                             {ffn_gate_qw.fallback_metal_buffer, 0_i64}
-                                           end
-          ffn_up_w_buf, ffn_up_w_off = if slot = mmap_slot_for(ffn_up_qw.raw)
-                                         slot
-                                       else
-                                         {ffn_up_qw.fallback_metal_buffer, 0_i64}
-                                       end
-          ffn_down_w_buf, ffn_down_w_off = if slot = mmap_slot_for(ffn_down_qw.raw)
-                                             slot
-                                           else
-                                             {ffn_down_qw.fallback_metal_buffer, 0_i64}
-                                           end
+          q_w_buf, q_w_off = weight_slot(q_qw)
+          k_w_buf, k_w_off = weight_slot(k_qw)
+          v_w_buf, v_w_off = weight_slot(v_qw)
+          out_w_buf, out_w_off = weight_slot(out_qw)
+          ffn_gate_w_buf, ffn_gate_w_off = weight_slot(ffn_gate_qw)
+          ffn_up_w_buf, ffn_up_w_off = weight_slot(ffn_up_qw)
+          ffn_down_w_buf, ffn_down_w_off = weight_slot(ffn_down_qw)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -9438,11 +9299,7 @@ module ML
           x_buf.write(x)
           norm_w_buf.write(norm_weight)
 
-          out_w_buf, out_w_off = if slot = mmap_slot_for(out_qw.raw)
-                                   slot
-                                 else
-                                   {out_qw.fallback_metal_buffer, 0_i64}
-                                 end
+          out_w_buf, out_w_off = weight_slot(out_qw)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -11669,11 +11526,7 @@ module ML
           raise ArgumentError.new("Q4 layout bench x size mismatch") unless x.size == qw.in_dim * batch
 
           ML::Metal::Device.init!
-          w_buf, w_off = if slot = mmap_slot_for(qw.raw)
-                           slot
-                         else
-                           {qw.fallback_metal_buffer, 0_i64}
-                         end
+          w_buf, w_off = weight_slot(qw)
           pipeline = mv_q4_layout_pipeline(nsg, nr0)
           rows_per_tg = nsg * nr0
           threads_per_tg = nsg * 32
@@ -11706,11 +11559,7 @@ module ML
           raise ArgumentError.new("Q6 layout bench x size mismatch") unless x.size == qw.in_dim * batch
 
           ML::Metal::Device.init!
-          w_buf, w_off = if slot = mmap_slot_for(qw.raw)
-                           slot
-                         else
-                           {qw.fallback_metal_buffer, 0_i64}
-                         end
+          w_buf, w_off = weight_slot(qw)
           pipeline = mv_q6_layout_pipeline(nsg, nr0)
           rows_per_tg = nsg * nr0
           threads_per_tg = nsg * 32
@@ -12268,11 +12117,7 @@ module ML
                        else
                          return nil
                        end
-            buf, off = if slot = mmap_slot_for(qw.raw)
-                         slot
-                       else
-                         {qw.fallback_metal_buffer, 0_i64}
-                       end
+            buf, off = weight_slot(qw)
             resolved << {pipeline, buf, off, qw.in_dim, qw.out_dim}
           end
 
@@ -12444,16 +12289,8 @@ module ML
           raise ArgumentError.new("Q4 H16 pair bench x size mismatch") unless x.size == gate_qw.in_dim * batch
 
           ML::Metal::Device.init!
-          gate_buf, gate_off = if slot = mmap_slot_for(gate_qw.raw)
-                                 slot
-                               else
-                                 {gate_qw.fallback_metal_buffer, 0_i64}
-                               end
-          up_buf, up_off = if slot = mmap_slot_for(up_qw.raw)
-                             slot
-                           else
-                             {up_qw.fallback_metal_buffer, 0_i64}
-                           end
+          gate_buf, gate_off = weight_slot(gate_qw)
+          up_buf, up_off = weight_slot(up_qw)
 
           x_buf = Scratch.get(:bench_q4_pair_x, x.size.to_i64 * sizeof(Float32))
           x_buf.write(x)
@@ -12690,11 +12527,7 @@ module ML
         def self.matmul(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
           ML::Metal::Device.init!
 
-          buf, off = if slot = mmap_slot_for(qw.raw)
-                       slot
-                     else
-                       {qw.fallback_metal_buffer, 0_i64}
-                     end
+          buf, off = weight_slot(qw)
 
           case qw.type
           when .q4_k?
