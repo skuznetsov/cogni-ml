@@ -1,0 +1,26 @@
+{
+  "status": "numerical plumbing verified; real ARC pilot blocked by missing data",
+  "source_commit": "7cccdd8bfb02ac388001ab7a61832087d8d1b450",
+  "model_sha256": "091d8deba394f428b67aa42c100ee145fcbecac5a79621935d3655016ca737e5",
+  "torch_version": "2.6.0",
+  "last_block_parameters": 18352640,
+  "label_head_parameters": 8192,
+  "native_parity": [
+    {
+      "task_id": null,
+      "tokens": 4,
+      "max_abs_error": 1.430511474609375e-06
+    }
+  ],
+  "seeded_weight_defect_detected": true,
+  "unit_test_count": 6,
+  "real_arc_training_runs": 0,
+  "arc_quality_measured": false,
+  "source_files_sha256": {
+    "run.py": "5d972bb430ed6235962016388278a09df6f8c32b7f4d9d66c7206cdf63c43c2c",
+    "tail.py": "b1f6c582a54ef0644cfb96460c1896bc751bb00ba49b23251cf5c725c4e8d805",
+    "export.cr": "e44332d2b1f1c706056c2a815d3342a23fbe6a6a53fdeb620ef50da7b0dd15c3",
+    "test_experiment.py": "9799c4ed921402e89f019dc6b1f86faed884c15d3960847bf0fbea48af1e89f6",
+    "data.py": "01543b6f05de5a23007f2d3601ce97b946c7a7a69b0088e344848ec6bb4d0d7c"
+  }
+}
