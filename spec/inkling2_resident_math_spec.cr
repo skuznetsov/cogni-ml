@@ -151,6 +151,53 @@ require "../src/ml/gguf/inkling2_resident_math"
       end
     end
 
+    it "matches three weighted RMS reductions with aliased inputs and offset weights" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      support = Inkling2ResidentMathSpecSupport
+      buffers = [] of ML::MetalBuffer
+      width = 513
+      eps = 1e-6_f32
+      x = support.float_view(Array(Float32).new(2 * width) do |i|
+        ((i * 19) % 157 - 78).to_f32 * 0.033_f32
+      end, buffers)
+      scales = support.float_view(Array(Float32).new(3 * width) do |i|
+        ((i * 31) % 105 - 52).to_f32 * 0.021_f32
+      end, buffers)
+      inputs = {x, x.slice(width), x}
+      weights = {scales, scales.slice(width), scales.slice(2 * width)}
+      guard = -999.0_f32
+      reference = support.guarded_float_view(Array(Float32).new(3 * width, 123.0_f32), 1, buffers)
+      output = support.guarded_float_view(Array(Float32).new(3 * width, 321.0_f32), 1, buffers)
+      math = ML::GGUF::Inkling2ResidentMath
+
+      begin
+        ML::Metal::Dispatch.execute_sequence do |command|
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          begin
+            expect_raises(ArgumentError, /overlaps/) do
+              math.rms_triplet(encoder, inputs, weights, scales, width, eps)
+            end
+            inputs.each_with_index do |input, index|
+              math.rms(encoder, input, reference.slice(index * width), weights[index], width, 1, eps)
+            end
+            math.rms_triplet(encoder, inputs, weights, output, width, eps)
+          ensure
+            encoder.end_encoding
+          end
+        end
+
+        support.read(output, 3 * width + 1).map(&.unsafe_as(UInt32)).should eq(
+          support.read(reference, 3 * width + 1).map(&.unsafe_as(UInt32))
+        )
+        prefix = Inkling2ResidentMathSpecSupport::PREFIX
+        output.buffer.read(prefix).to_a.should eq(Array(Float32).new(prefix, -777.0_f32))
+        support.read(output.slice(3 * width), 1).should eq([guard])
+      ensure
+        buffers.each(&.release)
+      end
+    end
+
     it "encodes offset-aware row and element math in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 

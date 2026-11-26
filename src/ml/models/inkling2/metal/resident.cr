@@ -827,14 +827,17 @@ module ML::GGUF
         if controller && messages
           q, k, v = control_attention(tile, controller, {q, k, v}, messages)
         end
-        q_in = normalize(tile, q, layer.q_norm)
         if sliding && !messages
-          k_in = v_in = q_in
+          q_in = normalize(tile, q, layer.q_norm)
+          {q_in, q_in, q_in}
+        elsif tile.rows == 1 && decode_rms_triplet?
+          output = @scratch.take(MathOps.triplet_elements(tile.width, 3))
+          weights = {constant(layer.q_norm), constant(layer.k_norm), constant(layer.v_norm)}
+          MathOps.rms_triplet(tile.encoder, {q, k, v}, weights, output, tile.width, @config.rms_eps)
+          {output, output.slice(tile.width), output.slice(2 * tile.width)}
         else
-          k_in = normalize(tile, k, layer.k_norm)
-          v_in = normalize(tile, v, layer.v_norm)
+          {normalize(tile, q, layer.q_norm), normalize(tile, k, layer.k_norm), normalize(tile, v, layer.v_norm)}
         end
-        {q_in, k_in, v_in}
       end
       if physical % @config.res_block_size == 0
         block = tile.blocks.slice(tile.block_count * tile.elements)
@@ -958,6 +961,22 @@ module ML::GGUF
       {% end %}
     end
 
+    private def decode_rms_triplet? : Bool
+      {% if flag?(:aarch64) %}
+        true
+      {% else %}
+        false
+      {% end %}
+    end
+
+    private def decode_control_triplet? : Bool
+      {% if flag?(:aarch64) %}
+        true
+      {% else %}
+        false
+      {% end %}
+    end
+
     # Override this predicate in a same-binary probe to compare batched
     # prefill controller evaluation with the reference projection path.
     private def prefill_fused_control? : Bool
@@ -976,7 +995,12 @@ module ML::GGUF
         }
       end
 
-      results = {tile.hidden, tile.hidden, tile.hidden}
+      if decode_fused_control? && decode_control_triplet?
+        packed_results = @scratch.take(MathOps.triplet_elements(tile.width, 3))
+        results = {packed_results, packed_results.slice(tile.width), packed_results.slice(2 * tile.width)}
+      else
+        results = {tile.hidden, tile.hidden, tile.hidden}
+      end
       mark = @scratch.mark
       triplet_rms_concat = decode_rms_concat_triplet?
       feature_dim = 2 * tile.elements
@@ -1002,11 +1026,16 @@ module ML::GGUF
         end
       end
       @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
-      apply_mark = @scratch.mark
-      inputs.each_with_index do |input, index|
-        apply_control(tile, controller, index, input, messages.slice(index * tile.elements),
-          ranks.slice(index * rank_dim), results[index])
-        @scratch.rewind(apply_mark)
+      weights = {0, 1, 2}.map { |index| {controller.gain[index], controller.forget[index]} }
+      unless packed_results && @linear.project_f32_control_triplet(
+               tile.encoder, weights, ranks, inputs, messages, packed_results, tile.width, rank_dim,
+             )
+        apply_mark = @scratch.mark
+        inputs.each_with_index do |input, index|
+          apply_control(tile, controller, index, input, messages.slice(index * tile.elements),
+            ranks.slice(index * rank_dim), results[index])
+          @scratch.rewind(apply_mark)
+        end
       end
       @scratch.rewind(mark)
       results

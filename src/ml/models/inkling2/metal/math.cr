@@ -30,6 +30,35 @@ require "./scratch"
       encoder.dispatch_threadgroups({rows, 1, 1}, {THREADS, 1, 1})
     end
 
+    # Scalar Q, K, and V use separate weights and write consecutive rows.
+    def self.rms_triplet(
+      encoder : ML::Metal::ComputeEncoder,
+      inputs : {Inkling2View, Inkling2View, Inkling2View},
+      weights : {Inkling2View, Inkling2View, Inkling2View},
+      output : Inkling2View, width : Int32, eps : Float32,
+    ) : Nil
+      output_elements = triplet_elements(width, 3)
+      validate_view_extent!(output, output_elements, "RMS triplet output")
+      (inputs + weights).each do |view|
+        validate_view_extent!(view, width, "RMS triplet source")
+        if output.buffer.handle == view.buffer.handle &&
+           output.offset < view.offset + width.to_i64 * sizeof(Float32) &&
+           view.offset < output.offset + output_elements.to_i64 * sizeof(Float32)
+          raise ArgumentError.new("RMS triplet output overlaps a source")
+        end
+      end
+      encoder.set_pipeline(pipeline("inkling2_resident_rms_triplet"))
+      inputs.each_with_index do |input, index|
+        weight = weights[index]
+        encoder.set_buffer(input.buffer, index, offset: input.offset)
+        encoder.set_buffer(weight.buffer, index + 3, offset: weight.offset)
+      end
+      encoder.set_buffer(output.buffer, 6, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(width.to_u32, 7)
+      encoder.set_value(eps, 8)
+      encoder.dispatch_threadgroups({3, 1, 1}, {THREADS, 1, 1})
+    end
+
     # Controller input is the concatenation of independently normalized
     # input and message vectors (Crystal Array#+ concatenates these arrays).
     # Fuse both reductions and the join into one dispatch.

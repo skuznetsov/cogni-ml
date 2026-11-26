@@ -77,7 +77,7 @@ require "../src/ml/gguf/inkling2_engine"
           io.write(f32_bytes(values))
         end
 
-        2.times do |matrix|
+        6.times do |matrix|
           offsets["control_#{matrix}"] = io.pos
           values = Array(Float32).new(64 * 35) do |index|
             ((index * 17 + matrix * 11) % 71 - 35).to_f32 * 0.0091_f32
@@ -280,6 +280,65 @@ require "../src/ml/gguf/inkling2_engine"
         buffers.each(&.release)
         reference.close
         tiled.close
+        gguf.close
+        File.delete?(fixture.path)
+      end
+    end
+
+    it "matches independent scalar control pairs at the channel tail" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      fixture = Inkling2LinearSpecSupport.write_model
+      gguf = ML::GGUF::GGUFFile.new(fixture.path)
+      linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
+      support = Inkling2LinearSpecSupport
+      buffers = [] of ML::MetalBuffer
+      begin
+        rank_dim, width = 64, 35
+        weights = {0, 1, 2}.map do |index|
+          {2 * index, 2 * index + 1}.map do |matrix|
+            raw = support.mapped_bytes(gguf, fixture.offsets["control_#{matrix}"], rank_dim * width * sizeof(Float32))
+            ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::F32, width, rank_dim)
+          end
+        end
+        ranks = support.float_view(Array(Float32).new(3 * rank_dim + 1) do |i|
+          ((i * 19) % 249 - 124).to_f32 * 0.014_f32
+        end, buffers).slice(1)
+        x = support.float_view(Array(Float32).new(2 * width + 1) do |i|
+          ((i * 13) % 83 - 41).to_f32 * 0.031_f32
+        end, buffers).slice(1)
+        messages = support.float_view(Array(Float32).new(3 * width + 2) do |i|
+          ((i * 31) % 139 - 69).to_f32 * 0.017_f32
+        end, buffers).slice(2)
+        inputs = {x, x.slice(width), x}
+        guards = Array(Float32).new(3 * width + 2, 123.0_f32)
+        reference = support.float_view(guards, buffers)
+        output = support.float_view(guards, buffers)
+
+        ML::Metal::Dispatch.execute_sequence do |command|
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          begin
+            linear.project_f32_control_triplet(encoder, weights, ranks, inputs, messages,
+              messages, width, rank_dim).should be_false
+            3.times do |i|
+              linear.project_f32_control_pair(encoder, weights[i], ranks.slice(i * rank_dim),
+                inputs[i], messages.slice(i * width), reference.slice(1 + i * width), width).should be_true
+            end
+            linear.project_f32_control_triplet(encoder, weights, ranks, inputs, messages,
+              output.slice(1), width, rank_dim).should be_true
+          ensure
+            encoder.end_encoding
+          end
+        end
+
+        values = support.read(output, guards.size)
+        values.first.should eq(guards.first)
+        values.last.should eq(guards.last)
+        values[1, 3 * width].should_not contain(guards.first)
+        support.float_bits(values).should eq(support.float_bits(support.read(reference, guards.size)))
+      ensure
+        buffers.each(&.release)
+        linear.close
         gguf.close
         File.delete?(fixture.path)
       end

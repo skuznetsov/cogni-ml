@@ -313,6 +313,43 @@ module ML::GGUF
         true
       end
 
+      # Apply three independent controllers to scalar Q, K, and V. Ranks,
+      # messages and outputs are packed in Q/K/V order.
+      def project_f32_control_triplet(
+        encoder : ML::Metal::ComputeEncoder,
+        weights : Tuple({QuantWeight, QuantWeight}, {QuantWeight, QuantWeight}, {QuantWeight, QuantWeight}),
+        ranks : Inkling2View, inputs : {Inkling2View, Inkling2View, Inkling2View},
+        messages : Inkling2View, output : Inkling2View, output_dim : Int32, rank_dim : Int32,
+      ) : Bool
+        ensure_open!
+        return false unless weights.all? { |pair| pair[0].in_dim == rank_dim && self.class.f32_control_pair_supported?(pair, output_dim) }
+
+        rank_elements = 3_i64 * rank_dim
+        input_elements = output_dim.to_i64
+        output_elements = 3_i64 * output_dim
+        return false unless view_fits?(ranks, rank_elements) && view_fits?(messages, output_elements) &&
+                            view_fits?(output, output_elements) && inputs.all? { |view| view_fits?(view, input_elements) }
+        return false if view_overlaps?(output, output_elements, ranks, rank_elements) ||
+                        view_overlaps?(output, output_elements, messages, output_elements) ||
+                        inputs.any? { |view| view_overlaps?(output, output_elements, view, input_elements) }
+
+        offsets = StaticArray(UInt64, 6).new { |index| model_offset(weights[index // 2][index % 2].raw).to_u64 }
+        name = "inkling2_resident_f32_control_triplet"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        encoder.set_buffer(@model, 0)
+        encoder.set_buffer(ranks.buffer, 1, offset: ranks.offset)
+        inputs.each_with_index do |input, index|
+          encoder.set_buffer(input.buffer, index + 2, offset: input.offset)
+        end
+        encoder.set_buffer(messages.buffer, 5, offset: messages.offset)
+        encoder.set_buffer(output.buffer, 6, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 6, 7)
+        encoder.set_value(rank_dim.to_u32, 8)
+        encoder.set_value(output_dim.to_u32, 9)
+        encoder.dispatch_threadgroups({1 + (output_dim - 1) // 4, 3, 1}, {128, 1, 1})
+        true
+      end
+
       private def f32_control_pair_tiled?(rank_dim : Int32, rows : Int32) : Bool
         {% if flag?(:aarch64) %}
           rank_dim == 64 && rows.in?(MIN_GROUPED_ROWS..(@fast_prefill ? MAX_FAST_GROUPED_ROWS : MAX_GROUPED_ROWS))

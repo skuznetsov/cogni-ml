@@ -4,6 +4,39 @@ using namespace metal;
 constant uint INKLING2_RESIDENT_THREADS = 256;
 constant uint INKLING2_RESIDENT_SIMDGROUPS = 8;
 
+inline void inkling2_resident_rms_row(
+    device const float* x,
+    device const float* weights,
+    device       float* y,
+    uint width,
+    float eps,
+    uint has_weights,
+    ushort tiisg,
+    ushort sgitg,
+    ushort tid,
+    threadgroup float* partials)
+{
+    float square_sum = 0.0f;
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float value = x[column];
+        square_sum += value * value;
+    }
+
+    const float simd_sum_squares = simd_sum(square_sum);
+    if (tiisg == 0) partials[sgitg] = simd_sum_squares;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float total = 0.0f;
+    for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
+        total += partials[group];
+    }
+    const float scale = 1.0f / sqrt(total / (float)width + eps);
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float normalized = x[column] * scale;
+        y[column] = has_weights != 0 ? normalized * weights[column] : normalized;
+    }
+}
+
 kernel void inkling2_resident_rms(
     device const float* input       [[buffer(0)]],
     device const float* weights     [[buffer(1)]],
@@ -20,28 +53,35 @@ kernel void inkling2_resident_rms(
     const uint row = tgpig.x;
     if (row >= rows) return;
 
-    device const float* x = input + (size_t)row * width;
-    device float* y = output + (size_t)row * width;
-    float square_sum = 0.0f;
-    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
-        const float value = x[column];
-        square_sum += value * value;
-    }
-
+    const size_t offset = (size_t)row * width;
     threadgroup float partials[INKLING2_RESIDENT_SIMDGROUPS];
-    const float simd_sum_squares = simd_sum(square_sum);
-    if (tiisg == 0) partials[sgitg] = simd_sum_squares;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    inkling2_resident_rms_row(input + offset, weights, output + offset, width, eps, has_weights,
+        tiisg, sgitg, tid, partials);
+}
 
-    float total = 0.0f;
-    for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
-        total += partials[group];
-    }
-    const float scale = 1.0f / sqrt(total / (float)width + eps);
-    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
-        const float normalized = x[column] * scale;
-        y[column] = has_weights != 0 ? normalized * weights[column] : normalized;
-    }
+// Scalar Q, K, and V have independent weights and may read the same input.
+// Give each row the same full threadgroup and reduction order as scalar RMS.
+kernel void inkling2_resident_rms_triplet(
+    device const float* x0          [[buffer(0)]],
+    device const float* x1          [[buffer(1)]],
+    device const float* x2          [[buffer(2)]],
+    device const float* weight0     [[buffer(3)]],
+    device const float* weight1     [[buffer(4)]],
+    device const float* weight2     [[buffer(5)]],
+    device       float* output      [[buffer(6)]],
+    constant     uint&  width       [[buffer(7)]],
+    constant     float& eps         [[buffer(8)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint part = tgpig.x;
+    device const float* input = part == 0 ? x0 : (part == 1 ? x1 : x2);
+    device const float* weights = part == 0 ? weight0 : (part == 1 ? weight1 : weight2);
+    threadgroup float partials[INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_rms_row(input, weights, output + (size_t)part * width, width, eps, 1,
+        tiisg, sgitg, tid, partials);
 }
 
 inline void inkling2_resident_rms_concat_row(
