@@ -55,12 +55,17 @@ PIXELUMM_GC_OBSERVER_OBJ := $(BUILD_DIR)/pixelumm_gc_observer.o
 PIXELUMM_RECOVERY_HOST_OBJ := $(BUILD_DIR)/pixelumm_recovery_host.o
 COGNIGRAPH_NATIVE_HEADERS := src/ml/metal/cognigraph_native.h src/ml/metal/cognigraph_schedule.h
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
-QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
+MODEL_FORMAT_SOURCES := $(wildcard src/ml/formats/gguf/*.cr src/ml/formats/safetensors/*.cr)
+QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal) $(MODEL_FORMAT_SOURCES)
+INKLING2_SOURCES := $(wildcard src/ml/models/inkling2/*.cr src/ml/models/inkling2/*/*.cr \
+	src/ml/metal/kernels/inkling2/*.metal src/ml/serve/*.cr)
+QWEN35_BENCHMARK_SOURCES := $(wildcard src/ml/models/qwen35/*.cr src/ml/models/qwen35/*/*.cr src/ml/models/qwen35/qbit/metal/*.cr \
+	src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/metal/kernels/shared/*.metal src/ml/metal/kernels/qwen35/*.metal) $(MODEL_FORMAT_SOURCES)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
 WAN_SPEC_OBJS := $(if $(IS_DARWIN),$(WAN_MPS_OBJS) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ) $(QWEN25_MPS_OBJ),)
 WAN_SPEC_LINK_FLAGS := $(if $(IS_DARWIN),-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -fuse-ld=/usr/bin/ld,)
 VIDEO_SPEC_OBJS := $(WAN_SPEC_OBJS) $(if $(IS_DARWIN),$(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) $(HY_NOMAS_REFERENCE_ATTENTION_OBJ) $(PIXELUMM_MPS_OBJ) $(PIXELUMM_GC_OBSERVER_OBJ),)
-WAN_BENCHMARK_SOURCES := $(wildcard src/ml/video/*.cr src/ml/metal/*.cr src/ml/gguf/*.cr src/ml/*.cr) spec/support/video_allocation_counter.cr
+WAN_BENCHMARK_SOURCES := $(wildcard src/ml/video/*.cr src/ml/metal/*.cr src/ml/gguf/*.cr src/ml/*.cr) $(MODEL_FORMAT_SOURCES) spec/support/video_allocation_counter.cr
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
@@ -772,19 +777,19 @@ $(BUILD_DIR)/hy_nomas_sequence_generate: examples/hy_nomas_sequence_generate.cr 
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_sequence_resume_probe: examples/hy_nomas_sequence_resume_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) examples/support/hy_nomas_cache_qbit.metal src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
+$(BUILD_DIR)/hy_nomas_sequence_resume_probe: examples/hy_nomas_sequence_resume_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) examples/support/hy_nomas_cache_qbit.metal src/ml/models/qwen35/qbit/gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_cache_qbit_probe: examples/hy_nomas_cache_qbit_probe.cr examples/support/hy_nomas_cache_qbit.cr examples/support/hy_nomas_cache_qbit.metal src/ml/gguf/qwen_qbit_gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_cache_qbit_probe: examples/hy_nomas_cache_qbit_probe.cr examples/support/hy_nomas_cache_qbit.cr examples/support/hy_nomas_cache_qbit.metal src/ml/models/qwen35/qbit/gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_compact_sequence_probe: examples/hy_nomas_compact_sequence_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr examples/support/hy_nomas*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
+$(BUILD_DIR)/hy_nomas_compact_sequence_probe: examples/hy_nomas_compact_sequence_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr examples/support/hy_nomas*.metal) src/ml/models/qwen35/qbit/gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_cache_qbit_checkpoint_probe: examples/hy_nomas_cache_qbit_checkpoint_probe.cr $(wildcard examples/support/hy_nomas_cache_qbit*.cr examples/support/hy_nomas_cache_qbit*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_cache_qbit_checkpoint_probe: examples/hy_nomas_cache_qbit_checkpoint_probe.cr $(wildcard examples/support/hy_nomas_cache_qbit*.cr examples/support/hy_nomas_cache_qbit*.metal) src/ml/models/qwen35/qbit/gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
@@ -822,56 +827,56 @@ spec_hy_nomas_compact_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_
 .PHONY: hy_nomas_q4_reduction_probe
 hy_nomas_q4_reduction_probe: $(BUILD_DIR)/hy_nomas_q4_reduction_probe
 
-$(BUILD_DIR)/hy_nomas_q4_reduction_probe: examples/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_reduction_probe: examples/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_paired_benchmark
 hy_nomas_q4_paired_benchmark: $(BUILD_DIR)/hy_nomas_q4_paired_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_paired_benchmark: examples/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_paired_benchmark: examples/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_tile_reuse_benchmark
 hy_nomas_q4_tile_reuse_benchmark: $(BUILD_DIR)/hy_nomas_q4_tile_reuse_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_tile_reuse_benchmark: examples/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_tile_reuse_benchmark: examples/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_tile_dense_benchmark
 hy_nomas_q4_tile_dense_benchmark: $(BUILD_DIR)/hy_nomas_q4_tile_dense_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_tile_dense_benchmark: examples/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_tile_dense_benchmark: examples/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_b64_schedule_benchmark
 hy_nomas_q4_b64_schedule_benchmark: $(BUILD_DIR)/hy_nomas_q4_b64_schedule_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_b64_schedule_benchmark: examples/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_b64_schedule_benchmark: examples/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_kpanel_benchmark
 hy_nomas_q4_kpanel_benchmark: $(BUILD_DIR)/hy_nomas_q4_kpanel_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_kpanel_benchmark: examples/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_kpanel_benchmark: examples/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_shared_reserve_benchmark
 hy_nomas_q4_shared_reserve_benchmark: $(BUILD_DIR)/hy_nomas_q4_shared_reserve_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_shared_reserve_benchmark: examples/hy_nomas_q4_shared_reserve_benchmark.cr examples/support/hy_nomas_q4_shared_reserve_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_shared_reserve_benchmark: examples/hy_nomas_q4_shared_reserve_benchmark.cr examples/support/hy_nomas_q4_shared_reserve_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_q4_k16_benchmark
 hy_nomas_q4_k16_benchmark: $(BUILD_DIR)/hy_nomas_q4_k16_benchmark
 
-$(BUILD_DIR)/hy_nomas_q4_k16_benchmark: examples/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+$(BUILD_DIR)/hy_nomas_q4_k16_benchmark: examples/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/metal/kernels/shared/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -972,11 +977,9 @@ $(BUILD_DIR)/hy_nomas_serial_benchmark: examples/hy_nomas_serial_benchmark.cr $(
 
 hy_nomas_serial_benchmark: $(BUILD_DIR)/hy_nomas_serial_benchmark
 
-$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench $(BUILD_DIR)/inkling2_serve: $(BUILD_DIR)/%: bin/%.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
-		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/reader.cr \
-		src/ml/gguf/ngram_draft.cr src/ml/gguf/kernels/gemm_q56k.metal \
-		src/ml/metal/dispatch.cr \
-		$(wildcard src/ml/gguf/kernels/inkling2_*.metal) $(BRIDGE_OBJ)
+$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench $(BUILD_DIR)/inkling2_serve: $(BUILD_DIR)/%: bin/%.cr $(INKLING2_SOURCES) $(MODEL_FORMAT_SOURCES) \
+		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/quant_matmul.cr src/ml/gguf/ngram_draft.cr \
+		src/ml/metal/kernels/shared/gemm_q56k.metal $(wildcard src/ml/core/*.cr src/ml/metal/*.cr) $(BRIDGE_OBJ) Makefile
 	$(CRYSTAL) build --release $< -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
@@ -1015,7 +1018,7 @@ profile_nomic_vs_llama: $(BRIDGE_OBJ)
 		-- $(ARGS)
 
 benchmark_qwen_prefill_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token
-$(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_prefill_vs_llama_same_token.cr $(BRIDGE_OBJ)
+$(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_prefill_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
 	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
 		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
 		exit 1; \
@@ -1026,7 +1029,7 @@ $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_pref
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 
 benchmark_qwen_decode_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token
-$(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: bin/benchmark_qwen_decode_vs_llama_same_token.cr $(BRIDGE_OBJ)
+$(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: bin/benchmark_qwen_decode_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
 	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
 		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
 		exit 1; \

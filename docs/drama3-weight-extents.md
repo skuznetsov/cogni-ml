@@ -205,7 +205,7 @@ already performs GPU routing plus selected-rank batching. A transfer first
 requires a real multi-token backbone path; this slice makes no such change.
 See `generator_resident.cr`'s prompt-row loops and `backbone_resident.cr`'s
 single-vector contract, alongside Nomic's route/gather/indirect-GEMM/scatter
-path in `src/ml/gguf/metal_backend.cr`. Nomic commit `23f775a5` records
+path in `src/ml/models/nomic_bert/metal/backend.cr`. Nomic commit `23f775a5` records
 8.807 ms/text versus prior scalar approximately 12.422 ms/text for its depth-12
 embedding workload. This historical record was inspected, not rerun, and is
 not a DRAMA speed prediction. Nomic's different quantization/arithmetic is

@@ -67,7 +67,7 @@ flush. Commands:
 
 ```sh
 CRYSTAL_CACHE_DIR=/private/tmp/qwen-command-trace-spec crystal spec spec/qwen_prefill_command_trace_spec.cr
-crystal tool format --check src/ml/gguf/qwen_prefill_command_trace.cr src/ml/gguf/qwen35_cpu.cr spec/qwen_prefill_command_trace_spec.cr
+crystal tool format --check src/ml/models/qwen35/metal/prefill_command_trace.cr src/ml/models/qwen35/cpu/engine.cr spec/qwen_prefill_command_trace_spec.cr
 git diff --check
 ```
 

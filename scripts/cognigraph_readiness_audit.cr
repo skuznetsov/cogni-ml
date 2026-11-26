@@ -5,9 +5,9 @@
 
 ROOT = File.expand_path("..", __DIR__)
 TARGETS = {
-  "nomic_backend" => "src/ml/gguf/metal_backend.cr",
-  "qwen35"        => "src/ml/gguf/qwen35_metal.cr",
-  "gemma4"        => "src/ml/gguf/gemma4_metal.cr",
+  "nomic_backend" => "src/ml/models/nomic_bert/metal/backend.cr",
+  "qwen35"        => "src/ml/models/qwen35/metal/engine.cr",
+  "gemma4"        => "src/ml/models/gemma4/metal/engine.cr",
   "compute_graph" => "src/ml/metal/compute_graph.cr",
   "dispatch"      => "src/ml/metal/dispatch.cr",
 }

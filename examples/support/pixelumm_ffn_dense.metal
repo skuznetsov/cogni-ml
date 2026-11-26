@@ -4,7 +4,7 @@ using namespace metal;
 
 // Diagnostic-only PixelUMM FFN dense candidate. The GEMM schedule and the
 // 64x32 weight / 32x64 activation staging layout derive from
-// src/ml/gguf/kernels/gemm_q4k.metal:1124-1270
+// src/ml/metal/kernels/shared/gemm_q4k.metal:1124-1270
 // (simd_mm_q4k_h16_b64). This keeps its eight-simdgroup B64 tile, ascending
 // K32 panels, four K8 MMA steps per panel, and F32 accumulators. Only the
 // operand loader and final store change: native BF16 values are converted to

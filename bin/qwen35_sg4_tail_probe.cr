@@ -8,7 +8,7 @@ require "../src/ml/metal/dispatch"
 require "../src/ml/metal/process_lease"
 require "digest/sha256"
 
-SOURCE   = {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/fullattn_qwen35.metal") }}
+SOURCE   = {{ read_file("#{__DIR__}/../src/ml/metal/kernels/qwen35/fullattn_qwen35.metal") }}
 DIM      =         256
 HEADS    =          24
 KV_HEADS =           4

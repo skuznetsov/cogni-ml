@@ -244,13 +244,13 @@ resident services such as Cogniformerus `cfmodeld`
 
 - Slice: engine contract and validation
   - Status: verified
-  - Source/spec: `src/ml/gguf/qwen35_engine_contract.cr`,
+  - Source/spec: `src/ml/models/qwen35/engine_contract.cr`,
     `spec/qwen35_engine_contract_spec.cr`
   - Boundary: no model load and no backend implementation required
 - Slice: CPU/Metal resident greedy and constrained classification
   - Status: admitted for CPU and planned native hybrid routing, with asymmetric
     evidence; observed Metal remains guard-only
-  - Source/spec: `src/ml/gguf/qwen35_native_runtime.cr`,
+  - Source/spec: `src/ml/models/qwen35/native_runtime.cr`,
     `spec/qwen35_native_runtime_spec.cr`,
     `spec/qwen35_weights_lifecycle_spec.cr`
   - Boundary: deterministic greedy and unique single-token labels, one live
@@ -618,7 +618,7 @@ Reproduce with `--prefix 256 --append 512 --gen 2 --warmup`, adding
 to the same guarded invocation. Do not disable cooldown to improve the row.
 
 Next smallest optimization candidate is a per-query-tile causal key bound in
-`src/ml/gguf/kernels/qwen35_attn_flash_d256.metal`: currently each tile visits
+`src/ml/metal/kernels/qwen35/qwen35_attn_flash_d256.metal`: currently each tile visits
 all full key blocks and masks future scores only after QK. Skipping fully
 future blocks could reduce work without introducing extra Q rounding. Keep
 the existing global scalar tail, ensure uniform barrier control, and first

@@ -1,7 +1,7 @@
 require "spec"
 
 private def sg4_kernel(name : String) : String
-  source = File.read(Path[__DIR__] / "../src/ml/gguf/kernels/fullattn_qwen35.metal")
+  source = File.read(Path[__DIR__] / "../src/ml/metal/kernels/qwen35/fullattn_qwen35.metal")
   start = source.index("kernel void #{name}(").not_nil!
   finish = source.index("\nkernel void ", start + 1) || source.size
   source[start...finish].gsub(/\/\/[^\n]*/, "")

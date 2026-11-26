@@ -64,14 +64,14 @@ Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
   - Falsifiers: exact struct sizes plus comparator runtime smoke
   - Boundary: b9960 layout only; future llama.cpp layout changes reopen this seal
 - Slice: M5 Max matrix-corridor repair
-  - Source/spec: `src/ml/gguf/nomic_metal_policy.cr`, `src/ml/gguf/metal_backend.cr`, `spec/nomic_metal_policy_spec.cr`
+  - Source/spec: `src/ml/models/nomic_bert/metal/policy.cr`, `src/ml/models/nomic_bert/metal/backend.cr`, `spec/nomic_metal_policy_spec.cr`
   - Root cause: matrix kernels reused shared staging memory for output before
     every simdgroup had completed its final tile read
   - Falsifiers: 144 depth/repetition comparisons, 15-run llama.cpp ABBA, and
     136 boundary/mixed-batch comparisons on M5 Max
   - Boundary: matrix attention remains fail-closed on M5 Max
 - Slice: matrix-attention tail repair
-  - Source/spec: `src/ml/gguf/kernels/attention_matmul.metal`,
+  - Source/spec: `src/ml/metal/kernels/nomic_bert/attention_matmul.metal`,
     `spec/attention_matmul_tail_safety_spec.cr`
   - Root cause: the last 8-row K/V matrix load could cross the logical sequence
     allocation; guarded per-simdgroup scratch now zero-pads partial rows

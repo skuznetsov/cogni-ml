@@ -74,7 +74,7 @@ PINNED_SOURCE_PATHS = (
     "examples/support/hy_nomas_cache_qbit.cr",
     "examples/support/hy_nomas_cache_qbit.metal",
     "examples/support/hy_nomas_cache_qbit_checkpoint.cr",
-    "src/ml/gguf/qwen_qbit_gaussian_codec.cr",
+    "src/ml/models/qwen35/qbit/gaussian_codec.cr",
 )
 TEXT_PROFILE = [557, 585, 557]
 CACHE_PROFILE = [True, True, True]

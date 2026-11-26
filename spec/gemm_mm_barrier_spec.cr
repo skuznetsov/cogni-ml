@@ -3,8 +3,8 @@ require "spec"
 describe "simdgroup matrix shared-memory handoff" do
   it "has exactly one terminal barrier before every staging-to-output reuse" do
     sources = [
-      File.read(Path[__DIR__] / "../src/ml/gguf/kernels/gemm_mm.metal"),
-      File.read(Path[__DIR__] / "../src/ml/gguf/kernels/gemm_mm_f16.metal"),
+      File.read(Path[__DIR__] / "../src/ml/metal/kernels/shared/gemm_mm.metal"),
+      File.read(Path[__DIR__] / "../src/ml/metal/kernels/nomic_bert/gemm_mm_f16.metal"),
     ]
 
     reuse_count = 0

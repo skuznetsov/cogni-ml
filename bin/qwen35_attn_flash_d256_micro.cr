@@ -5,8 +5,8 @@ require "../src/ml/core/buffer"
 require "../src/ml/metal/device"
 require "../src/ml/metal/dispatch"
 
-BASELINE_SOURCE = "#define QWEN35_KV_CACHE_F16 1\n" + {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/fullattn_qwen35.metal") }}
-FLASH_SOURCE    = {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/qwen35_attn_flash_d256.metal") }}
+BASELINE_SOURCE = "#define QWEN35_KV_CACHE_F16 1\n" + {{ read_file("#{__DIR__}/../src/ml/metal/kernels/qwen35/fullattn_qwen35.metal") }}
+FLASH_SOURCE    = {{ read_file("#{__DIR__}/../src/ml/metal/kernels/qwen35/qwen35_attn_flash_d256.metal") }}
 
 private def f32_to_f16_bits(value : Float32) : UInt16
   bits = value.unsafe_as(UInt32)

@@ -66,7 +66,7 @@ Boundary risk: `rec_rollback_log` previously failed JSON parity when composed wi
 
 ### 3. Recurrent prefill checkpoint helpers
 
-File: `src/ml/gguf/qwen35_cpu.cr`
+File: `src/ml/models/qwen35/cpu/engine.cr`
 
 Current helpers:
 
@@ -80,7 +80,7 @@ These can capture or restore recurrent checkpoints while doing known-span verifi
 
 ### 4. Active cursor / prompt cache
 
-Files: `src/ml/gguf/qwen35_resident_session.cr`, `src/ml/gguf/qwen35_serving_route.cr`, `src/ml/gguf/qwen35_prompt_cache.cr`
+Files: `src/ml/models/qwen35/resident_session.cr`, `src/ml/models/qwen35/serving_route.cr`, `src/ml/models/qwen35/prompt_cache.cr`
 
 These are already close to the TokenSpeed prefix-cache framing: validated state artifacts and active cursors are the high-level equivalent of clean reusable slots. The gap is lifecycle and same-process product routing, not tensor math.
 

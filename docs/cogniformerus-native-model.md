@@ -93,7 +93,7 @@ Learned K/V projections will:
 ## 3. What exists already
 
 ### In cogni-ml:
-- [x] nomic BERT MoE full forward pass on Metal GPU (`src/ml/gguf/nomic_bert.cr`)
+- [x] nomic BERT MoE full forward pass on Metal GPU (`src/ml/models/nomic_bert/encoder.cr`)
 - [x] Custom Metal shaders: flash attention, GEMM Q5_K/Q6_K, fused BERT ops
 - [x] ComputeGraph with automatic wave/barrier scheduling
 - [x] MetalBuffer with unified memory, BufferPool

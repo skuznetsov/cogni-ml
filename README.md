@@ -486,7 +486,7 @@ rank through `ML::GGUF::Qwen35SelfSpecPlan`, then reports
 `plan=pca_updown|invalid_adapter|baseline|route_miss` and
 `adapter_artifact=valid|invalid` without executing the adapter.
 The PCA-updown FFN adapter data path is now shared in
-`src/ml/gguf/qwen35_ffn_updown_adapter.cr`: it owns the centered low-rank
+`src/ml/models/qwen35/ffn_updown_adapter.cr`: it owns the centered low-rank
 projection math, Hadamard/symmetric quant-dequant helpers, and the
 `qwen35_ffn_updown_adapter_v1` artifact dump/load format. The heavy
 self-spec scheduler is still probe-local.
@@ -881,9 +881,9 @@ requests then fall back to
 that need continuation state still use the validated state corridor.
 The route decision is also available to product code as
 `ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span` in
-`src/ml/gguf/qwen35_serving_route.cr`.
+`src/ml/models/qwen35/serving_route.cr`.
 For resident servers, `ML::GGUF::Qwen35ResidentSession` in
-`src/ml/gguf/qwen35_resident_session.cr` owns route counters and an optional
+`src/ml/models/qwen35/resident_session.cr` owns route counters and an optional
 active continuation cursor while keeping shared Store restores copy-safe.
 
 For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:

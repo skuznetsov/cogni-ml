@@ -108,10 +108,10 @@ Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
   For `S≈MUᵀ`, `c=Uᵀk`, `q̄=Uᵀq`, update
   `M′=gM+β(v−gMc)cᵀ`, emit `y=M′q̄`
   (`bin/qwen35_deltanet_fixed_basis_probe.cr:1275-1309`; exact recurrence:
-  `src/ml/gguf/qwen35_cpu.cr:1052-1099`). This is exact only for the projected-K
+  `src/ml/models/qwen35/cpu/engine.cr:1052-1099`). This is exact only for the projected-K
   model. Chunk K/Q projection is token-parallel, but the low-rank state scan
   still loops serially over tokens and parallelizes rank work
-  (`src/ml/gguf/kernels/delta_net.metal:81-112, 397-470`): it reduces state
+  (`src/ml/metal/kernels/qwen35/delta_net.metal:81-112, 397-470`): it reduces state
   work, not exact temporal dependence.
 - Local known-span gains: 24-token core `9.63→4.55 ms` (9B),
   `13.99→4.04 ms` (27B); full layer `48.9→16.1 ms`, `77.1→29.1 ms`
@@ -132,8 +132,8 @@ Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 - **Exact affine scan (temporal parallelism).** Per value row,
   `rₜ=rₜ₋₁Aₜ+Bₜ`, `Aₜ=gₜ(I−βₜkₜkₜᵀ)`, `Bₜ=βₜvₜkₜᵀ`; compose
   `(A₁,B₁)∘(A₂,B₂)=(A₁A₂,B₁A₂+B₂)`, scan block prefixes, then replay for every
-  output (`src/ml/gguf/qwen35_deltanet_block_scan.cr:142-170`,
-  `src/ml/gguf/qwen35_deltanet_scan_model.cr:26-63`). Algebra tests passed.
+  output (`src/ml/models/qwen35/deltanet/block_scan.cr:142-170`,
+  `src/ml/models/qwen35/deltanet/scan_model.cr:26-63`). Algebra tests passed.
   A compact-B subkernel improved `2.179→0.302 ms`, but the full single-block,
   state-only route lost to rowwise (`0.422-0.714 ms` vs `0.277-0.516 ms`); prefix
   scan/replay/output costs remain, and no product integration followed
@@ -142,14 +142,14 @@ Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 
 **Verifier/deployment.** The scanner accepts candidate IDs through the first
 exact target top-1 mismatch, emits the target ID, and leaves state replay to the
-caller (`src/ml/gguf/qwen35_spec_acceptance.cr:1-47`). The wall runner snapshots
+caller (`src/ml/models/qwen35/speculation/acceptance.cr:1-47`). The wall runner snapshots
 verifier state, verifies known candidates, then restores and replays the emitted
 prefix through exact target prefill after rejection (`bin/qwen35_deltanet_fixed_basis_probe.cr:7280-7319`). This protects the fixed temperature-zero greedy sequence; it does
 not preserve stochastic target distribution or a fixed random-tape sample path
 (no probability-ratio or residual-draw step). Product generation still says
 `product_self_spec=unsupported decode_path=unchanged`
 (`bin/qwen35_generate.cr:721-740`); its plan validates routes without executing
-approximate proposal bodies (`src/ml/gguf/qwen35_self_spec_plan.cr:7-11`).
+approximate proposal bodies (`src/ml/models/qwen35/speculation/plan.cr:7-11`).
 
 **DRAMA transfer.** Exact affine scan is a prefill candidate: `BackboneResident#prefill`
 is layer-major and batches projections, while GDN currently processes rows in

@@ -964,15 +964,15 @@ weight conversion changes.
 Implementation plan for this CAUTION slice (rollback: keep the hybrid encoder
 default and remove only the new opt-in native modules if falsified):
 
-1. `src/ml/gguf/qwen3vl_text_reference.cr` plus its focused spec: reject
+1. `src/ml/models/qwen3vl/reference.cr` plus its focused spec: reject
    corrupted or inconsistent fixture metadata/payload before exposing any
    token or hidden-state values. Real-fixture read is gated by
    `QWEN3VL_TEXT_REFERENCE_DIR`.
-2. `src/ml/gguf/qwen3vl_text_weights.cr` plus its focused spec: validate the
+2. `src/ml/models/qwen3vl/weights.cr` plus its focused spec: validate the
    pinned text tensor inventory and shard bounds before reading selected rows;
    compare all 24 input embedding rows bit-for-bit with `hidden_state_000`.
    The real-weight run is gated by `QWEN3VL_TEXT_ENCODER_DIR`.
-3. `src/ml/gguf/qwen3vl_text_block.cr` plus its focused spec: establish a
+3. `src/ml/models/qwen3vl/block.cr` plus its focused spec: establish a
    synthetic first-block arithmetic check, then, after the model-backed gate,
    compare `hidden_state_001` against the pinned reference. Do not report
    text-encoder completion from a single block or synthetic-only tests.

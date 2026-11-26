@@ -23,7 +23,7 @@ describe ML::GGUF::QwenImage21MetalAttentionRouteTrace do
   end
 
   it "records only after the selected kernel is encoded for dispatch" do
-    source = File.read(File.expand_path("../src/ml/gguf/qwen_image21_metal.cr", __DIR__))
+    source = File.read(File.expand_path("../src/ml/models/qwen_image21/metal/transformer.cr", __DIR__))
     start = source.index("private def self.encode_attention(").not_nil!
     finish = source.index("private def self.encode_copy_f32(", start).not_nil!
     encoder = source[start...finish]

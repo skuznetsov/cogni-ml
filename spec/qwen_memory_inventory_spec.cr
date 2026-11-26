@@ -73,7 +73,7 @@ end
 describe "Qwen lazy F32 FFN fallback" do
   # Source-order guard supplements selection behavior; it is not GPU parity.
   it "keeps all three exact-tag allocations inside lazy setup before command encoding" do
-    source = File.read(File.expand_path("../src/ml/gguf/qwen35_metal.cr", __DIR__))
+    source = File.read(File.expand_path("../src/ml/models/qwen35/metal/engine.cr", __DIR__))
     [
       {"recurrent_layer_chunk_project_many", "ffn", "rec_chunk_many_ffn_comb", "ffn_dim"},
       {"full_attn_then_recurrent_chunk_project_many", "full_ffn", "frec_full_ffn_comb", "full_ffn_dim"},
