@@ -33,12 +33,12 @@ if [[ ! -x "$PROBE_BIN" || "${QWEN_QBIT_REBUILD:-0}" == "1" ]]; then
 elif [[ "$ROOT/bin/qwen35_qbit_session_smoke.cr" -nt "$PROBE_BIN" ]]; then
   needs_build=1
 else
-  while IFS= read -r source_path; do
+  while IFS= read -r -d '' source_path; do
     if [[ "$source_path" -nt "$PROBE_BIN" ]]; then
       needs_build=1
       break
     fi
-  done < <(find "$ROOT/src" -type f -name '*.cr')
+  done < <(find "$ROOT/src" -type f \( -name '*.cr' -o -name '*.metal' -o -name '*.ptx' \) -print0)
 fi
 
 if [[ "$needs_build" == "1" ]]; then
