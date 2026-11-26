@@ -157,7 +157,7 @@ $(BUILD_DIR)/pixelumm_decoder_head_probe: examples/pixelumm_decoder_head_probe.c
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_decoder_head:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr $(ARGS)
 
 .PHONY: pixelumm_decoder_integrated_probe spec_pixelumm_decoder_integrated
 pixelumm_decoder_integrated_probe: $(BUILD_DIR)/pixelumm_decoder_integrated_probe
@@ -168,7 +168,7 @@ $(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integr
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_decoder_integrated:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_cpu_diagnostic_probe_spec.cr spec/pixelumm_tiled_gate_up_probe_spec.cr spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_decoder_profile_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_cpu_diagnostic_probe_spec.cr spec/pixelumm_tiled_gate_up_probe_spec.cr spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_decoder_profile_spec.cr $(ARGS)
 
 .PHONY: pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe spec_pixelumm_block_profile spec_pixelumm_memory_probe
 pixelumm_decoder_block_probe: $(BUILD_DIR)/pixelumm_decoder_block_probe
@@ -180,17 +180,17 @@ pixelumm_ffn_projection_probe: $(BUILD_DIR)/pixelumm_ffn_projection_probe
 pixelumm_ffn_f32_kernel_probe: $(BUILD_DIR)/pixelumm_ffn_f32_kernel_probe
 
 spec_pixelumm_ffn_f32_kernel_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_f32_kernel_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_f32_kernel_probe_spec.cr
 
 .PHONY: spec_pixelumm_ffn_projection
 spec_pixelumm_ffn_projection:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_projection_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_projection_spec.cr
 
 .PHONY: pixelumm_ffn_isolated_probe spec_pixelumm_ffn_isolated_probe
 pixelumm_ffn_isolated_probe: $(BUILD_DIR)/pixelumm_ffn_isolated_probe
 
 spec_pixelumm_ffn_isolated_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_isolated_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_isolated_probe_spec.cr
 
 $(PIXELUMM_FFN_PROBE_OBJ): examples/support/pixelumm_ffn_projection_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN probe requires macOS"; exit 1)
@@ -204,19 +204,19 @@ $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ): examples/support/pixelumm_ffn_isolated_bridg
 pixelumm_connected_resource_probe: $(BUILD_DIR)/pixelumm_connected_resource_probe
 
 spec_pixelumm_connected_resource_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_connected_resource_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_connected_resource_probe_spec.cr
 
 .PHONY: pixelumm_plan_reuse_probe spec_pixelumm_plan_reuse_probe
 pixelumm_plan_reuse_probe: $(BUILD_DIR)/pixelumm_plan_reuse_probe
 
 spec_pixelumm_plan_reuse_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_plan_reuse_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_plan_reuse_probe_spec.cr
 
 .PHONY: pixelumm_ffn_weight_reuse_probe spec_pixelumm_ffn_weight_reuse_probe
 pixelumm_ffn_weight_reuse_probe: $(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe
 
 spec_pixelumm_ffn_weight_reuse_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_weight_reuse_probe_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_weight_reuse_probe_spec.cr $(ARGS)
 
 $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN weight-reuse probe requires macOS"; exit 1)
@@ -248,7 +248,7 @@ $(BUILD_DIR)/pixelumm_window_batch_probe: examples/pixelumm_window_batch_probe.c
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_WINDOW_BATCH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_pixelumm_window_batch_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_window_batch_probe_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_window_batch_probe_spec.cr $(ARGS)
 
 # Full36 B2 diagnostic composes the existing decoder/head session with one
 # shared B2 candidate panel and per-plan metrics; link the combined ABI once.
@@ -257,7 +257,7 @@ $(BUILD_DIR)/pixelumm_window_batch_full_probe: examples/pixelumm_window_batch_fu
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_WINDOW_BATCH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_pixelumm_window_batch_full_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr $(ARGS)
 
 $(PIXELUMM_FFN_DIRECT_MPS_OBJ): examples/support/pixelumm_ffn_direct_mps_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM direct MPS FFN probe requires macOS"; exit 1)
@@ -281,7 +281,7 @@ $(BUILD_DIR)/pixelumm_gc_observer_qualification: spec/support/pixelumm_gc_observ
 
 spec_pixelumm_gc_probe: $(PIXELUMM_GC_OBSERVER_OBJ) $(BUILD_DIR)/pixelumm_gc_observer_qualification
 	$(BUILD_DIR)/pixelumm_gc_observer_qualification
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_gc_probe_spec.cr spec/pixelumm_ffn_weight_reuse_probe_spec.cr --link-flags="$(abspath $(PIXELUMM_GC_OBSERVER_OBJ))" $(ARGS)
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_gc_probe_spec.cr spec/pixelumm_ffn_weight_reuse_probe_spec.cr --link-flags="$(abspath $(PIXELUMM_GC_OBSERVER_OBJ))" $(ARGS)
 
 $(BUILD_DIR)/pixelumm_gc_probe: examples/pixelumm_gc_probe.cr examples/support/pixelumm_gc_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ) $(PIXELUMM_GC_OBSERVER_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
@@ -291,7 +291,7 @@ $(BUILD_DIR)/pixelumm_gc_probe: examples/pixelumm_gc_probe.cr examples/support/p
 pixelumm_drift_probe: $(BUILD_DIR)/pixelumm_drift_probe
 
 spec_pixelumm_drift_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_drift_profile_spec.cr spec/pixelumm_drift_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_drift_profile_spec.cr spec/pixelumm_drift_probe_spec.cr
 
 $(BUILD_DIR)/pixelumm_drift_probe: examples/pixelumm_drift_probe.cr examples/support/pixelumm_drift_probe.cr examples/support/pixelumm_drift_profile.cr examples/support/pixelumm_gc_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ) $(PIXELUMM_GC_OBSERVER_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
@@ -301,7 +301,7 @@ $(BUILD_DIR)/pixelumm_drift_probe: examples/pixelumm_drift_probe.cr examples/sup
 pixelumm_cognigraph_probe: $(BUILD_DIR)/pixelumm_cognigraph_probe
 
 spec_pixelumm_cognigraph_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/compute_graph_schedule_spec.cr spec/pixelumm_cognigraph_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/compute_graph_schedule_spec.cr spec/pixelumm_cognigraph_probe_spec.cr
 
 # The diagnostic bridge includes the production block ABI exactly once.
 $(BUILD_DIR)/pixelumm_cognigraph_probe: examples/pixelumm_cognigraph_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
@@ -403,7 +403,7 @@ $(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.c
 pixelumm_ffn_aa_probe: $(BUILD_DIR)/pixelumm_ffn_aa_probe
 
 spec_pixelumm_ffn_aa_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_aa_contract_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_aa_contract_spec.cr
 
 # Includes the production bridge once; no other PixelUMM bridge object is linked.
 $(PIXELUMM_FFN_AA_OBJ): examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
@@ -417,7 +417,7 @@ $(BUILD_DIR)/pixelumm_ffn_aa_probe: examples/pixelumm_ffn_aa_probe.cr examples/s
 pixelumm_ffn_graph_probe: $(BUILD_DIR)/pixelumm_ffn_graph_probe
 
 spec_pixelumm_ffn_graph_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_graph_contract_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_graph_contract_spec.cr
 
 # The whole-FFN diagnostic includes the AA and production bridges in one TU.
 # Linking their separate objects would duplicate the production C ABI symbols.
@@ -432,19 +432,19 @@ $(BUILD_DIR)/pixelumm_ffn_graph_probe: examples/pixelumm_ffn_graph_probe.cr exam
 pixelumm_ffn_stage_timing_probe: $(BUILD_DIR)/pixelumm_ffn_stage_timing_probe
 
 spec_pixelumm_ffn_stage_timing_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_stage_timing_contract_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_ffn_stage_timing_contract_spec.cr
 
 $(BUILD_DIR)/pixelumm_ffn_stage_timing_probe: examples/pixelumm_ffn_stage_timing_probe.cr examples/support/pixelumm_ffn_stage_timing_contract.cr examples/support/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_GRAPH_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_GRAPH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_block_profile:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr
 
 .PHONY: spec_mps_api_profile_clock
 spec_mps_api_profile_clock: $(WAN_MPS_CHAIN_OBJ)
 	@test "$(IS_DARWIN)" = Darwin || (echo "MPS API clock probe requires macOS"; exit 1)
-	$(CRYSTAL) spec spec/video_mps_api_profile_clock_bridge_spec.cr \
+	$(SPEC_RUNNER) spec spec/video_mps_api_profile_clock_bridge_spec.cr \
 		--link-flags="$(abspath $(WAN_MPS_CHAIN_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
 
 pixelumm_decoder_two_block_probe: $(BUILD_DIR)/pixelumm_decoder_two_block_probe
@@ -459,11 +459,11 @@ pixelumm_decoder_sixteen_block_probe: $(BUILD_DIR)/pixelumm_decoder_sixteen_bloc
 pixelumm_decoder_thirty_six_block_probe: $(BUILD_DIR)/pixelumm_decoder_thirty_six_block_probe
 
 spec_pixelumm_thirty_six_block_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_memory_probe_spec.cr \
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_memory_probe_spec.cr \
 		spec/pixelumm_serial_probe_runner_spec.cr
 
 spec_pixelumm_memory_probe:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_memory_probe_spec.cr
+	$(SPEC_RUNNER) spec -Dcpu_only spec/pixelumm_memory_probe_spec.cr
 
 $(BUILD_DIR)/pixelumm_decoder_eight_block_probe: examples/pixelumm_decoder_eight_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
@@ -490,16 +490,16 @@ $(BUILD_DIR)/pixelumm_decoder_block_probe: examples/pixelumm_decoder_block_probe
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_decoder_block: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
-	$(CRYSTAL) spec spec/pixelumm_decoder_block_admission_spec.cr spec/pixelumm_ffn_precision_spec.cr \
+	$(SPEC_RUNNER) spec spec/pixelumm_decoder_block_admission_spec.cr spec/pixelumm_ffn_precision_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 spec_pixelumm_two_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
-	$(CRYSTAL) spec spec/pixelumm_two_block_probe_spec.cr \
+	$(SPEC_RUNNER) spec spec/pixelumm_two_block_probe_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 .PHONY: spec_pixelumm_sixteen_block_probe
 spec_pixelumm_sixteen_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
-	$(CRYSTAL) spec spec/pixelumm_two_block_probe_spec.cr \
+	$(SPEC_RUNNER) spec spec/pixelumm_two_block_probe_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 $(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
@@ -511,13 +511,13 @@ $(WAN_STAGE_IO_OBJ): src/ml/video/metal_stage_io.mm | $(BUILD_SENTINEL)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 spec_video_staging: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
-	$(CRYSTAL) spec spec/video_metal_ops_spec.cr spec/video_stage_pool_spec.cr \
+	$(SPEC_RUNNER) spec spec/video_metal_ops_spec.cr spec/video_stage_pool_spec.cr \
 		spec/video_stage_io_spec.cr spec/video_mps_command_chain_spec.cr \
 		spec/video_mps_command_chain_tracking_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld" $(ARGS)
 
 spec_qwen25: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(QWEN25_MPS_OBJ)
-	$(CRYSTAL) spec spec/qwen25_hy_nomas_spec.cr spec/qwen25_hy_nomas_mps_spec.cr spec/qwen25_prefix_spec.cr \
+	$(SPEC_RUNNER) spec spec/qwen25_hy_nomas_spec.cr spec/qwen25_hy_nomas_mps_spec.cr spec/qwen25_prefix_spec.cr \
 		spec/qwen25_vl_weights_spec.cr spec/qwen25_vl_embedding_spec.cr spec/qwen25_prefix_probe_spec.cr spec/qwen25_vl_embedding_mps_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(QWEN25_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
@@ -563,7 +563,7 @@ $(BUILD_DIR)/hy_nomas_full_j_probe: examples/hy_nomas_full_j_probe.cr $(wildcard
 hy_nomas_full_j_probe: $(BUILD_DIR)/hy_nomas_full_j_probe
 
 spec_hy_nomas_full_j: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_full_j_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_full_j_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 $(BUILD_DIR)/hy_nomas_block47_cache_probe: examples/hy_nomas_block47_cache_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
@@ -586,7 +586,7 @@ hy_nomas_conditioned_four_probe: $(BUILD_DIR)/hy_nomas_conditioned_four_probe
 
 .PHONY: spec_hy_nomas_conditioned_four
 spec_hy_nomas_conditioned_four: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_conditioned_four_admission_spec.cr spec/hy_nomas_padded_conditioning_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_conditioned_four_admission_spec.cr spec/hy_nomas_padded_conditioning_admission_spec.cr \
 		spec/hy_nomas_mps_padded_prefix_spec.cr spec/hy_nomas_mps_shared_modulation_spec.cr \
 		spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_text_refiner_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
@@ -620,7 +620,7 @@ $(BUILD_DIR)/pixelumm_recovery_probe: examples/pixelumm_recovery_probe.cr exampl
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(PIXELUMM_RECOVERY_HOST_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_hy_nomas_decoder_replay: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_decoder_replay_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_decoder_replay_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 .PHONY: pixelumm_generation_probe
@@ -651,7 +651,7 @@ $(BUILD_DIR)/dcae_v_decoder_probe: examples/dcae_v_decoder_probe.cr examples/sup
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_dcae_v_decoder:
-	$(CRYSTAL) spec -D cpu_only spec/dcae_v_decoder_spec.cr spec/dcae_v_decoder_profile_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -D cpu_only spec/dcae_v_decoder_spec.cr spec/dcae_v_decoder_profile_spec.cr $(ARGS)
 
 .PHONY: dcae_v_reduction_probe
 dcae_v_reduction_probe: $(BUILD_DIR)/dcae_v_reduction_probe
@@ -676,7 +676,7 @@ $(BUILD_DIR)/hy_nomas_refiner_attention_probe: examples/hy_nomas_refiner_attenti
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_hy_nomas_refiner_attention_probe:
-	$(CRYSTAL) spec -D cpu_only spec/hy_nomas_refiner_attention_probe_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -D cpu_only spec/hy_nomas_refiner_attention_probe_spec.cr $(ARGS)
 
 $(BUILD_DIR)/hy_nomas_reference_decode_probe: examples/hy_nomas_reference_decode_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
@@ -691,10 +691,10 @@ $(BUILD_DIR)/hy_nomas_reference_block0_probe: examples/hy_nomas_reference_block0
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(abspath $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_hy_nomas_reference_handoff:
-	$(CRYSTAL) spec -D cpu_only spec/hy_nomas_reference_latent_spec.cr spec/hy_nomas_reference_cache_probe_spec.cr spec/hy_nomas_reference_block0_probe_spec.cr spec/hy_nomas_reference_history_probe_spec.cr spec/hy_nomas_reference_attention_probe_spec.cr spec/hy_nomas_reference_kv_cache_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_reference_action_spec.cr spec/hy_nomas_action_conditioning_spec.cr spec/hy_nomas_history_action_mask_spec.cr spec/hy_nomas_decode_latent_admission_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr spec/hy_nomas_reference_bf16_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -D cpu_only spec/hy_nomas_reference_latent_spec.cr spec/hy_nomas_reference_cache_probe_spec.cr spec/hy_nomas_reference_block0_probe_spec.cr spec/hy_nomas_reference_history_probe_spec.cr spec/hy_nomas_reference_attention_probe_spec.cr spec/hy_nomas_reference_kv_cache_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_reference_action_spec.cr spec/hy_nomas_action_conditioning_spec.cr spec/hy_nomas_history_action_mask_spec.cr spec/hy_nomas_decode_latent_admission_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr spec/hy_nomas_reference_bf16_spec.cr $(ARGS)
 
 spec_hy_nomas_reference_workspace: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_reference_workspace_spec.cr spec/hy_nomas_reference_kv_cache_metal_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_reference_workspace_spec.cr spec/hy_nomas_reference_kv_cache_metal_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(abspath $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 $(BUILD_DIR)/dcae_v_encoder_probe: examples/dcae_v_encoder_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/dcae_v_encoder.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(DCAE_V_MPS_OBJ) $(DCAE_V_NORM_MPS_OBJ)
@@ -706,7 +706,7 @@ $(BUILD_DIR)/hy_nomas_reference_timeline_probe: examples/hy_nomas_reference_time
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_dcae_v_encoder:
-	$(CRYSTAL) spec -D cpu_only spec/dcae_v_encoder_spec.cr spec/hy_nomas_reference_image_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec -D cpu_only spec/dcae_v_encoder_spec.cr spec/hy_nomas_reference_image_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr $(ARGS)
 pixelumm_global_assembly_probe: $(BUILD_DIR)/pixelumm_global_assembly_probe
 pixelumm_continuation_probe: $(BUILD_DIR)/pixelumm_continuation_probe
 hy_nomas_history_attention_probe: $(BUILD_DIR)/hy_nomas_history_attention_probe
@@ -809,7 +809,7 @@ $(BUILD_DIR)/hy_nomas_segment_edit_probe: examples/hy_nomas_segment_edit_probe.c
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_hy_nomas_segment_edit: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_sequence_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_sequence_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 $(BUILD_DIR)/hy_nomas_continuation_history_probe: examples/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
@@ -824,11 +824,11 @@ $(BUILD_DIR)/hy_nomas_resume_probe: examples/hy_nomas_resume_probe.cr examples/s
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_hy_nomas_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 spec_hy_nomas_compact_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 .PHONY: hy_nomas_q4_reduction_probe
@@ -911,14 +911,14 @@ $(BUILD_DIR)/hy_nomas_text_row_projection_probe $(BUILD_DIR)/hy_nomas_text_row_s
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_hy_nomas_q4_dit: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_dit_boundaries_spec.cr spec/hy_nomas_q4_cache_spec.cr spec/hy_nomas_q4_stack_spec.cr spec/hy_nomas_q4_bf16_finite_spec.cr spec/hy_nomas_serial_compaction_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_dit_boundaries_spec.cr spec/hy_nomas_q4_cache_spec.cr spec/hy_nomas_q4_stack_spec.cr spec/hy_nomas_q4_bf16_finite_spec.cr spec/hy_nomas_serial_compaction_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 .PHONY: hy_nomas_conditioned_eight_probe spec_hy_nomas_conditioned_eight
 hy_nomas_conditioned_eight_probe: $(BUILD_DIR)/hy_nomas_conditioned_eight_probe
 
 spec_hy_nomas_conditioned_eight: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_conditioned_eight_admission_spec.cr spec/hy_nomas_block47_cache_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_conditioned_eight_admission_spec.cr spec/hy_nomas_block47_cache_admission_spec.cr \
 		spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_text_refiner_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
@@ -931,11 +931,11 @@ hy_nomas_four_block_probe: $(BUILD_DIR)/hy_nomas_four_block_probe
 hy_nomas_block23_cache_probe: $(BUILD_DIR)/hy_nomas_block23_cache_probe
 
 spec_hy_nomas_four_block: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_four_block_admission_spec.cr spec/hy_nomas_block23_cache_admission_spec.cr spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_full_j_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_four_block_admission_spec.cr spec/hy_nomas_block23_cache_admission_spec.cr spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_full_j_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 spec_hy_nomas_bf16_cache: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr spec/hy_nomas_bf16_serial_admission_spec.cr \
+	$(SPEC_RUNNER) spec spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr spec/hy_nomas_bf16_serial_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 # These targets inspect metadata only; no bridge link or Metal device is needed.
@@ -945,14 +945,14 @@ $(BUILD_DIR)/hy_nomas_residency_plan: examples/hy_nomas_residency_plan.cr $(wild
 hy_nomas_residency_plan: $(BUILD_DIR)/hy_nomas_residency_plan
 
 spec_hy_nomas_residency:
-	$(CRYSTAL) spec spec/hy_nomas_residency_plan_spec.cr $(ARGS)
+	$(SPEC_RUNNER) spec spec/hy_nomas_residency_plan_spec.cr $(ARGS)
 
 spec: $(BRIDGE_OBJ) $(VIDEO_SPEC_OBJS)
 	$(SPEC_RUNNER) spec \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(VIDEO_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)
-	$(CRYSTAL) spec spec/hy_nomas_block_spec.cr spec/hy_nomas_block_profile_spec.cr \
+	$(SPEC_RUNNER) spec spec/hy_nomas_block_spec.cr spec/hy_nomas_block_profile_spec.cr \
 		spec/hy_nomas_serial_mps_spec.cr \
 		spec/hy_nomas_attention_probe_spec.cr \
 		spec/hy_nomas_pretrained_serial_admission_spec.cr \

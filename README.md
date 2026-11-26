@@ -1416,9 +1416,9 @@ make build_cpu
 make spec_cpu
 ```
 
-`make spec` and `make spec_cpu` run the Crystal command in an isolated
-process group with a 900-second deadline, a 16 GiB RSS limit, and a 25% free
-memory floor on macOS. Specs that load `spec_helper.cr` also have a
+Makefile `spec*` targets that invoke Crystal specs run the command in an
+isolated process group with a 900-second deadline, a 16 GiB RSS limit, and a
+25% free memory floor on macOS. Specs that load `spec_helper.cr` also have a
 120-second limit per example, including example hooks. This watchdog runs
 outside the test process so it can report the example and stop the process
 even if Crystal is blocked in a native call. A failed resource check or a
