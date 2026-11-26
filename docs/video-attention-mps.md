@@ -46,12 +46,18 @@ one terminal wait with zero explicit encode allocations. Explicit buffers use
 not a wall-clock video latency or a matched end-to-end speedup. The control does
 not establish full-shape upstream parity with actual model activations.
 
+A separate `/usr/bin/time -l` repeat completes in 10.76 seconds wall time and
+reports a peak process memory footprint of 3,078,882,120 bytes with zero swaps.
+Its GPU analytical scan again has zero violations. This bounds the observed
+standalone process footprint for that probe; it does not establish the private
+peak with all full-pipeline plans and resources resident.
+
 ## Evidence and refresh
 
 External evidence remains under
 `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-full/`:
 `attention-mps-chunk-native.log`, `wan-transformer-attention-chunk-native.log`,
-`attention-full-mps-chunk-native.log`, their build logs, and the full-shape probe
+`attention-full-mps-chunk-native.log`, `attention-full-mps-chunk-peak.log`, their build logs, and the full-shape probe
 source `attention-full-mps-chunk-probe.cr`. All GPU runs were serialized under
 `scripts/run_safe.sh` with a 15% free-memory floor.
 

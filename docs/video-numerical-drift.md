@@ -80,9 +80,13 @@ selected query-chunked arithmetic route.
 
 The external `s2v-real-stack-drift-ledger.json` records every point, exact
 implementation and fixture hashes, configuration and source revisions. Its
-SHA256 is `6bf8e632c64e9c79c557dfb44b37ecaf33d7b8de4a5d15125d7971a28b678316`.
+SHA256 is `dfe4399a3d123dee22dc9afc407da1884ba738897ad5362e562318f931457b8f`.
 The corresponding log is `s2v-real-stack-40-mps-chunk-native.log`. This run uses
-the native execution chain, including prepared Graph continuation. Its reduced
+the native execution chain, including prepared Graph continuation and the
+pointer-identity root tracker and completed-root retirement from `326f4b68`.
+The refreshed run at `bfaad7c3` reproduced
+the same 21 rejected values (49.14 seconds process wall time; this is a
+reduced-shape correctness run, not generation timing). Its reduced
 sequence fits one query chunk and therefore does not qualify the complete
 36,608-query diffusion path. Separate strict attention tests cover chunk offsets,
 padding, changed inputs and completed-chain reuse. This is a second recorded

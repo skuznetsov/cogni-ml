@@ -3,6 +3,218 @@
 Status: IN_PROGRESS; resident block gates and complete Wan BF16 transformer-weight
 residency pass, while complete video generation remains open.
 
+## Active transition: native Wan S2V request
+
+The current request is a complete five-second 480p Wan S2V generation, with a
+cold process and an immediate repeated request measured separately. This is a
+CAUTION implementation boundary, not an extrapolation from the two-token block
+or weight-residency measurements. Native conditioning, the full transformer,
+the flow scheduler and VAE must all be exercised before reporting generation
+time. A precomputed Python conditioning tensor is a component fixture, not a
+complete native pipeline. Tokenization, asset byte I/O and terminal video-file
+encoding may run on the host; neural activations remain on GPU.
+
+The initial inventory found no complete S2V forward, native UMT5/Wav2Vec2,
+native Wan VAE or denoising runner. Native Wan VAE (`9395eb95`), GPU UniPC
+(`a4622abd`) and the causal audio conditioning projection (`4409c0f0`) now pass
+their scoped component gates; see their component documents for dimensions and
+remaining limits. The native transformer is committed in `5b3f60f8`, with
+serial block/audio scratch sharing in `4000d9b2` and opt-in tiled attention in
+`a079a7ce`. The complete text encoder passes its captured gate; the audio
+encoder retains recorded numerical differences. Existing block math and the per-value finite
+2e-5 absolute/relative gate remain the baseline. Component fixtures compare the
+same inputs against the pinned upstream modules, including first-call temporal
+caches, real-width projections, sequence layouts and scheduler coefficients.
+
+The real-width UMT5 block now matches all 16 captured checkpoints bitwise when
+using the source GELU operation order and prepared rank-three Graph attention.
+The full 24-layer, 512-token native gate passes 39 intermediate tensors and
+the masked context in 23.19 seconds with one terminal wait. This is a component
+test duration, not video generation speed. Audio waveform normalization preserves eager operation
+boundaries, making the waveform and all seven feature-extractor stages bitwise
+equal to upstream. All first-layer captured points pass the unchanged gate,
+but the complete interpolated hidden-state output still fails. Source-ordered
+bucket interpolation removes the first three hidden-state failures; the first
+remaining rejected state is layer 3, and the maximum captured absolute drift is
+1.274109e-3. All captured values are finite. These are
+separate qualification boundaries: a passing first block cannot admit the
+complete encoder.
+
+The 40-layer real-weight stack now has a complete exact-prefix comparison at
+reduced spatial dimensions. With prepared MPS projections and typed GPU bias,
+all 104 captured points are finite; 21 of
+31,948,800 values fail the unchanged gate, with a maximum absolute difference
+of 2.899170e-4 on the prepared query-chunked MPS route. These differences are recorded separately from the audio
+encoder differences. Neither comparison bounds a full-spatial denoising
+trajectory or establishes visible quality. See `docs/video-numerical-drift.md`.
+
+Upstream CFG zeros the input audio features before the causal audio encoder,
+not the encoded local/global outputs. A targeted production-width zero-input
+oracle and native comparison passed all four examples under the unchanged
+gate (`causal-audio-null-native.log` in the external evidence directory).
+Both encoded outputs are nonzero because the encoder includes biases and
+nonlinearities. The pooled pipeline must retain these separate null-branch
+outputs; sharing the positive audio outputs is a semantic error, outside the
+recorded numerical-drift exception.
+
+The first full-spatial DiT block probe failed Metal completion with `Impacting
+Interactivity`. A controlled full-attention comparison isolates a command-size
+boundary: 4,096 query-tile/head groups per root fail; 320 groups complete the
+same Q=K=36,608, H=40, D=128 geometry with all 187,432,960 synthetic values exact.
+The chain overload now defaults to 320 without changing query reductions.
+With that boundary, one real BF16 block 0 plus audio injector 0 completes:
+36.952 seconds summed GPU interval, 1,148 segments, one terminal host wait,
+zero activation readbacks, and a GPU scan confirms finite outputs. This is a
+cost diagnostic with procedural inputs, not upstream full-shape parity or
+a completed generation. See `docs/video-mps-projection.md` for receipts.
+
+The opt-in prepared MPS query-chunk route subsequently completes all 72 chunks
+at the same full attention dimensions with 13 command segments and one terminal
+wait. Its analytical GPU control checks every one of 187,432,960 values exactly.
+A separate repeat measured 10.76 seconds wall time and 3,078,882,120 bytes peak
+process memory footprint with no swaps. This is a standalone synthetic attention
+probe, not a full request or a proof of the private-workspace peak when every
+pipeline plan is resident. See `docs/video-attention-mps.md`.
+
+A subsequent real BF16 block-0 plus audio-injector-0 probe uses that same
+512-row chunk route at sequence length 36,608. Both block and injector outputs
+pass the GPU finite scan, with one terminal wait, zero activation readbacks,
+and 589 command segments. The first run reports 13.676 seconds summed GPU
+interval; an independent process repeat reports 14.708 seconds, 15.06 seconds
+wall time, and 2,418,591,400 bytes peak process memory footprint with no swaps.
+The explicit weight/input/scratch plan including a 1 GiB reserve is
+16,330,007,044 bytes; process footprint is a separate OS counter and does not
+replace that resource accounting. These procedural-input cost diagnostics
+(`dit-full-shape-mps-chunk512-{probe,peak}.log`) establish neither full-shape
+upstream parity nor complete-video performance.
+
+An opt-in tiled F32 projection primitive (`37913d80`) preserves BF16 parameter
+storage and passes all 24 pinned MPS dtype/tail cases at the unchanged gate.
+Four alternating pairs at 64 rows, input width 5,120 and output width 13,824
+give median GPU intervals of 18.274 ms for the tiled kernel and 135.890 ms for
+the scalar baseline, a 7.44 ratio. These synthetic resident-weight intervals
+do not measure a full block or video, and this arithmetic route is not yet
+enabled by default in the transformer. Optional prepared MPS projections share
+a 270 MiB F32 weight expansion stage across fifteen plans. The actual typed-bias
+path passes its projection fixture and official block gate; its refreshed
+full-depth finite drift is recorded above. Synthetic local MPS/tiled ratios
+range from 6.77 to 20.29 at 64/512/2,048 rows. These component intervals cannot
+establish request speed. No five-second cold/repeat measurement is available
+yet. See `docs/video-mps-projection.md`.
+
+The official first request uses `drop_first_motion=True`: it has no FramePack
+history tokens and zeroes the encoded no-pose condition on GPU. Its 480p working
+canvas is 832x512, with 36,608 transformer tokens, including the reference frame.
+Retained-history and empty-history paths require separate oracle gates. The
+temporal recipe decodes 22 latents to 85 raw frames, selects raw frames [4,84)
+and delivers exactly 80 frames at 16 fps after a centered 480-row spatial crop.
+
+The runner must resolve spatial alignment and the upstream initial three-frame
+drop explicitly. It must report internal generated frames, delivered frames,
+resolution, frame rate, steps, guidance, seed and exact source/weight revisions;
+rounding a shorter clip to five seconds is rejected. Cold timing includes
+resource/weight setup through the terminal output; repeated timing reuses only
+resources actually retained under the memory budget. OS file-cache state is
+reported rather than implicitly equated with a cold process.
+
+Before a full request, record total live weights and planned activation/cache
+storage across all stages. Weight residency alone is insufficient. GPU runs
+remain serial, guarded by run_safe with a 15% free-system-memory floor, finite
+deadlines and stage-appropriate RSS caps. No Studio or service is started.
+Caller-owned chains can asynchronously continue between bounded GPU phases;
+neural encode methods allocate no buffers, wait on no commands and read no activations.
+Diagnostic reads are terminal and excluded from generation timing.
+
+`8450cf45` admits the bounded serial stage-pool and asynchronous Metal I/O
+infrastructure: twelve prepared stage transitions pass with one terminal wait
+and no encode-time `MetalBuffer` creation. The full model runner must still
+qualify these transitions with actual model resources, numerical gates, and
+retained cold/repeat requests. Allocation counters cover explicit wrappers;
+private execution workspace also remains subject to the external memory guard.
+
+The unified header-only plan now estimates 44,664,405,284 bytes including a
+1 GiB caller reserve, with one 42,842,423,296-byte pool shared by sequential
+weight-plus-scratch phases. A compiled plan snapshot accepts a 44,032 MiB
+budget and rejects 40,960 MiB before Metal initialization. These calculations
+do not measure actual allocation cursors or private execution peaks. The
+snapshot and `pooled-memory-plan.json` / `pooled-memory-plan-rejected.json` receipts are in the
+external `wan-full` evidence directory.
+
+The first full invocation stopped during resource preparation, before payload
+loads or GPU work: the causal-audio checkpoint has 25 BF16 mixture weights
+(50 bytes), while Arena's raw word-storage view requires a multiple of four
+bytes. The runner now pads that view to 52 bytes, retains the exact 50-byte
+StageIO extent, and decodes 25 values using the checkpoint dtype. Page-rounded
+pool capacity is unchanged. A standalone extraction of the actual stage-loader
+class passes six BF16/F16 scalar, odd-count and even-count GPU cases, with exact
+outputs, one terminal wait and no encode-time MetalBuffer allocations
+(`raw-staging-native.log`). This corrects setup; the complete request remains
+unmeasured.
+
+The next full invocation reached execution but timed out at its first T5
+readiness wait. A staging-only reproducer failed on the same 11.36 GB load
+without T5 math. Commit `2210c5cc` splits logical plans into at most 512 MiB
+I/O batches with asynchronous compute-root retirements between them. The real
+T5 staging-only probe then passed with 22 batches/roots, one terminal wait,
+484 exact boundary samples, 12.39 seconds external wall time and no swaps.
+The common staging gate passes 27 examples, including rejection of a partially
+submitted stage after its submitted batches drain. This establishes the bounded
+staging path, not a complete request or strict neural parity. The runner also
+preserves the first execution exception if cleanup reports pending I/O. See
+`docs/video-stage-io.md` for the evidence and refresh boundary.
+
+The first batched full invocation then stopped before denoising because the
+runner placed caller sequence/time/output buffers in the same Arena passed as
+transformer scratch. The scratch/input overlap guard correctly rejected this
+ownership violation. Caller activations now have a separate retained Arena on
+the same phase cursor, with unchanged allocation order/capacity and explicit
+release after terminal drain. The legacy caller also separates its inputs and
+constants. A verbatim extraction of the pooled runner's allocation block first
+reproduced the failure, then passed the pinned tiny patch/text/time/modulation
+oracle with the unchanged tolerance, one terminal wait and zero encode-time
+MetalBuffer allocations. It checks the exact 27,066,368-byte reduced-case pool
+cursor, successful view release, and continued rejection of a deliberate alias
+(`pooled-transformer-bindings-before.log`,
+`pooled-transformer-bindings-native.log`). This is a setup regression check;
+the complete denoising loop and full request remain unmeasured.
+
+The VAE scratch-capacity correction in `bfaad7c3` is required before a full
+request: the decoder's nearest upsample writes the larger channel count before
+projection. Both current 16x24 execution modes pass the unchanged upstream
+gate, and 147 paired GPU snapshots are bit-identical. A separate 832x512 probe
+with the full 22-latent workspace decodes two duplicated reference latents into
+five frames in 200.13 seconds process wall time (198.31 seconds summed GPU
+intervals), with one terminal host wait, no non-finite values, no encode-time
+MetalBuffer allocations and a 16.72 GB peak process memory footprint. This is
+a spatial/cache cost control, not generated video or a full 85-frame decode.
+See `docs/wan-vae.md`.
+
+Run receipts report each request through final raw output writing and receipt
+hashes, excluding receipt serialization and resource release. The first
+request also reports initial setup plus that request; the second reuses the
+pool and plans but reloads checkpoint phases. Neither is a whole-process wall
+timer. An external `/usr/bin/time -l` measurement covers the complete process;
+MP4 packaging is measured separately. No file-cache eviction is implied.
+
+The ordered implementation/DoD is: (1) native conditioning and VAE component
+fixtures; (2) distinct-layer full-forward fixture and GPU scheduler fixture;
+(3) bounded full-shape allocation and command-cost probe; (4) short complete
+request compared with upstream; (5) the guarded five-second cold/repeat pair,
+with output and sampled memory/timing receipts. Strict component qualification
+requires its focused Crystal spec and pinned upstream fixture to pass with no
+pending oracle cases. The strongest fallback checks are same-input intermediate
+comparisons, exact output geometry, cumulative allocation counters during
+encode, and two retained-resource requests. A failed numerical gate or memory
+floor stops the dependent full request by default. The user's 2026-10-19
+authorization permits an explicitly labelled experiment using the exact finite
+audio-conditioning and full-depth stack drift ledgers; strict parity remains
+open and tolerances stay unchanged. An experimental execution is the means of
+obtaining full-request evidence, not a claim that an unexecuted full request
+already passed. See `docs/video-numerical-drift.md`. Runtime, shape, source,
+checkpoint and memory failures cannot use this exception. It does not admit
+CPU neural fallback or an invented timing. Rollback removes the new opt-in
+pipeline modules/runner while preserving the admitted block and loader routes.
+
 ## Scope and source anchors
 
 Implement opt-in native Metal backends for Wan 2.2 S2V and LTX 2.5.
@@ -286,6 +498,18 @@ are probe overhead, not generation timings.
 
 ## Evidence, review and remaining frontier
 
+The full S2V request is still under construction. Its original staged draft
+used blocking stage completion and is not an admitted request path. The bounded
+replacement infrastructure now passes the repeated alias-overwrite gate:
+page-aligned weight pools, phase-specific no-copy views, MetalIO range loads
+and shared-event ordering preserve twelve distinct GPU-consumer payloads with
+one terminal host wait. Its integration into the complete runner is still
+open. Aggregate model/scratch/state capacity, opaque workspace, full-shape
+command completion and retained repeated requests must be qualified before
+the five-second cold/repeat result. Existing resident paths remain the
+rollback boundary; no timing may be reported for a request rejected before
+execution.
+
 The current private receipts are under
 `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-bf16/`:
 the final-source fixture matrix, post-review lifetime tests, BF16/F32 bit
@@ -309,8 +533,11 @@ the following open capabilities:
 - Remaining distinct transformer layers, long-sequence/model accumulation and
   whole-request resource accounting. BF16 weight residency alone does not
   establish full-pipeline capacity or arithmetic in BF16.
-- Native text/audio/image conditioning and dynamic embeddings, motion packing,
-  per-example masks/lengths, both video VAEs and complete denoising/scheduling.
+- Qualification of native UMT5/XLSR conditioning, the complete distinct-layer
+  transformer, and their composition with the admitted Wan VAE/UniPC/causal
+  audio components; full-shape stage lifetimes and delivered-frame geometry.
+  LTX conditioning, VAE and scheduling, and general per-example masks/lengths,
+  remain outside the admitted block boundary.
 - Full 5–10 second output, lip sync, accumulated quality and controlled end-to-end
   latency, throughput and memory comparisons.
 

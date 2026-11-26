@@ -30,8 +30,18 @@ workspace. The repeated output is bit-identical and the tracked GPU-buffer
 allocation count does not change during encode/decode. After the scratch fix
 below, both default and segmented paths passed six examples with zero failures,
 errors or pending cases, including two direct GPU tiling checks. These are
-correctness specs, not generation benchmarks. Full 480p memory, performance,
-batch sizes above one, and end-to-end video quality remain separate gates.
+correctness specs, not generation benchmarks. Batch sizes above one and
+end-to-end video quality remain separate gates.
+
+A production-spatial cost probe at 832x512 allocates the full 22-latent
+workspace, encodes the reference image, and decodes two duplicated image
+latents into five frames. Its terminal GPU scan reports zero non-finite values,
+one host wait and zero tracked MetalBuffer allocations during encoding.
+Process wall time is 200.13 seconds, summed GPU intervals are 198.31 seconds,
+and peak process memory footprint is 16,724,182,168 bytes with zero swaps.
+This establishes completion of these spatial/cache shapes; the inputs are
+duplicated image latents, not generated motion or a full-resolution oracle.
+It does not measure an 85-frame decode or complete-request speed.
 
 ## Scratch-capacity correction
 
@@ -91,7 +101,8 @@ Use height/width 8 for the smaller fixture. Local evidence is under
 `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-full`:
 `vae-cache-fixed-native.log` (historical 8x8),
 `vae-scratch-fixed-default-native.log` and `vae-scratch-fixed-chain-native.log`
-(current 16x24), and `vae-paired-trace-fixed.json` / its native log. The two
+(current 16x24), `vae-paired-trace-fixed.json` / its native log, and
+`vae-scratch-fixed-full-shape-2-native.log` (832x512 cost probe). The two
 six-example runs also include `spec/wan_vae_dispatch_tiling_spec.cr`: full versus
 tiled attention and F32/BF16 convolution outputs are bit-identical, with one
 terminal wait and no encoding allocations. Set `WAN_VAE_EXECUTION_CHAIN=0` to
@@ -104,5 +115,5 @@ free-memory stop floor. Sampled free memory does not establish physical peak.
 
 Refresh after native/oracle/upstream/checkpoint/shape/arithmetic/runtime/device
 changes, or missing/changed evidence. Hashes are not build attestations. The
-next gate is full spatial geometry and pipeline lifetime accounting before a
-bounded complete request; this component result does not close that gate.
+next gate is complete-pipeline lifetime accounting and a bounded full request;
+the component and spatial cost probes do not close that gate.
