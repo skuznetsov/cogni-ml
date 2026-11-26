@@ -8,6 +8,7 @@ module ML::GGUF
     MIN_DSPARK_COMPLETION =   8
     private DSPARK_SCALAR_STEPS   =   2
     private DSPARK_PROBE_BUDGET   = 2.0
+    private DSPARK_SAVINGS_LIMIT  = 2.0
 
     record Result, ids : Array(Int32), blocks : Int32, accepted_rows : Int32
 
@@ -76,9 +77,10 @@ module ML::GGUF
               ids << block[row]
               return Result.new(ids, blocks, accepted_rows) unless yield(block[row])
             end
-            # Compare wall time per committed row, including discarded work.
-            # Earlier gains cannot fund an unbounded run of losing blocks.
-            dspark_debt_ms = Math.max(0.0, dspark_debt_ms + elapsed - accepted * dspark_scalar_ms)
+            # Charge discarded work and retain up to two scalar steps of
+            # savings so a brief dip in acceptance can spend prior gains.
+            dspark_debt_ms = Math.max(-DSPARK_SAVINGS_LIMIT * dspark_scalar_ms,
+              dspark_debt_ms + elapsed - accepted * dspark_scalar_ms)
             if dspark_debt_ms > DSPARK_PROBE_BUDGET * dspark_scalar_ms
               dspark = false
               engine.disable_dspark

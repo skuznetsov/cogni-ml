@@ -61,11 +61,13 @@ Place the draft checkpoint's `config.json` alongside `mtp.safetensors`.
 DSpark uses the same HTTP endpoints and replaces n-gram drafting in this
 mode. Requests with positive temperature or a generation limit below
 eight tokens use the scalar path. Other requests start with two scalar
-steps, then verify blocks of up to four rows. The controller returns
-to scalar for the rest of the request when time lost on verification
-exceeds the cost of two scalar steps. Only target-confirmed tokens are
-emitted. Prefill and accepted decode tokens supply up to 1,023 recent
-context positions to the draft model.
+steps, then verify blocks of up to four rows. The controller tracks draft
+and verification time against the cost of the confirmed rows in scalar
+decode. It retains savings worth up to two scalar steps and returns to
+scalar for the rest of the request when the accumulated loss exceeds the
+cost of two scalar steps. Only target-confirmed tokens are emitted.
+Prefill and accepted decode tokens supply up to 1,023 recent context
+positions to the draft model.
 
 In quiet-host engine measurements on M2 Max, DSpark moved short Python
 (104 prompt tokens) from 34.65 to 41.62 tok/s and short prose (81 prompt
