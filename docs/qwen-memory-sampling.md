@@ -330,3 +330,146 @@ Adversary verdict: ROBUST for the matched allocation reduction and this
 two-call output/cache-hit replay. General speed, reboot prevention, adaptive
 KV behavior and capacity-reuse gains remain unproven. No allocation policy
 beyond the already committed lazy-selection change was modified in this run.
+
+## Six-buffer capacity-hit experiment (measured-red, 2026-09-10)
+
+CAUTION: shared-buffer lifetime, not padded inference. Admit an opt-in
+`QWEN35_PREFILL_FFN_CAPACITY_REUSE=1` lookup for the six F32 FFN gate/up slots
+in `recurrent_layer_chunk_project_many` and
+`full_attn_then_recurrent_chunk_project_many`. For 1,025..2,047 logical rows,
+reuse an already pooled same-tag buffer sized for 2,048 rows and the current
+FFN dimension. If absent, preserve exact allocation. Preserve namespace
+isolation; fresh arenas and `QWEN35_SCRATCH_OFF=1` must bypass the lookup.
+All other sizes and the default/unset flag preserve exact allocation.
+
+Rejected: growing allocations to rounded sizes, pool-wide best-fit lookup,
+eviction, fresh-flight sharing, altered dispatch/strides/token counts,
+combined/H16 buffers, and default enablement before guarded parity evidence.
+The strongest failure is aliasing unfinished GPU work or deriving a logical
+length from capacity. Audit all six consumers; retain the original serial
+pool lifetime contract rather than claiming new concurrency support.
+
+Plan: add failing no-GPU seeded-pool identity/isolation tests in
+`spec/qwen_memory_inventory_spec.cr`; implement the bounded lookup and six
+call sites in `src/ml/gguf/qwen35_metal.cr`; run focused specs with the existing
+bridge object, format/diff checks, CPU-only compile and release provider build.
+Rollback is unset/zero flag or reverting this slice. These checks certify only
+allocation routing, not GPU numerical equivalence. A later fresh guarded
+two-call replay must compare outputs and inventory without weakening guards.
+Prediction for the recorded 1,668-row tail: these six hits avoid 696,877,056
+additional retained bytes (664.594 MiB); other scratch tags remain unchanged.
+Do not promote this component saving to end-to-end speed or an LTP/WBA claim.
+
+Implementation exists behind the default-off flag. The missing helper first
+failed compilation; after implementation, all 11 no-GPU inventory/lazy/capacity
+examples passed, as did CPU-only compilation, format/diff checks, release
+provider build and metadata-only dry replay. Seeded placeholders test identity,
+exact misses, row boundaries, dimensions, namespaces and fresh/off bypasses
+without allocating GPU buffers. Source guards enumerate the six call sites;
+they are not substitutes for numerical or concurrency tests.
+
+One guarded GPU replay completed call one with the captured 27-token output,
+but call two failed with `Impacting Interactivity`
+(`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`, completion status
+`-6`). The failure surfaced at the shared-command flush in
+`qwen35_cpu.cr:4317`, during the 196-token suffix (195 helper rows). This row
+count cannot select the new capacity-hit branch, but the preceding buffer and
+GPU execution history differs; that does not establish causal independence.
+There was no second-call output or complete event. No retry was performed.
+
+Matched against the previous lazy-allocation replay:
+
+| Boundary | Previous Scratch bytes | Candidate Scratch bytes | Difference |
+| --- | ---: | ---: | ---: |
+| Each of three 2,048-row chunk ends | 3,133,461,504 | 3,133,461,504 | 0 |
+| 1,668-row tail end | 5,676,934,656 | 4,980,057,600 | -696,877,056 |
+
+The tail has six fewer Scratch entries (494 to 488); tracked live-buffer bytes
+and device allocated bytes show exactly the same 664.594-MiB reduction.
+Pipeline-key counts are unchanged at all four boundaries. These overlapping
+allocation metrics are not additive and are not system RSS measurements.
+The memory prediction passed; the full two-call acceptance assertion failed.
+
+Launcher wall time was 93.309 seconds, exit 1; call one took 83.768 seconds.
+The 47 observer samples had no collection errors, started at 78% free memory,
+and reached a sampled minimum of 46%. The runner's `[EXIT: 1] after ~68s` is a
+loop-counter message, not measured wall time. No memory-floor kill was logged.
+Thus lower allocation did not prevent this Metal failure. A single failed
+candidate versus yesterday's successful baseline is neither proof of a new
+regression nor proof that only host conditions caused the failure.
+
+Scoped source audit found no six-path capacity-derived logical count/readback:
+GEMM uses batch/dimensions, SwiGLU uses the logical element count, and fresh
+graph arenas bypass the lookup. The existing ordinary pool still assumes
+serial use and compatible layer dimensions; arbitrary concurrent callers and
+heterogeneous FFN shapes are not certified. ROBUST for the measured allocation
+reduction and unit routing; VULNERABLE for unconditional/default promotion.
+Full output/state parity, tail-sentinel checks and general stability remain open.
+
+Next discriminator is a separately bounded, source-toggled off/on replay with
+the same input and command policy, distinguishing allocation history from the
+existing command-duration/interactivity failure. Do not widen tags, enable the
+flag by default, or patch scheduling based only on this correlation. Preserve
+the 35% floor, 24,576-MiB cap and stop-on-first-failure policy.
+
+Local artifacts: `/private/tmp/qwen-ffn-capacity.0bubQ5/`, containing
+`run_inventory.py`, `summarize.py`, `reuse-capacity-inventory-{dry,gpu}` logs,
+GPU JSON result and observer JSONL. The analyzer asserts the predicted memory
+deltas and then fails its exit-zero acceptance check; it must not be reported
+as an all-pass run. Source base is `4628fca5` plus this uncommitted experimental
+diff; `qwen35_metal.cr` SHA256 is
+`fe74b6a1bb8c1ead01f85b29558460f7a8c931215e2e7f73ed403277b0428206` and the
+candidate binary SHA256 is
+`acf4e3c46e0d542133ae969fdba1489754342a5586de145d92aa47633366f592`.
+The launcher pins these and the earlier input/config identities. Temporary
+artifacts are not portable fixtures; source/model/device/route changes or
+artifact loss require refreshed evidence. The guarded replay gate did not
+pass. The implementation is retained as a default-off experiment.
+
+### Matched feature-OFF control (2026-09-11)
+
+The next discriminator ran once with the exact candidate binary identified
+above and `QWEN35_PREFILL_FFN_CAPACITY_REUSE=0`. The launcher retained the
+pinned input/config, 2,048-row chunks, group limit 1, cooldown 50 ms, 300-second
+timeout, 24,576-MiB tree cap and 35% free-memory floor. Quiet preflight remained
+explicitly disabled as in the preceding experiment. Metadata-only dry replay
+passed before GPU execution; source/binary hashes matched before and after.
+
+The OFF control also failed on call two with `Impacting Interactivity` and
+completion status `-6`, after the same resident-prefix hit: 7,839 cached tokens,
+8,035 prompt tokens, 196 suffix tokens / 195 helper rows. Call one completed
+with the captured 27-token output. There was no second output or complete event.
+Measured launcher wall time was 106.686 seconds, exit 1; call one took 94.685
+seconds. The observer exited 0, collected 53 samples without collection errors,
+and saw free memory fall from 79% to a sampled minimum of 46%. No memory-floor
+kill was logged. The runner's `after ~77s` is not the measured wall time.
+
+The control restored the predicted exact-size allocation: the three 2,048-row
+boundaries retained 3,133,461,504 Scratch bytes, and the 1,668-row tail retained
+5,676,934,656 bytes, exactly 696,877,056 bytes more than feature ON. Pipeline-key
+counts matched at all four boundaries. Thus the enabled lookup is not a
+necessary condition for the observed failure, and the component memory saving
+survives this control. Neither fact proves the optimization harmless, establishes
+the failure's cause, or supplies missing second-call/state parity. These are
+separate processes on a non-isolated host, not a speed comparison.
+
+GPU work stopped on this failure; no further ON replay was attempted. The
+analyzer checked matching input and first-call Scratch/pipeline deltas, then
+correctly rejected the full replay at its exit-zero gate. The implementation
+remains default-off. ROBUST for the bounded observation that
+this binary can fail with the flag disabled; VULNERABLE for stability promotion.
+
+Next step is failure-localizing command telemetry, not another allocation or
+scheduling change. Current source's boundary profile emits timings only after
+successful wait/publication, so the failing command has no completed timing
+record. Before another GPU attempt, define a bounded pre-submit/failed-wait
+record with command identity, layer span, rows and group count; preserve the
+existing schedule and guards. Do not infer the failing command's duration from
+whole-call wall time or treat a 50-ms post-completion pause as protection for an
+individual unfinished command. Full build-source provenance is needed for that
+new diagnostic binary; stack-trace line labels alone are not such provenance.
+
+Artifacts: `/private/tmp/qwen-ffn-control.UlHOfQ/run_inventory.py`,
+`check_control.py`, and `reuse-capacity-off-{dry,gpu}` logs plus GPU result JSON
+and observer JSONL. These temporary artifacts have the same retention and
+refresh limitations as the preceding experiment.

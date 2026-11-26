@@ -19,6 +19,10 @@ class ML::MetalBuffer
 end
 
 module ML::GGUF::Qwen35Metal::Scratch
+  def self.capacity_hit_spec(tag : Symbol, rows : Int32, dim : Int32)
+    prefill_ffn_capacity_hit(tag, rows, dim)
+  end
+
   def self.with_inventory_spec(&)
     saved, saved_s = @@pool, @@pool_s
     begin
@@ -36,6 +40,103 @@ module ML::GGUF::Qwen35Metal::Scratch
       @@pool[{tag, bytes}] = buffer
     else
       @@pool_s[{tag, bytes}] = buffer
+    end
+  end
+end
+
+private def with_ffn_capacity_settings(enabled : String?, scratch_off : String? = nil, &)
+  names = {"QWEN35_PREFILL_FFN_CAPACITY_REUSE", "QWEN35_SCRATCH_OFF"}
+  saved = names.map { |name| ENV[name]? }
+  begin
+    {enabled, scratch_off}.each_with_index do |value, index|
+      if value
+        ENV[names[index]] = value
+      else
+        ENV.delete(names[index])
+      end
+    end
+    yield
+  ensure
+    saved.each_with_index do |value, index|
+      if value
+        ENV[names[index]] = value
+      else
+        ENV.delete(names[index])
+      end
+    end
+  end
+end
+
+describe "Qwen bounded FFN capacity hits" do
+  it "reuses only an existing canonical buffer and preserves exact misses" do
+    scratch = ML::GGUF::Qwen35Metal::Scratch
+    scratch.with_inventory_spec do
+      with_ffn_capacity_settings("1") do
+        tag = :rec_chunk_many_ffn_gate
+        canonical = scratch.seed_inventory_spec(tag, 2048_i64 * 17 * 4)
+        exact = scratch.seed_inventory_spec(tag, 1668_i64 * 17 * 4)
+        scratch.get_prefill_ffn(tag, 1668, 17).same?(canonical).should be_true
+        scratch.get_prefill_ffn(tag, 2048, 17).same?(canonical).should be_true
+        # A different FFN dimension must not pick the oversized old shape.
+        different_dim = scratch.seed_inventory_spec(tag, 1668_i64 * 19 * 4)
+        scratch.get_prefill_ffn(tag, 1668, 19).same?(different_dim).should be_true
+        other = scratch.seed_inventory_spec(:rec_chunk_many_ffn_up, 1668_i64 * 17 * 4)
+        scratch.get_prefill_ffn(:rec_chunk_many_ffn_up, 1668, 17).same?(other).should be_true
+        scratch.memory_inventory[:entries].should eq(4)
+        with_ffn_capacity_settings(nil) do
+          scratch.get_prefill_ffn(tag, 1668, 17).same?(exact).should be_true
+        end
+      end
+    end
+  end
+
+  it "keeps namespaces separate and never borrows for fresh or disabled scratch" do
+    scratch = ML::GGUF::Qwen35Metal::Scratch
+    scratch.with_inventory_spec do
+      tag = :frec_full_ffn_up
+      scratch.seed_inventory_spec(tag, 2048_i64 * 17 * 4)
+      namespaced = scratch.seed_inventory_spec("lease:#{tag}", 2048_i64 * 17 * 4)
+      with_ffn_capacity_settings("1") do
+        scratch.with_namespace("lease") do
+          scratch.get_prefill_ffn(tag, 1668, 17).same?(namespaced).should be_true
+        end
+        scratch.with_namespace("other") { scratch.capacity_hit_spec(tag, 1668, 17).should be_nil }
+        scratch.with_fresh do |fresh|
+          scratch.capacity_hit_spec(tag, 1668, 17).should be_nil
+          fresh.should be_empty
+        end
+        with_ffn_capacity_settings("1", "1") { scratch.capacity_hit_spec(tag, 1668, 17).should be_nil }
+      end
+    end
+  end
+
+  it "bounds the opt-in window and preserves exact defaults" do
+    scratch = ML::GGUF::Qwen35Metal::Scratch
+    scratch.with_inventory_spec do
+      tag = :frec_rec_ffn_gate
+      canonical = scratch.seed_inventory_spec(tag, 2048_i64 * 17 * 4)
+      with_ffn_capacity_settings("1") do
+        [1025, 1668, 2047].each { |rows| scratch.capacity_hit_spec(tag, rows, 17).should be(canonical) }
+        [0, 1, 1024, 2048, 2049, 4096].each { |rows| scratch.capacity_hit_spec(tag, rows, 17).should be_nil }
+      end
+      [nil, "0", "unexpected"].each do |setting|
+        with_ffn_capacity_settings(setting) { scratch.capacity_hit_spec(tag, 1668, 17).should be_nil }
+      end
+    end
+  end
+
+  it "routes exactly the six audited F32 gate and up slots before command setup" do
+    source = File.read(File.expand_path("../src/ml/gguf/qwen35_metal.cr", __DIR__))
+    source.scan(/Scratch.get_prefill_ffn\(/).size.should eq(6)
+    [
+      {"recurrent_layer_chunk_project_many", "rec_chunk_many", "ffn_dim"},
+      {"full_attn_then_recurrent_chunk_project_many", "frec_full", "full_ffn_dim"},
+      {"full_attn_then_recurrent_chunk_project_many", "frec_rec", "rec_ffn_dim"},
+    ].each do |method_name, prefix, dimension|
+      setup = source.split("def self.#{method_name}(", 2)[1].split("cmd = append_command_buffer", 2)[0]
+      ["gate", "up"].each do |slot|
+        setup.should contain("Scratch.get_prefill_ffn(:#{prefix}_ffn_#{slot}, n_tokens, #{dimension})")
+      end
     end
   end
 end

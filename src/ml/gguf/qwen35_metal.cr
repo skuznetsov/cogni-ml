@@ -948,6 +948,33 @@ module ML
             get_string_raw(tag, byte_size)
           end
 
+          # Opt-in for the six audited F32 prefill FFN gate/up slots only.
+          # Logical rows/strides remain caller-owned; never allocate padding.
+          # Retains the serial pool contract, not a new concurrent-use lease.
+          def self.get_prefill_ffn(tag : Symbol, rows : Int32, dim : Int32) : ML::MetalBuffer
+            if buffer = prefill_ffn_capacity_hit(tag, rows, dim)
+              return buffer
+            end
+            get(tag, rows.to_i64 * dim * sizeof(Float32))
+          end
+
+          private def self.prefill_ffn_capacity_hit(tag : Symbol, rows : Int32, dim : Int32) : ML::MetalBuffer?
+            return nil unless ENV["QWEN35_PREFILL_FFN_CAPACITY_REUSE"]? == "1"
+            return nil unless rows > 1024 && rows < 2048
+            return nil if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !fresh_stack.empty?
+            capacity_bytes = 2048_i64 * dim * sizeof(Float32)
+            namespace = namespace_stack.last?
+            @@mutex.synchronize do
+              buffer = if namespace
+                         @@pool_s[{"#{namespace}:#{tag}", capacity_bytes}]?
+                       else
+                         @@pool[{tag, capacity_bytes}]?
+                       end
+              @@hits += 1 if buffer
+              buffer
+            end
+          end
+
           def self.stats : {Int64, Int64}
             @@mutex.synchronize { {@@hits, @@misses} }
           end
@@ -6556,8 +6583,8 @@ module ML
           residual_buf = Scratch.get(:rec_chunk_many_residual, hidden_bytes)
           normed_buf = Scratch.get(:rec_chunk_many_normed, hidden_bytes)
           normed_h16_buf = Scratch.get(:rec_chunk_many_normed_h16, hidden_elems.to_i64 * 2_i64)
-          ffn_gate_buf = Scratch.get(:rec_chunk_many_ffn_gate, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
-          ffn_up_buf = Scratch.get(:rec_chunk_many_ffn_up, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_gate_buf = Scratch.get_prefill_ffn(:rec_chunk_many_ffn_gate, n_tokens, ffn_dim)
+          ffn_up_buf = Scratch.get_prefill_ffn(:rec_chunk_many_ffn_up, n_tokens, ffn_dim)
           ffn_act_buf = prefill_ffn_activation_buffer(ffn_up_buf) do
             Scratch.get(:rec_chunk_many_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           end
@@ -8685,8 +8712,8 @@ module ML
           full_residual_buf = Scratch.get(:frec_full_residual, hidden_bytes)
           full_normed_buf = Scratch.get(:frec_full_normed, hidden_bytes)
           full_normed_h16_buf = Scratch.get(:frec_full_normed_h16, hidden_elems.to_i64 * 2_i64)
-          full_ffn_gate_buf = Scratch.get(:frec_full_ffn_gate, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
-          full_ffn_up_buf = Scratch.get(:frec_full_ffn_up, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
+          full_ffn_gate_buf = Scratch.get_prefill_ffn(:frec_full_ffn_gate, n_tokens, full_ffn_dim)
+          full_ffn_up_buf = Scratch.get_prefill_ffn(:frec_full_ffn_up, n_tokens, full_ffn_dim)
           full_ffn_act_buf = prefill_ffn_activation_buffer(full_ffn_up_buf) do
             Scratch.get(:frec_full_ffn_comb, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
           end
@@ -8712,8 +8739,8 @@ module ML
           rec_residual_buf = Scratch.get(:frec_rec_residual, hidden_bytes)
           rec_normed_buf = Scratch.get(:frec_rec_normed, hidden_bytes)
           rec_normed_h16_buf = Scratch.get(:frec_rec_normed_h16, hidden_elems.to_i64 * 2_i64)
-          rec_ffn_gate_buf = Scratch.get(:frec_rec_ffn_gate, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
-          rec_ffn_up_buf = Scratch.get(:frec_rec_ffn_up, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
+          rec_ffn_gate_buf = Scratch.get_prefill_ffn(:frec_rec_ffn_gate, n_tokens, rec_ffn_dim)
+          rec_ffn_up_buf = Scratch.get_prefill_ffn(:frec_rec_ffn_up, n_tokens, rec_ffn_dim)
           rec_ffn_act_buf = prefill_ffn_activation_buffer(rec_ffn_up_buf) do
             Scratch.get(:frec_rec_ffn_comb, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
           end
