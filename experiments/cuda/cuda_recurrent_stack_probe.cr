@@ -7,7 +7,7 @@
 require "option_parser"
 require "../../src/ml/gguf/reader"
 require "../../src/ml/gguf/qwen35_cpu"
-require "../../src/ml/cuda/qwen_recurrent_stack_runner"
+require "../../src/ml/models/qwen35/cuda/recurrent_stack_runner"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 

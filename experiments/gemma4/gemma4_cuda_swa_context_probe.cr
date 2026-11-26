@@ -9,7 +9,7 @@ require "option_parser"
 require "../../src/ml/gguf/gemma4_cpu"
 require "../../src/ml/cuda/driver"
 
-require "../../src/ml/cuda/gemma4_swa_context_ptx"
+require "../../src/ml/models/gemma4/cuda/swa_context_ptx"
 
 ATTN_PTX     = ML::CUDA::Gemma4SWAContextPTX::ATTN_PTX
 KV_WRITE_PTX = ML::CUDA::Gemma4SWAContextPTX::KV_WRITE_PTX

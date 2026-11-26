@@ -6,8 +6,8 @@
 require "option_parser"
 require "../../src/ml/gguf/gemma4_cpu"
 require "../../src/ml/cuda/driver"
-require "../../src/ml/cuda/qwen_full_attn_projection_runner"
-require "../../src/ml/cuda/gemma4_swa_context_ptx"
+require "../../src/ml/models/qwen35/cuda/full_attn_projection_runner"
+require "../../src/ml/models/gemma4/cuda/swa_context_ptx"
 
 NORM_PTX = {{ read_file("#{__DIR__}/../../src/ml/cuda/kernels/shared/deltanet_step_probe.ptx") }}
 Q4K_PTX  = {{ read_file("#{__DIR__}/../../src/ml/cuda/kernels/shared/q4k_gemv_probe.ptx") }}

@@ -6,7 +6,7 @@
 
 require "option_parser"
 require "../../src/ml/gguf/gemma4_cpu"
-require "../../src/ml/cuda/qwen_full_attn_projection_runner"
+require "../../src/ml/models/qwen35/cuda/full_attn_projection_runner"
 
 NORM_PTX = {{ read_file("#{__DIR__}/../../src/ml/cuda/kernels/shared/deltanet_step_probe.ptx") }}
 

@@ -7,7 +7,7 @@
 require "option_parser"
 require "../../src/ml/gguf/reader"
 require "../../src/ml/gguf/quant_matmul"
-require "../../src/ml/cuda/qwen_full_attn_projection_runner"
+require "../../src/ml/models/qwen35/cuda/full_attn_projection_runner"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
