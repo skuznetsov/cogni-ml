@@ -6,6 +6,7 @@
 require "../../../gguf/compute"
 require "../../../gguf/profile"
 require "./policy"
+require "../../../core/float16_bits"
 require "../../../metal/compute_graph"
 
 module ML::GGUF
@@ -121,19 +122,8 @@ module ML::GGUF
     end
   end
 
-  # F32 → F16 conversion (IEEE 754 half-precision)
   def self.f32_to_f16(f : Float32) : UInt16
-    bits = f.unsafe_as(UInt32)
-    sign = (bits >> 16) & 0x8000_u32
-    exp = ((bits >> 23) & 0xFF).to_i32 - 127 + 15
-    mant = (bits >> 13) & 0x03FF_u32
-    if exp <= 0
-      (sign).to_u16
-    elsif exp >= 31
-      (sign | 0x7C00_u32).to_u16  # Inf
-    else
-      (sign | (exp.to_u32 << 10) | mant).to_u16
-    end
+    ML::Float16Bits.truncate_f32(f)
   end
 
   class MetalBackend

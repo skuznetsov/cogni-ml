@@ -16,6 +16,7 @@ require "json"
   require "../../../metal/dispatch"
   require "../../../metal/compute_graph"
   require "../../../core/buffer"
+  require "../../../core/float16_bits"
   require "./scratch"
   require "./const_cache"
 {% end %}
@@ -3084,27 +3085,13 @@ module ML
         private def self.write_shared_f16(buf : ML::MetalBuffer, values : Array(Float32)) : Nil
           ptr = buf.contents.as(Pointer(UInt16))
           values.each_with_index do |value, i|
-            ptr[i] = f32_to_f16(value)
+            ptr[i] = ML::Float16Bits.truncate_f32(value)
           end
         end
 
         private def self.read_shared_f16(buf : ML::MetalBuffer, count : Int32) : Array(Float32)
           ptr = buf.contents.as(Pointer(UInt16))
           Array(Float32).new(count) { |i| Dequant.fp16_to_f32(ptr[i]) }
-        end
-
-        private def self.f32_to_f16(f : Float32) : UInt16
-          bits = f.unsafe_as(UInt32)
-          sign = (bits >> 16) & 0x8000_u32
-          exp = ((bits >> 23) & 0xff).to_i32 - 127 + 15
-          mant = (bits >> 13) & 0x03ff_u32
-          if exp <= 0
-            sign.to_u16
-          elsif exp >= 31
-            (sign | 0x7c00_u32).to_u16
-          else
-            (sign | (exp.to_u32 << 10) | mant).to_u16
-          end
         end
 
         private def self.q56_batch_gemm_enabled? : Bool
