@@ -12,6 +12,9 @@ TARGETS = {
   "qwen35_recurrent"   => "src/ml/models/qwen35/metal/recurrent.cr",
   "qwen35_output_head" => "src/ml/models/qwen35/metal/output_head.cr",
   "gemma4"             => "src/ml/models/gemma4/metal/engine.cr",
+  "gemma4_state"       => "src/ml/models/gemma4/metal/state.cr",
+  "gemma4_attention"   => "src/ml/models/gemma4/metal/attention.cr",
+  "gemma4_layer_tail"  => "src/ml/models/gemma4/metal/layer_tail.cr",
   "compute_graph"      => "src/ml/metal/compute_graph.cr",
   "dispatch"           => "src/ml/metal/dispatch.cr",
 }
@@ -24,7 +27,12 @@ MODEL_SOURCES = {
     TARGETS["qwen35_recurrent"],
     TARGETS["qwen35_output_head"],
   ],
-  "gemma4" => [TARGETS["gemma4"]],
+  "gemma4" => [
+    TARGETS["gemma4"],
+    TARGETS["gemma4_state"],
+    TARGETS["gemma4_attention"],
+    TARGETS["gemma4_layer_tail"],
+  ],
 }
 
 WRITEISH = /(out|dst|cache|partial|tile|ids?|values?|logits|qkv|q_buf|k_buf|v_buf|gate_buf|up_buf|down_buf|normed_buf|ffn|ctx|projected|combined|state|z_buf|residual_buf)/
