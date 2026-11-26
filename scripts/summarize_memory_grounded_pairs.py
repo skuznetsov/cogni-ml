@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarize closed-book vs memory-grounded CogniQwen surrogate probe rows.
 
-Reads stdout/logs from bin/qwen35_deltanet_fixed_basis_probe.cr and compares
+Reads stdout/logs from experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr and compares
 prompt names ending in `_closed` with matching `_memory` or `_mem` rows.
 This is intentionally format-tolerant: missing metrics stay blank instead of
 making the falsifier look stronger than the evidence.

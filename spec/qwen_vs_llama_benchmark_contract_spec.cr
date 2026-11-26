@@ -3,7 +3,7 @@ require "../src/ml/qwen_vs_llama_benchmark_contract"
 
 describe ML::QwenVsLlamaBenchmarkContract do
   it "isolates comparison engines in sequential worker processes" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?(%q{parser.on("--split-process"}).should be_true
     source.includes?(%q{parser.on("--worker=ENGINE"}).should be_true
     source.includes?(%q{SPLIT_PROCESS_ORDER  = ["native", "llama", "llama", "native"]}).should be_true
@@ -13,7 +13,7 @@ describe ML::QwenVsLlamaBenchmarkContract do
   end
 
   it "moves a fail-closed same-token and full-logit certificate across workers" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("SPLIT_WORKER_SCHEMA").should be_true
     source.includes?("token_sha256 : String").should be_true
     source.includes?("samples_ms : Array(Float64)").should be_true
@@ -28,7 +28,7 @@ describe ML::QwenVsLlamaBenchmarkContract do
   end
 
   it "matches llama-bench reset and performs only the getter synchronization" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("@context.kv_clear(data: false)").should be_true
     source.includes?("LlamaFFI.llama_synchronize(@context.handle)").should be_false
     source.includes?("native_cooldown_ms").should be_true
@@ -39,7 +39,7 @@ describe ML::QwenVsLlamaBenchmarkContract do
   end
 
   it "releases native Metal state between prompt sizes" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("Qwen35CPU.release_state_metal!(@state)").should be_true
     source.includes?("native_runner : NativePrefillRunner? = nil").should be_true
     in_process_main = source[source.index("native_runner : NativePrefillRunner? = nil").not_nil!..]
@@ -49,7 +49,7 @@ describe ML::QwenVsLlamaBenchmarkContract do
   end
 
   it "covers partial benchmark construction with cleanup boundaries" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("rescue ex\n      close\n      raise ex").should be_true
     source.includes?("rescue ex\n      @context.free\n      raise ex").should be_true
     source.includes?("native_weights : ML::GGUF::Qwen35Weights? = nil").should be_true
@@ -256,7 +256,7 @@ describe ML::QwenVsLlamaBenchmarkContract do
   end
 
   it "keeps the strict decode comparison isolated and materializes one full row per forced token" do
-    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_decode_vs_llama_same_token.cr")
+    source = File.read(Path[__DIR__] / "../benchmarks/qwen35/benchmark_qwen_decode_vs_llama_same_token.cr")
     source.includes?(%q{SPLIT_PROCESS_ORDER = ["native", "llama", "llama", "native"]}).should be_true
     source.includes?(%q{Process.run(worker_executable}).should be_true
     source.includes?(%q{@context.kv_clear(data: false)}).should be_true

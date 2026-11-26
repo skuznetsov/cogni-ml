@@ -9,6 +9,7 @@ cd "$ROOT"
 RUN_SAFE="${COGNI_RUN_SAFE:-$ROOT/scripts/run_safe.sh}"
 CRYSTAL_BIN="${CRYSTAL_BIN:-/opt/homebrew/bin/crystal}"
 PROBE_BIN="${QWEN_QBIT_RUNTIME_PROBE_BIN:-/private/tmp/qwen35_qbit_runtime_smoke_release}"
+PROBE_SOURCE="experiments/qwen35/qwen35_qbit_runtime_smoke.cr"
 MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-20}"
 BUILD_TIMEOUT_SEC="${QWEN_QBIT_BUILD_TIMEOUT_SEC:-600}"
 RUN_TIMEOUT_SEC="${QWEN_QBIT_RUN_TIMEOUT_SEC:-1200}"
@@ -31,7 +32,7 @@ export CRYSTAL_CACHE_DIR
 needs_build=0
 if [[ ! -x "$PROBE_BIN" || "${QWEN_QBIT_REBUILD:-0}" == "1" ]]; then
   needs_build=1
-elif [[ "$ROOT/bin/qwen35_qbit_runtime_smoke.cr" -nt "$PROBE_BIN" ]]; then
+elif [[ "$PROBE_SOURCE" -nt "$PROBE_BIN" ]]; then
   needs_build=1
 else
   while IFS= read -r -d '' source_path; do
@@ -44,7 +45,7 @@ fi
 
 if [[ "$needs_build" == "1" ]]; then
   "$RUN_SAFE" "$CRYSTAL_BIN" "$BUILD_TIMEOUT_SEC" "$BUILD_MAX_TREE_MB" \
-    build bin/qwen35_qbit_runtime_smoke.cr \
+    build "$PROBE_SOURCE" \
     -o "$PROBE_BIN" --release --no-debug --error-trace \
     --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -lc++"
 fi

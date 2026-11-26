@@ -50,7 +50,7 @@ Boundary risk: this path must preserve exact greedy parity and KV/SSM state at t
 
 ### 2. Sidecar wall harness checkpoint/replay path
 
-File: `bin/qwen35_mtp_sidecar_probe.cr`
+File: `experiments/qwen35/qwen35_mtp_sidecar_probe.cr`
 
 Current options:
 
@@ -142,7 +142,7 @@ Dual frame:
 
 ## Recommended Next Experiment
 
-Do not start with product `qwen35_generate`. Start in `bin/qwen35_mtp_sidecar_probe.cr`.
+Do not start with product `qwen35_generate`. Start in `experiments/qwen35/qwen35_mtp_sidecar_probe.cr`.
 
 1. Add a default-off `--mtp-spec-wall-state-slot-probe` mode.
 2. Restrict to `stage=2`, `top2_rescue_continue=false`, `rec_rollback_log=false`.

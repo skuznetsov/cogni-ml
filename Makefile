@@ -979,13 +979,14 @@ $(BUILD_DIR)/hy_nomas_serial_benchmark: examples/hy_nomas_serial_benchmark.cr $(
 
 hy_nomas_serial_benchmark: $(BUILD_DIR)/hy_nomas_serial_benchmark
 
-$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench $(BUILD_DIR)/inkling2_serve: $(BUILD_DIR)/%: bin/%.cr $(INKLING2_SOURCES) $(MODEL_FORMAT_SOURCES) \
+$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_serve: $(BUILD_DIR)/%: bin/%.cr
+$(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench: $(BUILD_DIR)/%: benchmarks/inkling2/%.cr
+
+$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench $(BUILD_DIR)/inkling2_serve: $(INKLING2_SOURCES) $(MODEL_FORMAT_SOURCES) \
 		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/quant_matmul.cr src/ml/gguf/ngram_draft.cr \
 		src/ml/metal/kernels/shared/gemm_q56k.metal $(wildcard src/ml/core/*.cr src/ml/metal/*.cr) $(BRIDGE_OBJ) Makefile
-	$(CRYSTAL) build --release $< -o $@ \
+	$(CRYSTAL) build --release $(filter bin/%.cr benchmarks/inkling2/%.cr,$^) -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
-
-$(BUILD_DIR)/inkling2_serve: $(wildcard src/ml/serve/*.cr)
 
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
@@ -998,12 +999,12 @@ drama3_studio: $(BRIDGE_OBJ) | $(BUILD_SENTINEL)
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
 
 profile_nomic: $(BRIDGE_OBJ)
-	$(CRYSTAL) run bin/profile_nomic_stages.cr \
+	$(CRYSTAL) run experiments/nomic/profile_nomic_stages.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)" \
 		-- $(ARGS)
 
 profile_nomic_layers: $(BRIDGE_OBJ)
-	$(CRYSTAL) run bin/profile_nomic_stages.cr \
+	$(CRYSTAL) run experiments/nomic/profile_nomic_stages.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)" \
 		-- --mode=layers $(ARGS)
 
@@ -1015,29 +1016,29 @@ profile_nomic_vs_llama: $(BRIDGE_OBJ)
 	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
 	LD_LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LD_LIBRARY_PATH" \
 	DYLD_LIBRARY_PATH="$(LLAMA_LIB_DIR):$$DYLD_LIBRARY_PATH" \
-	$(CRYSTAL) run bin/profile_nomic_vs_llama.cr \
+	$(CRYSTAL) run experiments/nomic/profile_nomic_vs_llama.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR)" \
 		-- $(ARGS)
 
 benchmark_qwen_prefill_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token
-$(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_prefill_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
+$(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: benchmarks/qwen35/benchmark_qwen_prefill_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
 	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
 		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
 		exit 1; \
 	fi
 	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
-	$(CRYSTAL) build bin/benchmark_qwen_prefill_vs_llama_same_token.cr \
+	$(CRYSTAL) build $< \
 		-o $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 
 benchmark_qwen_decode_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token
-$(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: bin/benchmark_qwen_decode_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
+$(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: benchmarks/qwen35/benchmark_qwen_decode_vs_llama_same_token.cr $(BRIDGE_OBJ) $(QWEN35_BENCHMARK_SOURCES) Makefile
 	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
 		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
 		exit 1; \
 	fi
 	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
-	$(CRYSTAL) build bin/benchmark_qwen_decode_vs_llama_same_token.cr \
+	$(CRYSTAL) build $< \
 		-o $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 

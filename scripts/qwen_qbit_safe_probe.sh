@@ -29,7 +29,7 @@ export CRYSTAL_CACHE_DIR
 
 if [[ ! -x "$PROBE_BIN" || "${QWEN_QBIT_REBUILD:-0}" == "1" ]]; then
   "$RUN_SAFE" "$CRYSTAL_BIN" "$BUILD_TIMEOUT_SEC" "$BUILD_MAX_TREE_MB" \
-    build bin/qwen35_qbit_cache_probe.cr \
+    build experiments/qwen35/qwen35_qbit_cache_probe.cr \
     -o "$PROBE_BIN" --release --no-debug --error-trace \
     --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -lc++"
 fi

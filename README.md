@@ -21,13 +21,27 @@ Cogni-ML is currently two things:
 
 ```text
 src/ml/
-  core/         Tensor, Shape, MetalBuffer
-  autograd/     Variable, GradFn backward pass
-  nn/           Linear, LayerNorm, MultiHeadAttention, ViT
-  optim/        Adam/AdamW
-  llm/          llama.cpp FFI bindings
-  gguf/         GGUF reader, tokenizer, dequantization, Qwen35, NomicBertMoE
-  metal/        Device, ComputeEncoder, ComputeGraph, GraphEncoder
+  core/                    Tensor, Shape, MetalBuffer
+  autograd/                Variable, GradFn backward pass
+  nn/                      Linear, LayerNorm, MultiHeadAttention, ViT
+  optim/                   Adam/AdamW
+  llm/                     llama.cpp FFI bindings
+  formats/
+    gguf/                  Shared GGUF reader and format support
+    safetensors/           Safetensors format support
+  models/<family>/         Family-specific model implementations
+  gguf/                    Shared GGUF helpers and former import paths
+  metal/
+    kernels/<family>/      Metal kernels grouped by model family
+  cuda/
+    kernels/<family>/      CUDA kernels grouped by model family
+  audio/                   Native audio model families
+  video/                   Native video model families
+  serve/                   Model serving APIs and routes
+
+bin/                       Stable CLIs and compatibility forwarders
+benchmarks/<family>/       Standalone performance programs
+experiments/<family>/      Research probes and diagnostics
 ```
 
 ## Inkling 2
@@ -108,7 +122,7 @@ This entrypoint intentionally does not run inference. It verifies GGUF parsing, 
 Build the minimal Crystal CUDA Driver API smoke on NVIDIA/Linux hosts:
 
 ```sh
-crystal build bin/cuda_driver_smoke.cr -o build/cuda_driver_smoke
+crystal build experiments/cuda/cuda_driver_smoke.cr -o build/cuda_driver_smoke
 ./build/cuda_driver_smoke 4096
 ```
 
@@ -121,7 +135,7 @@ It also provides `ML::CUDA::ResidentSequenceRunner`, a thin lifecycle facade for
 Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
+crystal build -Dcpu_only experiments/cuda/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
 ./build/cuda_q8_gemv_probe \
   --model /path/to/Qwen3.5-0.8B-Q8_0.gguf \
   --tensor blk.0.ffn_up.weight \
@@ -135,7 +149,7 @@ crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
 Build the first Q4_K CUDA correctness probe for Qwen 9B/27B-style target tensors:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
+crystal build -Dcpu_only experiments/cuda/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
 ./build/cuda_q4k_gemv_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --tensor blk.0.attn_gate.weight \
@@ -149,7 +163,7 @@ crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
 Build the Q6_K CUDA correctness/speed probe for Q4_K_M tensors that remain in Q6_K:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_q6k_gemv_probe.cr -o build/cuda_q6k_gemv_probe
+crystal build -Dcpu_only experiments/cuda/cuda_q6k_gemv_probe.cr -o build/cuda_q6k_gemv_probe
 ./build/cuda_q6k_gemv_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --tensor blk.0.ffn_down.weight \
@@ -163,7 +177,7 @@ crystal build -Dcpu_only bin/cuda_q6k_gemv_probe.cr -o build/cuda_q6k_gemv_probe
 Build the first GPU-resident FFN sequence probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_ffn_sequence_probe.cr -o build/cuda_ffn_sequence_probe
+crystal build -Dcpu_only experiments/cuda/cuda_ffn_sequence_probe.cr -o build/cuda_ffn_sequence_probe
 ./build/cuda_ffn_sequence_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 0 \
@@ -176,7 +190,7 @@ crystal build -Dcpu_only bin/cuda_ffn_sequence_probe.cr -o build/cuda_ffn_sequen
 Build the full-attention input projection bundle probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr -o build/cuda_attn_projection_probe
+crystal build -Dcpu_only experiments/cuda/cuda_attn_projection_probe.cr -o build/cuda_attn_projection_probe
 ./build/cuda_attn_projection_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 3 \
@@ -190,7 +204,7 @@ The probe now routes through `ML::CUDA::QwenFullAttnProjectionRunner`, supports 
 Build the full-attention Q/K normalization + RoPE + KV-cache boundary probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_kv_probe
+crystal build -Dcpu_only experiments/cuda/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_kv_probe
 ./build/cuda_full_attn_kv_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 3 \
@@ -204,7 +218,7 @@ crystal build -Dcpu_only bin/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_
 Build the Q5_K CUDA recurrent-QKV probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_q5k_gemv_probe.cr -o build/cuda_q5k_gemv_probe
+crystal build -Dcpu_only experiments/cuda/cuda_q5k_gemv_probe.cr -o build/cuda_q5k_gemv_probe
 ./build/cuda_q5k_gemv_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --tensor blk.0.attn_qkv.weight \
@@ -217,7 +231,7 @@ crystal build -Dcpu_only bin/cuda_q5k_gemv_probe.cr -o build/cuda_q5k_gemv_probe
 Build the recurrent-layer projection bundle probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_recurrent_projection_probe.cr -o build/cuda_recurrent_projection_probe
+crystal build -Dcpu_only experiments/cuda/cuda_recurrent_projection_probe.cr -o build/cuda_recurrent_projection_probe
 ./build/cuda_recurrent_projection_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 0 \
@@ -230,7 +244,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_projection_probe.cr -o build/cuda_re
 Build the synthetic DeltaNet output slice probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_deltanet_output_probe.cr -o build/cuda_deltanet_output_probe
+crystal build -Dcpu_only experiments/cuda/cuda_deltanet_output_probe.cr -o build/cuda_deltanet_output_probe
 ./build/cuda_deltanet_output_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 0 \
@@ -243,7 +257,7 @@ crystal build -Dcpu_only bin/cuda_deltanet_output_probe.cr -o build/cuda_deltane
 Build the recurrent prep/output slice probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_recurrent_prep_output_probe
+crystal build -Dcpu_only experiments/cuda/cuda_recurrent_prep_output_probe.cr -o build/cuda_recurrent_prep_output_probe
 ./build/cuda_recurrent_prep_output_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 0 \
@@ -257,7 +271,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
 Build the recurrent multi-layer stack scaffold:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_recurrent_stack_probe.cr -o build/cuda_recurrent_stack_probe
+crystal build -Dcpu_only experiments/cuda/cuda_recurrent_stack_probe.cr -o build/cuda_recurrent_stack_probe
 ./build/cuda_recurrent_stack_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layers 0,2,4 \
@@ -269,7 +283,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_stack_probe.cr -o build/cuda_recurre
 Build the mixed recurrent/full-attention CUDA stack probe:
 
 ```sh
-crystal build -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack_probe
+crystal build -Dcpu_only experiments/cuda/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack_probe
 ./build/cuda_mixed_stack_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layers 0,1,2,3,4 \
@@ -284,7 +298,7 @@ Experimental CUDA exact cache-replay fast lane:
 
 ```sh
 crystal build --release --no-debug -Dcpu_only \
-  bin/cuda_mixed_stack_probe.cr \
+  experiments/cuda/cuda_mixed_stack_probe.cr \
   -o build/cuda_mixed_stack_probe
 
 ./build/cuda_mixed_stack_probe \
@@ -458,7 +472,7 @@ Experimental same-weight proposal-route memory:
 
 ```sh
 crystal build --release --no-debug \
-  bin/qwen35_proposal_route_memory.cr \
+  experiments/qwen35/qwen35_proposal_route_memory.cr \
   -o build/qwen35_proposal_route_memory
 
 QWEN35_ROUTE_CAL_ROOT=/tmp/qwen35_route_memory \
@@ -474,7 +488,7 @@ The route cache stores certified proposal-body choices such as `baseline` or
 `qwen35_generate` decode-policy switch yet: the product generator currently has
 greedy, n-gram/cache, external-draft speculative, and GGUF-MTP paths, while the
 PCA-updown same-weight proposal body lives in
-`bin/qwen35_deltanet_fixed_basis_probe.cr`. Use route memory to avoid repeating
+`experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr`. Use route memory to avoid repeating
 online route calibration in that probe corridor; do not count it as a product
 generation speedup until the same verifier/proposal corridor is wired into the
 normal generator. `qwen35_generate` can resolve the route table with
@@ -723,7 +737,7 @@ semantics:
 ```sh
 crystal build --release --no-debug \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++" \
-  bin/qwen35_warm_request_probe.cr \
+  experiments/qwen35/qwen35_warm_request_probe.cr \
   -o build/qwen35_warm_request_probe
 
 ./build/qwen35_warm_request_probe \
@@ -1058,7 +1072,7 @@ Build the matched benchmark:
 ```sh
 crystal build --release --no-debug \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" \
-  bin/benchmark_qwen_vs_llama.cr \
+  benchmarks/qwen35/benchmark_qwen_vs_llama.cr \
   -o build/benchmark_qwen_vs_llama
 ```
 
@@ -1152,7 +1166,7 @@ quiet/order-balanced run.
 For Qwen3.6 MTP / quant baselines, first inspect the local/HF matrix:
 
 ```sh
-crystal build --release bin/qwen36_mtp_baseline_matrix.cr \
+crystal build --release experiments/qwen36/qwen36_mtp_baseline_matrix.cr \
   -o build/qwen36_mtp_baseline_matrix
 
 ./build/qwen36_mtp_baseline_matrix
@@ -1251,7 +1265,7 @@ Neural draft harness with Qwen 3.5 0.8B Q8_0:
 ```sh
 crystal build --release --no-debug \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" \
-  bin/qwen35_speculative_accept.cr \
+  experiments/qwen35/qwen35_speculative_accept.cr \
   -o build/qwen35_speculative_accept
 
 ./build/qwen35_speculative_accept \
@@ -1281,7 +1295,7 @@ Target-only n-gram speculative harness:
 ```sh
 crystal build --release --no-debug \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" \
-  bin/qwen35_ngram_speculative.cr \
+  experiments/qwen35/qwen35_ngram_speculative.cr \
   -o build/qwen35_ngram_speculative
 
 ./build/qwen35_ngram_speculative \

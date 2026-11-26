@@ -104,7 +104,7 @@ Learned K/V projections will:
 - [x] Sampling Metal kernel — top-k + softmax (`kernels/sampling.metal`)
 - [x] CausalDecoder Crystal scaffold — full forward pass CPU reference (`src/ml/gguf/decoder.cr`)
 - [x] KV cache with bounds checking, V transpose, GQA support
-- [x] Phase 0.5 code discrimination test (`bin/test_code_discrimination.cr`)
+- [x] Phase 0.5 code discrimination test (`experiments/nomic/test_code_discrimination.cr`)
 
 ### In Cogniformerus:
 - [x] Hierarchical memory (pg_sorted_heap + GraphRAG)

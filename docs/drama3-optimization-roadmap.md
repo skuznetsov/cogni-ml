@@ -104,10 +104,10 @@ work, not separate rank-one update/output fusion (`LM-codex-DN-FUSED-EXACT-1`).
 Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 
 - **Projected-K surrogate (approximate state).** Calibration K vectors define a
-  fixed per-head basis `U` (`bin/qwen35_deltanet_fixed_basis_probe.cr:3142-3158`).
+  fixed per-head basis `U` (`experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr:3142-3158`).
   For `S≈MUᵀ`, `c=Uᵀk`, `q̄=Uᵀq`, update
   `M′=gM+β(v−gMc)cᵀ`, emit `y=M′q̄`
-  (`bin/qwen35_deltanet_fixed_basis_probe.cr:1275-1309`; exact recurrence:
+  (`experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr:1275-1309`; exact recurrence:
   `src/ml/models/qwen35/cpu/engine.cr:1052-1099`). This is exact only for the projected-K
   model. Chunk K/Q projection is token-parallel, but the low-rank state scan
   still loops serially over tokens and parallelizes rank work
@@ -121,7 +121,7 @@ Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 - **Block-residual surrogate (approximate layer skip).** The probe collects
   exact block input/output pairs, fits PCA plus a ridge residual map, then uses
   `x+Δ̂(x)` in place of the selected block
-  (`bin/qwen35_deltanet_fixed_basis_probe.cr:3248-3287, 3839-3903, 3946-4025`).
+  (`experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr:3248-3287, 3839-3903, 3946-4025`).
   It predicts a block; it is not a GDN scan. On 9B band `26:27`, rank 16,
   gamma 8 reached `92.89%` mean / `83.33%` minimum acceptance with exact greedy
   parity, but self-spec was `0.4553x` sequential exact speed (`10727.5 ms`
@@ -144,7 +144,7 @@ Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 exact target top-1 mismatch, emits the target ID, and leaves state replay to the
 caller (`src/ml/models/qwen35/speculation/acceptance.cr:1-47`). The wall runner snapshots
 verifier state, verifies known candidates, then restores and replays the emitted
-prefix through exact target prefill after rejection (`bin/qwen35_deltanet_fixed_basis_probe.cr:7280-7319`). This protects the fixed temperature-zero greedy sequence; it does
+prefix through exact target prefill after rejection (`experiments/qwen35/qwen35_deltanet_fixed_basis_probe.cr:7280-7319`). This protects the fixed temperature-zero greedy sequence; it does
 not preserve stochastic target distribution or a fixed random-tape sample path
 (no probability-ratio or residual-draw step). Product generation still says
 `product_self_spec=unsupported decode_path=unchanged`

@@ -2,7 +2,7 @@
 
 Document status: GEMM/MoE verified on M5 Max; attention-tail repair verified on M2 and pending on M5
 Current frontier: repaired b9960 comparator, race-free M5 Max GEMM/MoE, and guarded matrix-attention tails
-Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
+Bounded context: `src/ml/llm` bindings used by `experiments/nomic/profile_nomic_vs_llama.cr`
 
 ## Admitted surface
 
@@ -38,7 +38,7 @@ Bounded context: `src/ml/llm` bindings used by `bin/profile_nomic_vs_llama.cr`
 
 - `spec/llama_ffi_abi_spec.cr`: b9960 context/model parameter sizes.
 - `spec/nomic_metal_policy_spec.cr`: hardware default and explicit override policy.
-- `bin/profile_nomic_vs_llama.cr`: model/context smoke plus ABBA timing; every
+- `experiments/nomic/profile_nomic_vs_llama.cr`: model/context smoke plus ABBA timing; every
   measured vector is checked and the command fails on token or cosine mismatch.
 - Metal/F32/llama.cpp cosine matrix: minimum accepted cosine is defined by the parity test added with the Metal fix.
 - M2 forced-fallback Metal/F32 cosine: `0.999999547`, `0.999999640`,

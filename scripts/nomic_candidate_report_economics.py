@@ -2,7 +2,7 @@
 """Score Nomic shallow-candidate reports under a simple hot-index cost model.
 
 The input is produced by:
-  bin/nomic_encoder_tricks_probe --candidate-report=report.tsv ...
+  experiments/nomic/nomic_encoder_tricks_probe --candidate-report=report.tsv ...
 
 This intentionally does not claim a product speedup. It asks whether a shallow
 candidate band could pay for itself after full-depth query cost cancels out.

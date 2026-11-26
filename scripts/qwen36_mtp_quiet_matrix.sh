@@ -13,9 +13,9 @@ cd "${repo_root}"
 
 export CRYSTAL_CACHE_DIR
 
-crystal build --no-codegen bin/qwen36_mtp_baseline_matrix.cr --error-trace
+crystal build --no-codegen experiments/qwen36/qwen36_mtp_baseline_matrix.cr --error-trace
 
-exec crystal run bin/qwen36_mtp_baseline_matrix.cr -- \
+exec crystal run experiments/qwen36/qwen36_mtp_baseline_matrix.cr -- \
   --gen="${GEN}" \
   --repeats="${REPEATS}" \
   --compare-plain \

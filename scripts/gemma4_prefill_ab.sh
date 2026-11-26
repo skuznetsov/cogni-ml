@@ -112,7 +112,7 @@ if [[ "${force_build}" == "1" || ! -x "${profile_bin}" ]]; then
     cd "${repo_root}"
     CRYSTAL_CACHE_DIR="${crystal_cache}" COGNI_RUN_SAFE_MIN_FREE_PCT="${min_free_pct}" \
       "${run_safe}" "${crystal_bin}" 240 "${max_mem_mb}" \
-      build bin/gemma4_metal_decode_profile.cr ${build_flags} \
+      build experiments/gemma4/gemma4_metal_decode_profile.cr ${build_flags} \
       -o "${profile_bin}" --error-trace --link-flags="${link_flags}"
   )
 fi
