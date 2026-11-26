@@ -5,11 +5,17 @@
 
 ROOT = File.expand_path("..", __DIR__)
 TARGETS = {
-  "nomic_backend" => "src/ml/models/nomic_bert/metal/backend.cr",
-  "qwen35"        => "src/ml/models/qwen35/metal/engine.cr",
-  "gemma4"        => "src/ml/models/gemma4/metal/engine.cr",
-  "compute_graph" => "src/ml/metal/compute_graph.cr",
-  "dispatch"      => "src/ml/metal/dispatch.cr",
+  "nomic_backend"      => "src/ml/models/nomic_bert/metal/backend.cr",
+  "qwen35"             => "src/ml/models/qwen35/metal/engine.cr",
+  "qwen35_output_head" => "src/ml/models/qwen35/metal/output_head.cr",
+  "gemma4"             => "src/ml/models/gemma4/metal/engine.cr",
+  "compute_graph"      => "src/ml/metal/compute_graph.cr",
+  "dispatch"           => "src/ml/metal/dispatch.cr",
+}
+
+MODEL_SOURCES = {
+  "qwen35" => [TARGETS["qwen35"], TARGETS["qwen35_output_head"]],
+  "gemma4" => [TARGETS["gemma4"]],
 }
 
 WRITEISH = /(out|dst|cache|partial|tile|ids?|values?|logits|qkv|q_buf|k_buf|v_buf|gate_buf|up_buf|down_buf|normed_buf|ffn|ctx|projected|combined|state|z_buf|residual_buf)/
@@ -45,10 +51,10 @@ end
 puts
 
 puts "== Qwen/Gemma encoder shape =="
-{"qwen35" => TARGETS["qwen35"], "gemma4" => TARGETS["gemma4"]}.each do |name, rel|
-  typed = count(rel, /enc\s*:\s*ML::Metal::ComputeEncoder/)
-  enc_new = count(rel, /ComputeEncoder\.new/)
-  graph_ref = count(rel, /GraphEncoder|ComputeGraph/)
+MODEL_SOURCES.each do |name, sources|
+  typed = sources.sum { |rel| count(rel, /enc\s*:\s*ML::Metal::ComputeEncoder/) }
+  enc_new = sources.sum { |rel| count(rel, /ComputeEncoder\.new/) }
+  graph_ref = sources.sum { |rel| count(rel, /GraphEncoder|ComputeGraph/) }
   puts "#{name}: typed_compute_encoder_params=#{typed} compute_encoder_new=#{enc_new} graph_refs=#{graph_ref}"
 end
 puts
@@ -66,13 +72,15 @@ puts
 
 puts "== Potential graph-unsafe set_buffer calls =="
 puts "Heuristic: write-like buffer name, but no explicit BufferAccess/ReadWrite/Write token on the call line. Review before GraphEncoder promotion."
-{"qwen35" => TARGETS["qwen35"], "gemma4" => TARGETS["gemma4"]}.each do |name, rel|
+MODEL_SOURCES.each do |name, sources|
   candidates = [] of Hit
-  read_lines(rel).each_with_index do |line, idx|
-    next unless line.includes?(".set_buffer(")
-    next if line.includes?("BufferAccess") || line.includes?("::Write") || line.includes?("::ReadWrite")
-    next unless line =~ WRITEISH
-    candidates << Hit.new(rel, idx + 1, line.strip)
+  sources.each do |rel|
+    read_lines(rel).each_with_index do |line, idx|
+      next unless line.includes?(".set_buffer(")
+      next if line.includes?("BufferAccess") || line.includes?("::Write") || line.includes?("::ReadWrite")
+      next unless line =~ WRITEISH
+      candidates << Hit.new(rel, idx + 1, line.strip)
+    end
   end
   puts "#{name}: candidates=#{candidates.size}"
   candidates.first(40).each do |h|
