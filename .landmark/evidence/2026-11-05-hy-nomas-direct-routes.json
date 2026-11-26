@@ -1,0 +1,180 @@
+{
+  "schema": "cogni_ml.hy_nomas_direct_routes_evidence/v1",
+  "date": "2026-11-05",
+  "base_revision": "990571ba60cf06bdca3ff2727eab305526914d3d",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "All 54 BF16 DiT blocks, five frozen saved-state route arms, 25 source/native checkpoints; no scheduler, decoder or generation.",
+    "adversary": "ROBUST within this frozen numerical scope; two same-lineage read-only reviews are correlated, not independent reproduction.",
+    "refresh": [
+      "source/runtime",
+      "weights",
+      "saved inputs/layout",
+      "precision",
+      "binary/linked objects",
+      "evidence mutation or removal"
+    ],
+    "rollback": "Omit diagnostic probes; production generation and the accepted visual take remain unchanged."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "examples/hy_nomas_dit_route_factorial_probe.cr",
+      "examples/support/hy_nomas_dit_route_factorial_probe.cr",
+      "examples/support/hy_nomas_dit_route_factorial_gpu.cr",
+      "spec/hy_nomas_dit_route_factorial_test.py",
+      "spec/support/hy_nomas_dit_route_factorial_reference.py",
+      "spec/support/hy_nomas_dit_route_factorial_runtime.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-05-hy-nomas-direct-routes.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_dit_route_factorial_probe.cr",
+      "examples/support/hy_nomas_dit_route_factorial_probe.cr",
+      "examples/support/hy_nomas_dit_route_factorial_gpu.cr",
+      "spec/hy_nomas_dit_route_factorial_test.py",
+      "spec/support/hy_nomas_dit_route_factorial_reference.py",
+      "spec/support/hy_nomas_dit_route_factorial_runtime.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-05-hy-nomas-direct-routes.json"
+    ],
+    "production_behavior_changed": false
+  },
+  "verification": {
+    "cpu_tests": 54,
+    "release_build": "build12 passed",
+    "real_fixture_cpu_admission": true,
+    "source_native_checkpoints_bit_exact": 25,
+    "source_parent_checkpoints_bit_exact": 5,
+    "native_parent_checkpoints_bit_exact": 5,
+    "native_AA_checkpoints_bit_exact": 5,
+    "block0_text_and_protected_image_rows_exact": true,
+    "block0_image_interaction_exact_zero": true,
+    "native_malformed_manifest_rejections": 3,
+    "seeded_numeric_negative_rejected": true,
+    "parent_metadata_substitution_rejected": true,
+    "exclusive_output_file_and_symlink_rejections_pass": true,
+    "independent_checker": "Authenticated payload/range digests and separately authored Float64 recomputation; Python assertions active in recorded python3 -B invocation.",
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "dod_command": "python3 -B -m unittest spec.hy_nomas_dit_route_factorial_test spec.hy_nomas_refiner_c_factorial_test spec.hy_nomas_refiner_transfer_test spec.hy_nomas_action_conditioning_spec spec.hy_nomas_reference_attention_test spec.video_block_diff_test",
+    "dod_signal": "54 CPU tests, release build, self-test, CPU admission/negatives, guarded source/native, and independent checks pass; 25 checkpoints and all no-op/locality invariants exact.",
+    "gpu_dod_replay": "Exact argv/stdout/guard receipts for source2 and native4, plus build12/admission/negative/recomputation stages, are bound in qualification.json. Use fresh output names."
+  },
+  "result": {
+    "relative_rms_definition": "Float64 elementwise delta, then RMS(delta) / RMS(M00 in the same predeclared region). M00 retains refined/shared/global/history conditioning.",
+    "action1_alex": {
+      "action1_at_action2_off": 0.18195822920536558,
+      "action2_at_action1_off": 0.010230010389363617,
+      "interaction": 0.09547231661314225
+    },
+    "action2_resume": {
+      "action1_at_action2_off": 0.010605625148172978,
+      "action2_at_action1_off": 0.09285106858245061,
+      "interaction": 0.020612639733630332
+    },
+    "outside_union": {
+      "action1_at_action2_off": 0.01420648910744754,
+      "action2_at_action1_off": 0.011858416919500809,
+      "interaction": 0.013826902961069686
+    },
+    "conclusion": "Own-actor conditional contrast exceeds cross-actor contrast for this fixture. Later outside-region effects and interaction reject hard spatial isolation or independent additive action shares; no visible acting claim."
+  },
+  "diagnostic_fix": {
+    "root_cause": "Source -1 is an active global-only query; native negative query labels are padding and zero-scatter context. Boolean-mask parity alone did not detect this semantic collision.",
+    "change": "Map the 720 active negative video-query labels per arm to native global 0 before plan binding; preserve remaining labels and all source mask edges.",
+    "first_failing_frames": [
+      0,
+      10,
+      11,
+      28,
+      29
+    ],
+    "production_padding_semantics_changed": false,
+    "output_write_guard": "Exclusive O_EXCL creation rejects existing files and symlinks; no production kernel change."
+  },
+  "execution": {
+    "case_order": [
+      "M11",
+      "M00",
+      "M10",
+      "M01",
+      "M11_repeat"
+    ],
+    "blocks": 54,
+    "schedule": "layer-outer; T0 once then five T1 states; one-layer K/V and shared scratch",
+    "command_chains": 1,
+    "terminal_waits": 1,
+    "named_allocations_during_encode": 0,
+    "activation_readbacks_before_terminal_wait": 0,
+    "postwait_checkpoint_readbacks": 25,
+    "scheduler_updates": 0,
+    "decoder_calls": 0
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "native_process_cap_bytes": 23622320128,
+    "swap_growth_limit_bytes": 67108864,
+    "sampled_peak_process_bytes": 20325119608,
+    "sampled_min_headroom_bytes": 28652355584,
+    "observed_swap_growth_bytes": 0,
+    "opaque_mps_resources_in_named_counter": false,
+    "instantaneous_total_gpu_peak_certified": false,
+    "named_plan_peak_bytes": 19625061552
+  },
+  "weights": {
+    "persistent_directory": "/opt/mldata_ssd/models/hy-nomas/",
+    "source_checkpoint_bytes": 34213991280,
+    "bf16_files": 55,
+    "bf16_bytes": 16623052016,
+    "scope": "Exact DiT BF16 recovery; not a complete pipeline-model inventory or Q4 quality certificate.",
+    "recovery_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/recovery-verified.json",
+      "bytes": 15486,
+      "sha256": "40ac8ae04c09ea5deb41041fcea39b09be55a8135be0fcd2634cf5df975b060e"
+    }
+  },
+  "artifacts": {
+    "qualification_index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/qualification.json",
+      "bytes": 57588,
+      "sha256": "4d7641de4c984a20c8816d9101fea71fb97c7c089d4e27c3de110dd6d3cf3294"
+    },
+    "source_manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/source-qualified.json",
+      "bytes": 60114,
+      "sha256": "efcf746fd334218d25b0a922647f10962c6d5102144f7d80cff67bb327a40c89"
+    },
+    "native_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/native-fixed.json",
+      "bytes": 142362,
+      "sha256": "b879232edbeb83d78ef108e80d8c5396628b94d8826e2171ab6b672b6377de87"
+    },
+    "native_independent_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/native-fixed-independent.json",
+      "bytes": 25044,
+      "sha256": "4c49ea9e5dfaebf01d323e11a8101eb48ba6b21828da882bd4075e42b9073554"
+    },
+    "independent_checker": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/independent_qualify_native.py",
+      "bytes": 8853,
+      "sha256": "9d2534e18e0ab5979501ab81c5422cd9e7e46f9dba796c91e7285a566da4cabb"
+    },
+    "authenticated_first_failure_diagnostic": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/native3-block0-diagnostic.json",
+      "bytes": 5878,
+      "sha256": "f21ff3cf523abfe875d716caf3a288a5909c896cdfd13c6f645ac8fdfd86055c"
+    },
+    "whole_source_and_native_payload_sha256": "2f2c634a97787df22be094efafb778924a545827192c6c50597a63df0578a24a"
+  },
+  "residual_risk": [
+    "Pinned Tencent equations through a qualified BF16 MPS adapter, not stock CUDA/Magi reproduction.",
+    "Numerical route sensitivity is not articulation, successful acting, physical contact or visual quality.",
+    "Named allocation counters exclude opaque MPS resources; sampled process memory cannot certify instantaneous GPU peak.",
+    "One qualification forward time is not a speed benchmark.",
+    "The external source manifest pin and unoptimized checker invocation are roots of the independent replay chain."
+  ],
+  "next_boundary": "Bounded soft per-query action-key spatial-routing dose response at fixed refined states/T0/noise, then a short visible head/glove test. Pivot to explicit pose/trajectory if articulation remains weak.",
+  "packet_validation": "The generic skill template and validate-landmark-graph.sh are absent here. Direct receipt, digest, numerical-statistic and changed-path checks are used; JSON shape alone is not proof."
+}

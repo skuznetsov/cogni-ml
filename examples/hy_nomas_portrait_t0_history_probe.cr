@@ -1,0 +1,636 @@
+require "option_parser"
+require "digest/sha256"
+require "./support/hy_nomas_sequence"
+
+module HyNomasPortraitT0HistoryProbe
+  extend self
+
+  ROOT                  = "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue"
+  INPUTS_PATH           = File.join(ROOT, "photo-continuation-v2.json")
+  INPUTS_SHA            = "0f35bb09964f2b28d28069e8d39a8a1d6194607d4269de6bb824ff54d828e2ac"
+  BASELINE_RECEIPT      = File.join(ROOT, "photo-native-v2/receipt.json")
+  BASELINE_RECEIPT_SHA  = "ca8be135ef659497594dec9647c72240f911be8cfd6be989f0740fbf76cd66f5"
+  BASELINE_BANK         = File.join(ROOT, "photo-native-v2/latent-bank.f32le")
+  BASELINE_BANK_SHA     = "1717edc3d6cf33a3a374852a3dc58cd9d82d5f74965fab6dd0239bbe93da943b"
+  BASELINE_BANK_BYTES   = 3_317_760_i64
+  CHANNELS              =            32
+  BANK_FRAMES           =           180
+  LATENT_FRAMES         =            30
+  PIXELS_PER_FRAME      = 9 * 16
+  T0_BYTES              = CHANNELS.to_i64 * LATENT_FRAMES * PIXELS_PER_FRAME * sizeof(Float32)
+  PROBE_GPU_EXTRA_BYTES = BASELINE_BANK_BYTES + T0_BYTES
+
+  record Args,
+    inputs_path : String,
+    inputs_sha : String,
+    baseline_receipt_path : String,
+    baseline_receipt_sha : String,
+    baseline_bank_path : String,
+    baseline_bank_sha : String,
+    output_dir : String,
+    t0_context_mode : String,
+    keep_t0_latents : Int32,
+    hide_t0_caption_keys : Bool,
+    t1_current_text_kv : Bool,
+    capture_reference_t1_steps : Bool,
+    budget_mib : Int64,
+    plan_only : Bool
+
+  record CaptureOutput,
+    path : String,
+    nbytes : Int64,
+    sha256 : String,
+    shape : Array(Int32),
+    dtype : String,
+    encoding : String do
+    include JSON::Serializable
+  end
+
+  record ReferenceT1StepCaptureReceipt,
+    step : Int32,
+    sigma_f32 : Float32,
+    dt_f32 : Float32,
+    velocity_bf16 : CaptureOutput,
+    x0_bf16 : CaptureOutput,
+    after_euler_bf16 : CaptureOutput do
+    include JSON::Serializable
+  end
+
+  def sha256(path : String) : String
+    digest = Digest::SHA256.new
+    File.open(path) do |io|
+      buffer = Bytes.new(1024 * 1024)
+      while (count = io.read(buffer)) > 0
+        digest.update(buffer[0, count])
+      end
+    end
+    digest.hexfinal
+  end
+
+  def write_reference_t1_step_captures!(output_dir : String,
+                                        buffers : Array(HyNomasSequence::ReferenceT1StepCaptureBuffers),
+                                        schedule : Array(Tuple(Float32, Float32))) : Array(ReferenceT1StepCaptureReceipt)
+    unless buffers.size == HyNomasSequence::STEPS && schedule.size == buffers.size
+      raise ArgumentError.new("reference T1 step capture output differs from its four-step schedule")
+    end
+    buffers.map_with_index do |capture, index|
+      step = index + 1
+      sigma, dt = schedule[index]
+      outputs = {
+        {"velocity_bf16", capture.velocity_bf16},
+        {"x0_bf16", capture.x0_bf16},
+        {"after_euler_bf16", capture.after_euler_bf16},
+      }.map do |label, buffer|
+        filename = "t1_step#{step.to_s.rjust(2, '0')}_#{label}.f32le"
+        path = File.join(output_dir, filename)
+        HyNomasGeneration.write_fresh_output(path) do |io|
+          io.write(Bytes.new(buffer.contents.as(UInt8*), buffer.size.to_i32))
+        end
+        CaptureOutput.new(path, buffer.size, sha256(path), [1, 32, 30, 9, 16],
+          "BF16", "f32le_bf16_expansion")
+      end
+      ReferenceT1StepCaptureReceipt.new(step.to_i32, sigma, dt,
+        outputs[0], outputs[1], outputs[2])
+    end
+  end
+
+  def read_u32_le(bytes : Bytes, element : Int64) : UInt32
+    offset = (element * sizeof(Float32)).to_i
+    bytes[offset].to_u32 |
+      (bytes[offset + 1].to_u32 << 8) |
+      (bytes[offset + 2].to_u32 << 16) |
+      (bytes[offset + 3].to_u32 << 24)
+  end
+
+  def authenticate_baseline!(receipt_path : String, receipt_sha : String,
+                             bank_path : String, bank_sha : String,
+                             inputs_sha : String) : NamedTuple(path: String, contents: String)
+    receipt_contents = File.read(receipt_path)
+    unless Digest::SHA256.hexdigest(receipt_contents) == receipt_sha && receipt_sha == BASELINE_RECEIPT_SHA
+      raise ArgumentError.new("saved native baseline receipt identity mismatch")
+    end
+    receipt = JSON.parse(receipt_contents)
+    diagnostics = receipt["diagnostics"]
+    unless receipt["schema"].as_s == "cogni_ml.hy_nomas_native_continuation/v1" &&
+           receipt["upstream_revision"].as_s == HyNomasGeneration::TimelineInputs::PINNED_REVISION &&
+           receipt["inputs_sha256"].as_s == inputs_sha && receipt["segments"].as_i == 2 &&
+           receipt["clean_latent_frames"].as_i == 60 &&
+           receipt["latent_bank_shape"].as_a.map(&.as_i) == [1, 32, 180, 9, 16] &&
+           receipt["source_bf16"].as_bool && receipt["reference_initialization"].as_bool &&
+           diagnostics["latent_bank_sha256"].as_s == bank_sha && bank_sha == BASELINE_BANK_SHA
+      raise ArgumentError.new("saved baseline is not the authenticated source-BF16 two-segment bank")
+    end
+    unless File.file?(bank_path) && !File.symlink?(bank_path) && File.size(bank_path) == BASELINE_BANK_BYTES
+      raise ArgumentError.new("saved baseline latent-bank extent or file type mismatch")
+    end
+    bank_contents = File.read(bank_path)
+    unless bank_contents.bytesize == BASELINE_BANK_BYTES && Digest::SHA256.hexdigest(bank_contents) == bank_sha
+      raise ArgumentError.new("saved baseline consumed latent-bank bytes or identity mismatch")
+    end
+    {path: bank_path, contents: bank_contents}
+  end
+
+  # Check the authenticated T0 representation without transforming it on the
+  # CPU. The actual channel/frame gather and F32-to-BF16 conversion are queued
+  # on Metal with the DiT work.
+  def validate_t0_bf16_expansion!(baseline : Bytes) : Nil
+    unless baseline.size == BASELINE_BANK_BYTES
+      raise ArgumentError.new("saved T0 source has the wrong extent")
+    end
+    channel_elements = BANK_FRAMES.to_i64 * PIXELS_PER_FRAME
+    (CHANNELS.to_i64 * LATENT_FRAMES * PIXELS_PER_FRAME).times do |index|
+      channel = index // (LATENT_FRAMES.to_i64 * PIXELS_PER_FRAME)
+      within_channel = index % (LATENT_FRAMES.to_i64 * PIXELS_PER_FRAME)
+      bits = read_u32_le(baseline, channel * channel_elements + within_channel)
+      unless bits.unsafe_as(Float32).finite? && (bits & 0x0000_ffff_u32) == 0
+        raise ArgumentError.new("saved T0 latent is not a finite BF16-expanded F32 value")
+      end
+    end
+  end
+
+  def logical_prefix_digests(source : Bytes) : NamedTuple(t0_sha256: String, t1_sha256: String, prefix60_sha256: String)
+    unless source.size == BASELINE_BANK_BYTES
+      raise ArgumentError.new("latent bank has the wrong extent for T0/T1 digesting")
+    end
+    t0_digest = Digest::SHA256.new
+    t1_digest = Digest::SHA256.new
+    prefix_digest = Digest::SHA256.new
+    channel_bytes = BANK_FRAMES.to_i64 * PIXELS_PER_FRAME * sizeof(Float32)
+    t0_channel_bytes = LATENT_FRAMES.to_i64 * PIXELS_PER_FRAME * sizeof(Float32)
+    t1_start_bytes = LATENT_FRAMES.to_i64 * PIXELS_PER_FRAME * sizeof(Float32)
+    CHANNELS.times do |channel|
+      base_channel = channel.to_i64 * channel_bytes
+      t0_slice = Bytes.new(source.to_unsafe + base_channel, t0_channel_bytes.to_i32)
+      t1_slice = Bytes.new(source.to_unsafe + base_channel + t1_start_bytes, t0_channel_bytes.to_i32)
+      t0_digest.update(t0_slice)
+      t1_digest.update(t1_slice)
+      prefix_digest.update(t0_slice)
+      prefix_digest.update(t1_slice)
+    end
+    {t0_sha256: t0_digest.hexfinal, t1_sha256: t1_digest.hexfinal,
+     prefix60_sha256: prefix_digest.hexfinal}
+  end
+
+  def output_checks!(bank_path : String, timeline : ML::MetalBuffer,
+                     baseline : Bytes, keep_t0_latents : Int32,
+                     hide_t0_caption_keys : Bool = false,
+                     t0_context_mode : String = "repeated-photo",
+                     t1_current_text_kv : Bool = false) : NamedTuple(
+    t0_sha256_matches_baseline: Bool,
+    t1_sha256_matches_baseline: Bool,
+    t0_sha256: String,
+    t1_sha256: String,
+    baseline_t1_sha256: String,
+    prefix60_sha256: String)
+    output = Bytes.new(timeline.contents.as(UInt8*), timeline.size.to_i32)
+    actual = logical_prefix_digests(output)
+    expected = logical_prefix_digests(baseline)
+    raise ArgumentError.new("native output latent bank was not written") unless File.file?(bank_path)
+    t0_matches = actual[:t0_sha256] == expected[:t0_sha256]
+    if t0_context_mode == "repeated-photo" && !t0_matches
+      raise ArgumentError.new("native DiT changed the authenticated clean T0 prefix")
+    end
+    t1_matches = actual[:t1_sha256] == expected[:t1_sha256]
+    if t0_context_mode == "repeated-photo" && keep_t0_latents == 30 &&
+       !hide_t0_caption_keys && !t1_current_text_kv && !t1_matches
+      raise ArgumentError.new("all-visible T1 A/A latent digest differs from the saved native baseline")
+    end
+    {
+      t0_sha256_matches_baseline: t0_matches,
+      t1_sha256_matches_baseline: t1_matches,
+      t0_sha256:                  actual[:t0_sha256],
+      t1_sha256:                  actual[:t1_sha256],
+      baseline_t1_sha256:         expected[:t1_sha256],
+      prefix60_sha256:            actual[:prefix60_sha256],
+    }
+  end
+
+  def t0_video_key_row_counts(visible_latents : Int32) : NamedTuple(hidden: Int32, visible: Int32)
+    unless {0, 10, 30}.includes?(visible_latents)
+      raise ArgumentError.new("T0 video key row counts require 0, 10, or 30 visible latents")
+    end
+    {hidden:  (30 - visible_latents) * HyNomasSequence::T0_HISTORY_TOKENS,
+     visible: visible_latents * HyNomasSequence::T0_HISTORY_TOKENS}
+  end
+
+  def parse_args : Args
+    inputs_path = INPUTS_PATH
+    inputs_sha = INPUTS_SHA
+    receipt_path = BASELINE_RECEIPT
+    receipt_sha = BASELINE_RECEIPT_SHA
+    bank_path = BASELINE_BANK
+    bank_sha = BASELINE_BANK_SHA
+    output_dir = ""
+    t0_context_mode = "repeated-photo"
+    keep_t0_latents = -1
+    hide_t0_caption_keys = false
+    t1_current_text_kv = false
+    capture_reference_t1_steps = false
+    budget_mib = 30_720_i64
+    plan_only = false
+    OptionParser.parse do |p|
+      p.banner = "Authenticated native T0 history-key visibility diagnostic; two segments, four Euler steps"
+      p.on("--inputs PATH", "Authenticated continuation manifest") { |v| inputs_path = v }
+      p.on("--inputs-sha SHA", "Trusted continuation manifest SHA-256") { |v| inputs_sha = v }
+      p.on("--baseline-receipt PATH", "Saved native baseline receipt") { |v| receipt_path = v }
+      p.on("--baseline-receipt-sha SHA", "Trusted saved baseline receipt SHA-256") { |v| receipt_sha = v }
+      p.on("--baseline-bank PATH", "Saved native full latent bank") { |v| bank_path = v }
+      p.on("--baseline-bank-sha SHA", "Trusted saved baseline bank SHA-256") { |v| bank_sha = v }
+      p.on("--t0-context MODE", "T0 input: repeated-photo (default) or generated") { |v| t0_context_mode = v }
+      p.on("--keep-t0-latents N", "30 for all-visible, 10 for recent-only, or 0 for the all-video-hidden T1-text control") { |v| keep_t0_latents = v.to_i }
+      p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader") { hide_t0_caption_keys = true }
+      p.on("--t1-current-text-kv", "Expose current T1 text K/V after hiding T0 caption keys") { t1_current_text_kv = true }
+      p.on("--capture-reference-t1-steps", "Capture BF16-effective T1 velocity, x0, and after-Euler states for all four steps") { capture_reference_t1_steps = true }
+      p.on("--output-dir PATH", "Existing empty output directory on /opt/mldata_ssd") { |v| output_dir = v }
+      p.on("--budget-mib N", "Named buffer cap; use with the external 10% GPU memory-floor guard") { |v| budget_mib = v.to_i64 }
+      p.on("--plan-only", "Authenticate inputs and emit CPU-only memory plan") { plan_only = true }
+    end
+    HyNomasSequence.validate_t0_history_keep_argument!(keep_t0_latents)
+    HyNomasSequence.validate_portrait_t0_context!(t0_context_mode, keep_t0_latents,
+      hide_t0_caption_keys, t1_current_text_kv)
+    HyNomasSequence.validate_t0_history_visibility!(keep_t0_latents, hide_t0_caption_keys,
+      t1_current_text_kv)
+    HyNomasSequence.validate_reference_t1_step_capture!(capture_reference_t1_steps,
+      source_bf16: true,
+      reference_latent_bytes: t0_context_mode == "repeated-photo" ? HyNomasSequence::REFERENCE_LATENT_BYTES : 0_i64,
+      segments: 2, generated_t0_control: t0_context_mode == "generated",
+      t0_key_visible_latents: if keep_t0_latents == 30 && !hide_t0_caption_keys && !t1_current_text_kv
+        nil
+      else
+        keep_t0_latents
+      end,
+      t0_hide_caption_keys: hide_t0_caption_keys,
+      t1_current_text_kv: t1_current_text_kv)
+    unless (18_432..49_152).includes?(budget_mib)
+      raise ArgumentError.new("named buffer budget must be within 18..48 GiB")
+    end
+    raise ArgumentError.new("--output-dir is required unless --plan-only is used") if output_dir.empty? && !plan_only
+    Args.new(inputs_path, inputs_sha, receipt_path, receipt_sha, bank_path, bank_sha,
+      output_dir, t0_context_mode, keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv,
+      capture_reference_t1_steps, budget_mib, plan_only)
+  end
+
+  def run : Nil
+    request_started = Time.monotonic
+    args = parse_args
+    inputs = HyNomasGeneration::TimelineInputs.new(File.realpath(args.inputs_path), args.inputs_sha)
+    inputs.verify_payload!
+    inputs.base.file.verify_payload!
+    HyNomasSequence.validate_shared_scene_prompt!(inputs.base.prompt)
+    baseline_source = authenticate_baseline!(File.realpath(args.baseline_receipt_path), args.baseline_receipt_sha,
+      File.realpath(args.baseline_bank_path), args.baseline_bank_sha, inputs.file.sha256)
+    baseline_bank = baseline_source[:path]
+    baseline_contents = baseline_source[:contents]
+    baseline = baseline_contents.to_slice
+    unless baseline.size == BASELINE_BANK_BYTES
+      raise ArgumentError.new("saved native baseline bank extent changed after authentication")
+    end
+    validate_t0_bf16_expansion!(baseline)
+    baseline_t0_t1_digests = logical_prefix_digests(baseline)
+    admission = HyNomasGeneration.authenticate_bf16_index
+    generated_t0 = args.t0_context_mode == "generated"
+    t0_key_visible_latents = if generated_t0 ||
+                                (args.keep_t0_latents == 30 && !args.hide_t0_caption_keys && !args.t1_current_text_kv)
+                               nil.as(Int32?)
+                             else
+                               args.keep_t0_latents
+                             end
+    unless generated_t0
+      HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents,
+        t0_hide_caption_keys: args.hide_t0_caption_keys,
+        t1_current_text_kv: args.t1_current_text_kv)
+    end
+    video_key_rows = t0_video_key_row_counts(args.keep_t0_latents)
+    dit_plan = HyNomasSequence.peak_named_bytes(inputs, 2,
+      reference_latent_bytes: generated_t0 ? 0_i64 : HyNomasSequence::REFERENCE_LATENT_BYTES,
+      source_bf16: true, generated_t0_control: generated_t0,
+      t0_key_visible_latents: t0_key_visible_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
+      t1_current_text_kv: args.t1_current_text_kv)
+    probe_extra = generated_t0 ? 0_i64 : PROBE_GPU_EXTRA_BYTES
+    capture_bytes = args.capture_reference_t1_steps ? HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BYTES : 0_i64
+    probe_plan = dit_plan + probe_extra + capture_bytes
+    steady = dit_plan - HyNomasSequence.old_attention_bytes(inputs.base)
+    budget = args.budget_mib * 1024 * 1024
+    raise ArgumentError.new("native T0 history probe named plan exceeds its budget") if probe_plan > budget
+    HyNomasGeneration.emit("portrait_t0_history_memory_plan",
+      segments: 2, steps_per_segment: 4, t0_context_mode: args.t0_context_mode,
+      keep_t0_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
+      t1_current_text_kv: args.t1_current_text_kv,
+      generated_t0_control: generated_t0,
+      dit_peak_named_bytes: dit_plan, probe_peak_named_bytes: probe_plan,
+      dit_steady_named_bytes: steady,
+      baseline_f32_bank_buffer_bytes: generated_t0 ? 0 : BASELINE_BANK_BYTES,
+      compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
+      reference_t1_step_capture_buffers_bytes: capture_bytes,
+      reference_t1_step_capture_steps: args.capture_reference_t1_steps ? HyNomasSequence::STEPS : 0,
+      named_budget_bytes: budget, reserve_pct: 10,
+      mask_path: if t0_key_visible_latents.nil?
+        "ordinary unmasked shared-scene T0 and T1 attention"
+      elsif args.t1_current_text_kv && args.keep_t0_latents == 0
+        "all T0 video and caption keys masked; current T1 text K/V included"
+      elsif args.t1_current_text_kv
+        "T0 caption mask; current T1 text K/V included"
+      else
+        "same-size T1 masked workspace in both arms"
+      end,
+      t0_writer: "unmasked", t1_key_rows: args.t1_current_text_kv ? 8_640 + 2 * inputs.base.valid_text_tokens : 8_640 + inputs.base.valid_text_tokens,
+      t1_query_rows: 4_320 + inputs.base.valid_text_tokens,
+      hidden_t0_video_key_rows: video_key_rows[:hidden],
+      visible_t0_video_key_rows: video_key_rows[:visible],
+      hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
+      retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,
+      t1_current_text_key_rows: args.t1_current_text_kv ? inputs.base.valid_text_tokens : 0,
+      t1_current_video_key_rows: 4_320,
+      t1_total_key_rows: args.t1_current_text_kv ? 8_640 + 2 * inputs.base.valid_text_tokens : 8_640 + inputs.base.valid_text_tokens,
+      baseline_receipt_sha256: args.baseline_receipt_sha,
+      baseline_bank_sha256: args.baseline_bank_sha,
+      inputs_sha256: inputs.file.sha256,
+      qwen_payload_sha256: inputs.base.file.document["payload_sha256"].as_s,
+      source_bf16: true, full_upstream_video_parity: false)
+    exit if args.plan_only
+    unless Path[args.output_dir].absolute? && File.directory?(args.output_dir) && Dir.empty?(args.output_dir)
+      raise ArgumentError.new("output directory must be an existing empty absolute directory")
+    end
+    output_dir = File.realpath(args.output_dir)
+    unless output_dir.starts_with?(File.realpath("/opt/mldata_ssd") + "/")
+      raise ArgumentError.new("native T0 history outputs must be on /opt/mldata_ssd")
+    end
+
+    timeline_arena = ML::Video::Arena.new
+    current_arena = ML::Video::Arena.new
+    reference_arena = ML::Video::Arena.new
+    capture_arena = nil.as(ML::Video::Arena?)
+    step_capture_buffers = nil.as(Array(HyNomasSequence::ReferenceT1StepCaptureBuffers)?)
+    dit = nil.as(HyNomasSequence::DiT?)
+    chain = nil.as(ML::Metal::MPSCommandChain?)
+    prefix_plan = nil.as(ML::Video::HyNomasTimelineOps::PrefixPlan?)
+    request_error : Exception? = nil
+    cleanup_errors = [] of String
+    diagnostics = {} of String => String
+    metrics = {} of String => Int64
+    timings = {} of String => Float64
+    step_capture_receipts = nil.as(Array(ReferenceT1StepCaptureReceipt)?)
+    checks = nil.as(NamedTuple(t0_sha256_matches_baseline: Bool,
+      t1_sha256_matches_baseline: Bool, t0_sha256: String,
+      t1_sha256: String, baseline_t1_sha256: String,
+      prefix60_sha256: String)?)
+    begin
+      timeline = inputs.upload!("input.latent_bank", timeline_arena)
+      latent = current_arena.alloc("input.latent", 32 * 30 * 9 * 16)
+      reference = nil.as(ML::MetalBuffer?)
+      compact_t0_f32 = nil.as(ML::MetalBuffer?)
+      if args.capture_reference_t1_steps
+        arena = ML::Video::Arena.new
+        capture_arena = arena
+        step_capture_buffers = Array(HyNomasSequence::ReferenceT1StepCaptureBuffers).new(HyNomasSequence::STEPS) do |step|
+          prefix = "probe.reference_t1_step#{(step + 1).to_s.rjust(2, '0')}"
+          HyNomasSequence::ReferenceT1StepCaptureBuffers.new(
+            arena.alloc("#{prefix}.velocity_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32),
+            arena.alloc("#{prefix}.x0_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32),
+            arena.alloc("#{prefix}.after_euler_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32))
+        end
+      end
+      unless generated_t0
+        baseline_f32 = reference_arena.alloc("probe.baseline_f32_bank", (BASELINE_BANK_BYTES // sizeof(Float32)).to_i32)
+        compact_t0_f32 = reference_arena.alloc("probe.compact_t0_f32", (T0_BYTES // sizeof(Float32)).to_i32)
+        reference = reference_arena.alloc_weight("t0.reference_latent", 32 * 30 * 9 * 16,
+          ML::Video::WeightDType::BF16)
+        baseline_f32.write_bytes(baseline.to_unsafe, baseline.size)
+        prefix_geometry = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
+          channels: CHANNELS, total_frames: BANK_FRAMES, prefix_frames: LATENT_FRAMES,
+          height: 9, width: 16)
+        prefix_plan = ML::Video::HyNomasTimelineOps::PrefixPlan.new(prefix_geometry,
+          source: baseline_f32, destination: compact_t0_f32)
+      end
+      setup_start = Time.monotonic
+      dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, 2, admission,
+        reference_latent: reference, source_bf16: true, generated_t0_control: generated_t0,
+        t0_key_visible_latents: t0_key_visible_latents,
+        t0_hide_caption_keys: args.hide_t0_caption_keys,
+        t1_current_text_kv: args.t1_current_text_kv,
+        reference_t1_step_captures: step_capture_buffers)
+      raise "native T0 history preflight/allocation admission disagree" unless dit.named_bytes == steady
+      timings["dit_setup_seconds"] = (Time.monotonic - setup_start).total_seconds
+      chain = ML::Metal::MPSCommandChain.new
+      allocations = ML::MetalBuffer.hy_text_probe_allocations
+      readbacks = ML::MetalBuffer.hy_text_probe_readbacks
+      run_start = Time.monotonic
+      if plan = prefix_plan
+        reference_buffer = reference.not_nil!
+        plan.encode!(chain)
+        bf16_pipeline = ML::Video::PixelUMMGeneration.pipeline("pixelumm_generation_round_f32_to_bf16")
+        chain.encoder.set_pipeline(bf16_pipeline)
+          .set_buffer(compact_t0_f32.not_nil!, 0)
+          .set_buffer(reference_buffer, 1, ML::Metal::BufferAccess::Write)
+          .set_value((reference_buffer.size // sizeof(UInt16)).to_u32, 2)
+          .dispatch_1d((reference_buffer.size // sizeof(UInt16)).to_i32)
+      end
+      dit.encode(chain)
+      metrics["chain_preterminal_allocations"] = ML::MetalBuffer.hy_text_probe_allocations - allocations
+      metrics["chain_preterminal_readbacks"] = ML::MetalBuffer.hy_text_probe_readbacks - readbacks
+      metrics["chain_preterminal_waits"] = chain.wait_count.to_i64
+      unless metrics["chain_preterminal_allocations"] == 0 && metrics["chain_preterminal_readbacks"] == 0 && chain.wait_count == 0
+        raise "native T0 history input preparation or DiT encode allocated, read back, or waited before terminal"
+      end
+      chain.commit_and_wait
+      timings["dit_wall_seconds"] = (Time.monotonic - run_start).total_seconds
+      timings["dit_gpu_seconds"] = chain.gpu_elapsed_seconds
+      metrics["dit_segments"] = chain.segment_count.to_i64
+      metrics["dit_terminal_waits"] = chain.wait_count.to_i64
+      metrics["t0_denoise_steps"] = dit.t0_denoise_steps.to_i64
+      metrics["t0_cache_writer_forwards"] = dit.t0_cache_writer_forwards.to_i64
+      raise "native T0 history probe requires one terminal wait" unless chain.wait_count == 1 && chain.completed?
+
+      bank_path = File.join(output_dir, "latent-bank.f32le")
+      HyNomasGeneration.write_fresh_output(bank_path) do |io|
+        io.write(Bytes.new(timeline.contents.as(UInt8*), timeline.size.to_i32))
+      end
+      diagnostics["latent_bank"] = bank_path
+      diagnostics["latent_bank_sha256"] = sha256(bank_path)
+      if captures = step_capture_buffers
+        step_capture_receipts = write_reference_t1_step_captures!(output_dir, captures,
+          dit.not_nil!.reference_t1_capture_schedule)
+        metrics["reference_t1_captured_steps"] = step_capture_receipts.not_nil!.size.to_i64
+      end
+      checks = output_checks!(bank_path, timeline, baseline, args.keep_t0_latents,
+        args.hide_t0_caption_keys, args.t0_context_mode, args.t1_current_text_kv)
+      diagnostics["t0_sha256"] = checks.not_nil![:t0_sha256]
+      diagnostics["t1_sha256"] = checks.not_nil![:t1_sha256]
+      diagnostics["prefix60_sha256"] = checks.not_nil![:prefix60_sha256]
+      diagnostics["baseline_t0_sha256"] = baseline_t0_t1_digests[:t0_sha256]
+      diagnostics["baseline_t1_sha256"] = baseline_t0_t1_digests[:t1_sha256]
+      timings["request_seconds"] = (Time.monotonic - request_started).total_seconds
+    rescue ex
+      request_error = ex
+    ensure
+      may_release = true
+      chain.try do |active_chain|
+        unless active_chain.drained?
+          begin
+            active_chain.commit_and_wait
+          rescue ex
+            cleanup_errors << "terminal wait: #{ex.class}: #{ex.message}"
+          end
+        end
+        may_release = active_chain.drained?
+        if may_release && active_chain.wait_count == 1
+          prefix_plan.try do |plan|
+            if plan.encoded? && !plan.released?
+              begin
+                plan.release_after_drain!(active_chain)
+              rescue ex
+                cleanup_errors << "prefix plan release: #{ex.class}: #{ex.message}"
+              end
+            end
+          end
+        end
+        unless may_release
+          cleanup_errors << "terminal wait returned without proving GPU drain"
+          HyNomasSequence.retain_in_flight do
+            inputs.object_id
+            dit.try(&.object_id)
+            prefix_plan.try(&.object_id)
+            active_chain.object_id
+            reference_arena.object_id
+            capture_arena.try(&.object_id)
+            current_arena.object_id
+            timeline_arena.object_id
+            nil
+          end
+        end
+      end
+      actions = [] of Proc(Nil)
+      if may_release
+        dit.try { |owner| actions << -> { owner.release } }
+        chain.try { |owner| actions << -> { owner.release } }
+        actions << -> { reference_arena.release }
+        capture_arena.try { |owner| actions << -> { owner.release } }
+        actions << -> { current_arena.release }
+        actions << -> { timeline_arena.release }
+      end
+      cleanup_errors.concat(HyNomasSequence.release_actions(actions))
+    end
+    cleanup_errors.each { |message| STDERR.puts("portrait T0 history cleanup: #{message}") }
+    raise request_error.not_nil! if request_error
+    raise "native T0 history cleanup failed: #{cleanup_errors.join("; ")}" unless cleanup_errors.empty?
+
+    frozen_t1_identities = {
+      continuation_manifest_sha256:  inputs.file.sha256,
+      latent_bank_sha256:            inputs.records["input.latent_bank"].sha256,
+      t1_latent_noise_global_frames: [30, 60],
+      qwen_manifest_sha256:          inputs.base.file.sha256,
+      qwen_payload_sha256:           inputs.base.file.document["payload_sha256"].as_s,
+      rope_cos_sha256:               inputs.records["input.rope_cos"].sha256,
+      rope_sin_sha256:               inputs.records["input.rope_sin"].sha256,
+      cache_eps_bf16_sha256:         inputs.records["cache.eps_bf16"].sha256,
+      shared_text_tokens:            inputs.base.valid_text_tokens,
+    }
+    t0_provenance = {
+      context_mode:               args.t0_context_mode,
+      source_bank_sha256:         generated_t0 ? inputs.records["input.latent_bank"].sha256 : args.baseline_bank_sha,
+      source_global_frames:       [0, 30],
+      generated_from_input_noise: generated_t0,
+      input_noise_global_frames:  generated_t0 ? [0, 30] : nil,
+      reference_initialization:   !generated_t0,
+      denoise_steps:              metrics["t0_denoise_steps"],
+      cache_writer_forwards:      metrics["t0_cache_writer_forwards"],
+      output_t0_sha256:           diagnostics["t0_sha256"],
+    }
+    report = {
+      schema: "cogni_ml.hy_nomas_portrait_t0_history_probe/v1",
+      t0_context_mode: args.t0_context_mode,
+      inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
+      qwen_manifest_sha256: inputs.base.file.sha256,
+      qwen_payload_sha256: inputs.base.file.document["payload_sha256"].as_s,
+      frozen_t1_identities: frozen_t1_identities,
+      baseline_receipt: args.baseline_receipt_path,
+      baseline_receipt_sha256: args.baseline_receipt_sha,
+      baseline_latent_bank: baseline_bank,
+      baseline_latent_bank_sha256: args.baseline_bank_sha,
+      t0_provenance: t0_provenance,
+      keep_t0_video_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
+      t1_current_text_kv: args.t1_current_text_kv,
+      arm: if args.t0_context_mode == "generated"
+        "stock_generated_t0_source_bf16_unmasked"
+      elsif args.keep_t0_latents == 0
+        "all_t0_video_and_caption_keys_hidden_t1_current_text_kv"
+      elsif args.hide_t0_caption_keys
+        if args.t1_current_text_kv
+          "all_t0_video_visible_t0_caption_keys_hidden_t1_current_text_kv"
+        else
+          "all_t0_video_visible_t0_caption_keys_hidden"
+        end
+      elsif args.keep_t0_latents == 30 && !args.hide_t0_caption_keys && !args.t1_current_text_kv
+        "all_visible_unmasked_workspace_aa"
+      else
+        "first_20_t0_video_latents_hidden"
+      end,
+      upstream_revision: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
+      weight_index_sha256: admission.sha256,
+      weight_source_sha256: admission.source_sha256,
+      globals_bf16_sha256: admission.globals_bf16_sha256,
+      admitted_cache_payload_bytes: admission.payload_bytes,
+      source_bf16: true, segments: 2, steps_per_segment: 4,
+      generated_t0_control: generated_t0,
+      t0_reference_initialization: !generated_t0,
+      t0_denoise_steps: metrics["t0_denoise_steps"],
+      t0_cache_writer_forwards: metrics["t0_cache_writer_forwards"],
+      t0_writer_attention: "unmasked nil profile",
+      t1_reader_attention: if t0_key_visible_latents.nil?
+        "ordinary unmasked shared-scene history; one T0 text block with V263"
+      elsif args.t1_current_text_kv && args.keep_t0_latents == 0
+        "all T0 video and caption keys masked; current T1 text K/V keys included"
+      elsif args.t1_current_text_kv
+        "T0 caption mask; current T1 text K/V keys included"
+      else
+        "masked profile; same workspace geometry in both arms"
+      end,
+      t0_video_key_rows: 4_320,
+      hidden_t0_video_key_rows: video_key_rows[:hidden],
+      visible_t0_video_key_rows: video_key_rows[:visible],
+      t0_text_key_rows: inputs.base.valid_text_tokens,
+      hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
+      retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,
+      t1_current_text_key_rows: args.t1_current_text_kv ? inputs.base.valid_text_tokens : 0,
+      t1_video_key_rows: 4_320,
+      t1_total_key_rows: args.t1_current_text_kv ? 8_640 + 2 * inputs.base.valid_text_tokens : 8_640 + inputs.base.valid_text_tokens,
+      t1_query_rows: 4_320 + inputs.base.valid_text_tokens,
+      noise_scope: "same authenticated input latent/noise/RoPE banks; no edits or reseeding",
+      diagnostic_scope: "native DiT only; no DCAE encoder, PixelUMM decoder, or upstream video parity",
+      metrics: metrics, timings: timings,
+      output: diagnostics,
+      checks: checks,
+      dit_peak_named_bytes: dit_plan, probe_peak_named_bytes: probe_plan,
+      dit_steady_named_bytes: steady,
+      baseline_f32_bank_buffer_bytes: generated_t0 ? 0 : BASELINE_BANK_BYTES,
+      compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
+      named_budget_bytes: budget, full_upstream_video_parity: false,
+    }
+    receipt_contents = report.to_pretty_json
+    if captures = step_capture_receipts
+      document = JSON.parse(receipt_contents)
+      fields = document.as_h
+      fields["reference_t1_step_capture"] = JSON::Any.new(true)
+      fields["reference_t1_step_capture_contract"] = JSON.parse(%({
+        "source": "original-photo reference T0, source-BF16 native T1",
+        "capture_chain": "same DiT command chain; one terminal wait",
+        "capture_values": "BF16-effective velocity, BF16-rounded x0 estimate, BF16-after-Euler latent"
+      }))
+      fields["reference_t1_step_capture_buffers_bytes"] = JSON.parse(capture_bytes.to_json)
+      fields["reference_t1_step_captures"] = JSON.parse(captures.to_json)
+      receipt_contents = document.to_pretty_json
+    end
+    HyNomasGeneration.write_fresh_output(File.join(output_dir, "receipt.json")) do |io|
+      io.puts(receipt_contents)
+    end
+    HyNomasGeneration.emit("portrait_t0_history_completed", output: diagnostics,
+      keep_t0_video_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
+      t1_current_text_kv: args.t1_current_text_kv, metrics: metrics)
+  end
+end
+
+HyNomasPortraitT0HistoryProbe.run

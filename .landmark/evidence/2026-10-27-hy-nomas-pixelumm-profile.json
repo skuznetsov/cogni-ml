@@ -1,0 +1,738 @@
+{
+  "schema": "cogni_ml.pixelumm_block_profile_evidence/v1",
+  "created_at": "2026-10-27T13:45:15.121136+00:00",
+  "base_revision": "33100e6ebf4e2014f3b11d65ec650ecbc718194b",
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Pretrained block0, synthetic BF16 input, J21120; opt-in profile with exact saved adapted-upstream MPS captures and unchanged one-wait/root-count controls.",
+    "verdict": "ROBUST within this bounded profile; no exclusive-kernel, exact off/on continuation-placement, zero-overhead or wait-cause claim.",
+    "decay_trigger": "Refresh on source, fixture/weights, device/OS/toolchain/backend, geometry, precision, captures, guard changes or lost external evidence."
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Saved adapted upstream-semantics PyTorch MPS; not rerun this turn or compiled CUDA Flex, not real decoder latent inputs.",
+    "related_fixture_cache_packet": ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-eight-block.json"
+  },
+  "source_lineage": {
+    "pre_execution_receipts": [
+      {
+        "path": "results/profile-full-off-on-v1.pre-execution.json",
+        "bytes": 4800,
+        "sha256": "10fd52c510b79c4de72d7f10a9a26abafa2d8d69e094caf41bfc4e0c1b6930d4"
+      },
+      {
+        "path": "results/profile-full-on-off-v1.pre-execution.json",
+        "bytes": 4800,
+        "sha256": "d426c5292cf61cbc71028f55de4a8d8cc04254d9e039343561019bc0070656eb"
+      },
+      {
+        "path": "results/profile-full-api-only-v2.pre-execution.json",
+        "bytes": 4776,
+        "sha256": "52d6e4c09d1c89c131debfbb40040846c65bea53f1683613d10e57c224469ee1"
+      },
+      {
+        "path": "results/profile-build-v3.pre-execution.json",
+        "bytes": 4197,
+        "sha256": "59b626d22180f47b68f9681b7fdc0ff4393e433701cb92977992d96b6f80bae6"
+      },
+      {
+        "path": "results/profile-small-final-v3.pre-execution.json",
+        "bytes": 4801,
+        "sha256": "9ade57ce56f541f377772150ad61c66eb40b39a73311454551fc0017cdb01d63"
+      }
+    ],
+    "core_sources_match_all_listed_receipts": [
+      "examples/support/pixelumm_block_probe.cr",
+      "examples/support/hy_nomas_probe_instrumentation.cr",
+      "examples/support/wan_memory_guard.py",
+      "src/ml/video/pixelumm_decoder_block_mps.cr",
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "src/ml/video/pixelumm_block_profile.cr",
+      "src/ml/video/metal_mps_command_chain.cr",
+      "src/ml/video/metal_mps_command_chain.mm",
+      "src/ml/video/mps_api_profile.h",
+      "src/ml/video/mps_api_profile.cr",
+      "src/ml/video/mps_command_phase_profile.cr",
+      "src/ml/video/mps_continuation_trace.cr"
+    ],
+    "latest_preserved_binary": {
+      "path": "build/pixelumm_decoder_block_probe-profile-v3",
+      "bytes": 1313952,
+      "sha256": "6c14f080f6345e32615e65a99dd835bff5a6f7cea36609f3a257660ecd882e54"
+    },
+    "instruments_binary_binding": {
+      "captured_sha256": "56df84abc074a27764d08b0d295ae343f89f19ca1bab3cfd27e2ac577113e9ef",
+      "equal_binary_source_receipt": "results/profile-full-api-only-v2.pre-execution.json",
+      "method": "Exact executable SHA256 equality to the later API-only run, whose live core-source pins match this checkout. The capture has no separate pre-capture source receipt; this is cross-run byte identity, not pre-capture source or hermetic build attestation."
+    },
+    "limitation": "Historical generic binaries were overwritten by later builds. Receipts pin their hashes, not archived executables. Core sources match; CLI/Make/spec comments evolved. Latest binary passed all-stage small parity. Pins are not hermetic attestation."
+  },
+  "reports": {
+    "profile-small-off-on-v1": {
+      "artifact": {
+        "path": "results/profile-small-off-on-v1.json",
+        "bytes": 116372,
+        "sha256": "92794e3cb3ec87fe84620c8241d755e93fd857b55cba32ac186777e1ee5a0e09"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-small-v4.json",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "requests": 4,
+      "compared_tensors": 104,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 13,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 1128907396,
+      "owned_named_bytes": 724140164,
+      "borrowed_bytes": 404767232,
+      "timed_total_medians_seconds": {
+        "False": 0.148115624,
+        "True": 0.148232125
+      },
+      "paired_profile_minus_off_percent": [
+        0.07865544285861059
+      ]
+    },
+    "profile-full-off-on-v1": {
+      "artifact": {
+        "path": "results/profile-full-off-on-v1.json",
+        "bytes": 1217809,
+        "sha256": "a919374be6e98f5242b2edb80dd8a38929fcf25249462eaa96af953708135f30"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-full-v1.json",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "requests": 12,
+      "compared_tensors": 24,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 122,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 3223313892,
+      "owned_named_bytes": 2642779108,
+      "borrowed_bytes": 580534784,
+      "timed_total_medians_seconds": {
+        "False": 1.6837343749999998,
+        "True": 1.6864525625
+      },
+      "paired_profile_minus_off_percent": [
+        0.3256677665772756,
+        -0.24864974426304087,
+        0.10950869941876995,
+        -0.3771393757236008
+      ]
+    },
+    "profile-full-on-off-v1": {
+      "artifact": {
+        "path": "results/profile-full-on-off-v1.json",
+        "bytes": 1217734,
+        "sha256": "ffcec64ee3e4f41b66c2a4e7eb29eb8c276e594b4751ecadbc7b0a0bb4c7faed"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-full-v1.json",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "requests": 12,
+      "compared_tensors": 24,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 122,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 3223313892,
+      "owned_named_bytes": 2642779108,
+      "borrowed_bytes": 580534784,
+      "timed_total_medians_seconds": {
+        "False": 1.589548625,
+        "True": 1.591182688
+      },
+      "paired_profile_minus_off_percent": [
+        -0.14632632590056982,
+        -0.14549034205476596,
+        0.41619850500562716,
+        0.0875794467577018
+      ]
+    },
+    "profile-full-instruments-v1": {
+      "artifact": {
+        "path": "results/profile-full-instruments-v1.json",
+        "bytes": 406728,
+        "sha256": "834fa5c6df16756fe8f29280a26b77050c2a1407aca3b8494a4a5154102a2bc7"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-full-v1.json",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "requests": 4,
+      "compared_tensors": 8,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 122,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 3223313892,
+      "owned_named_bytes": 2642779108,
+      "borrowed_bytes": 580534784,
+      "timed_total_medians_seconds": {
+        "False": 1.638296876,
+        "True": 1.624734583
+      },
+      "paired_profile_minus_off_percent": [
+        -0.8278287774748927
+      ]
+    },
+    "profile-full-api-only-v2": {
+      "artifact": {
+        "path": "results/profile-full-api-only-v2.json",
+        "bytes": 402993,
+        "sha256": "97bcd5c8b81df2b4b2b2031fc3eef5f21f4510260d5a4f5a0d0a960d9bc93992"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-full-v1.json",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "requests": 12,
+      "compared_tensors": 24,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 122,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 3223313892,
+      "owned_named_bytes": 2642779108,
+      "borrowed_bytes": 580534784,
+      "timed_total_medians_seconds": {
+        "False": 1.641722083,
+        "True": 1.6378375205
+      },
+      "paired_profile_minus_off_percent": [
+        0.0069246184326354765,
+        -2.288063065407442,
+        -0.4975806266397709,
+        1.7891607321664837
+      ]
+    },
+    "profile-small-final-v3": {
+      "artifact": {
+        "path": "results/profile-small-final-v3.json",
+        "bytes": 116483,
+        "sha256": "d94bb3b5578acda9ed996d7452b710a419fb7db8f3db2b0cd853fe6c75e8f3a9"
+      },
+      "fixture": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/results/block0-small-v4.json",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "requests": 4,
+      "compared_tensors": 104,
+      "all_words_exact_and_finite": true,
+      "command_roots_per_request": 13,
+      "waits_per_request": 1,
+      "named_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "named_bytes": 1128907396,
+      "owned_named_bytes": 724140164,
+      "borrowed_bytes": 404767232,
+      "timed_total_medians_seconds": {
+        "False": 0.157148834,
+        "True": 0.163314458
+      },
+      "paired_profile_minus_off_percent": [
+        3.9234296832262983
+      ]
+    }
+  },
+  "instruments": {
+    "analysis": {
+      "path": "results/profile-instruments-analysis-v3.json",
+      "bytes": 72648,
+      "sha256": "3d0f476f0103a0279af852e6c6f2da79172c6c46eb51203a7bc2c08449745aec"
+    },
+    "coverage": {
+      "qualified": true,
+      "failed_broad_channel_analysis": "v1 rejected its alignment gate because two apparent target Fragment rows inherit conflicting command-buffer identities; Compute-only v2 must pass the original 2us alignment gate.",
+      "method": "Resolve XML id/ref per table; filter exact target PID and Compute channel (native has no render pipeline); keep rejected non-compute rows visible; join first CBid to sorted target submissions; validate native vs Instruments root durations and single time offset on both profiled requests.",
+      "target_submissions": 488,
+      "target_gpu_rows": 779,
+      "non_compute_rows_excluded": [
+        {
+          "start": 8926070041,
+          "duration": 8125,
+          "label": "",
+          "cbs": [
+            5002434285,
+            5002434286
+          ],
+          "level": "0",
+          "channel": "Fragment"
+        },
+        {
+          "start": 8935682083,
+          "duration": 11500,
+          "label": "",
+          "cbs": [
+            5002434291,
+            5002434292
+          ],
+          "level": "0",
+          "channel": "Fragment"
+        }
+      ],
+      "target_shader_rows": 5961,
+      "foreign_gpu_rows_rejected": 17771,
+      "foreign_shader_rows_rejected": 1549,
+      "mapped_roots": 488,
+      "unmapped_target_gpu_rows": 0,
+      "profiled_root_alignment_count": 244,
+      "max_root_envelope_duration_difference_seconds": 4.2354681730177174e-08,
+      "clock_offset_range_seconds": 4.237517714500427e-08
+    },
+    "trace_path": "profiles/profile-full-instruments-v1.trace",
+    "capture_receipt": {
+      "path": "profiles/profile-full-instruments-v1.receipt.json",
+      "bytes": 2017,
+      "sha256": "236ccc7b8bcbc2bf3eb6ec31a014c9fa8a4b5bbcb9f6921df8d20ee99e4cb655"
+    },
+    "ffn_matrix_timeline_unions_seconds": [
+      0.946366083,
+      0.949459476
+    ],
+    "ffn_matrix_timeline_fractions": [
+      0.5989950808759782,
+      0.5935432286997195
+    ],
+    "interpretation": "NDArrayMatrixMultiply-labelled sampled shader timeline unions, PID + temporal clipping to Compute root windows118-120; shader rows have no CBID. Non-exclusive interval attribution; boundary roots shared. Not kernel cycles, exact subprojection time or speedup."
+  },
+  "continuations": {
+    "analysis": {
+      "path": "results/profile-continuation-analysis-v1.json",
+      "bytes": 3376946,
+      "sha256": "1f5443318a7ac6f8f371298ceaabcc9b2e292e6a1716995c95992f6593b3f405"
+    },
+    "attention_wall_seconds_range": [
+      0.31871879166666667,
+      0.339849625
+    ],
+    "attention_thread_cpu_seconds_range": [
+      0.000700958,
+      0.001092749
+    ],
+    "prior_root_overlap_fraction_range": [
+      0.9808090360421154,
+      0.9853941717619472
+    ],
+    "interpretation": "Correlation supports queue/backpressure over CPU graph construction; does not identify driver blocking cause or turn wall-minus-thread-CPU into GPU cost."
+  },
+  "verification": {
+    "build_and_cpu": "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_block_probe spec_pixelumm_block_profile spec_pixelumm_decoder_block spec_pixelumm_two_block_probe",
+    "closure_environment": {
+      "path": "results/profile-closure-environment-v1.json",
+      "bytes": 634,
+      "sha256": "5001e0cbda517ae5941de91e5abfa7d239c82376676cee1e31d51d7ab1d5575b"
+    },
+    "observed": "Release build plus28 CPU profile/API/trace,12 admission,15 fixture/cache examples pass; all native requests in the six indexed reports compare every retained stage exactly.",
+    "guards": [
+      {
+        "name": "profile-cpu-v1",
+        "argv": {
+          "path": "logs/profile-cpu-v1.argv.json",
+          "bytes": 758,
+          "sha256": "495e5c6530146e2b4a54204c0656e0d384a450753aa174a58a987cb9fb876e04"
+        },
+        "output": {
+          "path": "logs/profile-cpu-v1.out",
+          "bytes": 105,
+          "sha256": "00b6eb8a9f37fd58f5a77c74117608a31e744e5f929b71a8fe1ee2c127a834cc"
+        },
+        "guard": {
+          "path": "logs/profile-cpu-v1.guard.jsonl",
+          "bytes": 2886,
+          "sha256": "6292e356c4a202b2e3d5c5bedfe6c0a591f20b90b3932a09e912664665947505"
+        },
+        "samples": 7,
+        "footprint_cap_bytes": 2147483648,
+        "timeout_seconds": 180,
+        "max_sampled_footprint_bytes": 719881896,
+        "min_sampled_headroom_bytes": 40853143552,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-build-v1",
+        "argv": {
+          "path": "logs/profile-build-v1.argv.json",
+          "bytes": 734,
+          "sha256": "ff4431d122591ae28a96b8f0f332175380fd840aa873d8299bceba72b3b7a6dd"
+        },
+        "output": {
+          "path": "logs/profile-build-v1.out",
+          "bytes": 2551,
+          "sha256": "02b8f8ae40d9f968e4c5af124f53ab4e4461e4db56a86689654f9673c7aa5d35"
+        },
+        "guard": {
+          "path": "logs/profile-build-v1.guard.jsonl",
+          "bytes": 8105,
+          "sha256": "abe144b79493a69c06a74f26729b68eac939599e9fec847aea14003df5ceb1f4"
+        },
+        "samples": 24,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 707725232,
+        "min_sampled_headroom_bytes": 40901115904,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-build-v2",
+        "argv": {
+          "path": "logs/profile-build-v2.argv.json",
+          "bytes": 734,
+          "sha256": "bda007c7b4a78369197aa036b54efee768a2c941b7e6ed8cead52f9410d19a17"
+        },
+        "output": {
+          "path": "logs/profile-build-v2.out",
+          "bytes": 1665,
+          "sha256": "bfc1f1cef66edbbd51757ddd7a6efcc0479a71182e7a9b6cb3b577924d301afd"
+        },
+        "guard": {
+          "path": "logs/profile-build-v2.guard.jsonl",
+          "bytes": 8126,
+          "sha256": "21ebac0b033e9f41e599d2d3231106b07c7c607385ede1ed94a101bf91011a18"
+        },
+        "samples": 24,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 791857264,
+        "min_sampled_headroom_bytes": 35071508480,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-build-v3",
+        "argv": {
+          "path": "logs/profile-build-v3.argv.json",
+          "bytes": 767,
+          "sha256": "48f43db368637282d999968430828c1994442929a9d62dbbbe532b5cc036c3c7"
+        },
+        "output": {
+          "path": "logs/profile-build-v3.out",
+          "bytes": 1946,
+          "sha256": "48c3601cc088fca904355ec748ec0924688217ba005e615e8a24b99542d702f5"
+        },
+        "guard": {
+          "path": "logs/profile-build-v3.guard.jsonl",
+          "bytes": 9685,
+          "sha256": "7fa538733042780abfea4ad2b905edcaf6defd3c36aafca77babd943265f733b"
+        },
+        "samples": 29,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 907937352,
+        "min_sampled_headroom_bytes": 38250627072,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-small-off-on-v1",
+        "argv": {
+          "path": "logs/profile-small-off-on-v1.argv.json",
+          "bytes": 1131,
+          "sha256": "2720d4657741cb8df122932475ad3851f0eed39a73939f5b776502afad8c86dd"
+        },
+        "output": {
+          "path": "logs/profile-small-off-on-v1.out",
+          "bytes": 699,
+          "sha256": "9f09c9f8686df289617ad29b9a29dfd439ccd82efcbb0b270536291464c3abf6"
+        },
+        "guard": {
+          "path": "logs/profile-small-off-on-v1.guard.jsonl",
+          "bytes": 7810,
+          "sha256": "db2832c104a8cc547bf10bac4c87e65623511ccca5f1904f706f1013e936cff1"
+        },
+        "samples": 23,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 300,
+        "max_sampled_footprint_bytes": 1554286392,
+        "min_sampled_headroom_bytes": 39937622016,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-full-off-on-v1",
+        "argv": {
+          "path": "logs/profile-full-off-on-v1.argv.json",
+          "bytes": 1128,
+          "sha256": "78834a86fcc1bd595bf8a1675ee84f8d80615366cab4bb571631566f432d1b62"
+        },
+        "output": {
+          "path": "logs/profile-full-off-on-v1.out",
+          "bytes": 1148,
+          "sha256": "dbb4b01abd9b3a468966d238839fae4ec00cd74767db7fbd4782da9eceacbf11"
+        },
+        "guard": {
+          "path": "logs/profile-full-off-on-v1.guard.jsonl",
+          "bytes": 26653,
+          "sha256": "abb64e6b67c20c822c5d435ba0dcd4f90b92c19ae338ef6d2a0da877f31945d5"
+        },
+        "samples": 84,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 5430332152,
+        "min_sampled_headroom_bytes": 35330637824,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-full-on-off-v1",
+        "argv": {
+          "path": "logs/profile-full-on-off-v1.argv.json",
+          "bytes": 1128,
+          "sha256": "087f4a2aea17e39b7d4933c1a075be0232deea7bcab732efaf0ee37439f0b7bd"
+        },
+        "output": {
+          "path": "logs/profile-full-on-off-v1.out",
+          "bytes": 1166,
+          "sha256": "b0429c9dae82eccdb42070d1ca093443b7cb8e0f5fb3b05ad8ebc17563a33427"
+        },
+        "guard": {
+          "path": "logs/profile-full-on-off-v1.guard.jsonl",
+          "bytes": 25744,
+          "sha256": "8267bb905cc9484a2de8531ead39c9d03ba157147e94d40aaa5b32c100098070"
+        },
+        "samples": 81,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 4808394936,
+        "min_sampled_headroom_bytes": 29618536448,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-instruments-guard-v1",
+        "argv": {
+          "path": "logs/profile-instruments-guard-v1.argv.json",
+          "bytes": 675,
+          "sha256": "cef69adfbbdca7745e1f529e31c5da3cec82122d550b1b24cafdea743b43e296"
+        },
+        "output": {
+          "path": "logs/profile-instruments-guard-v1.out",
+          "bytes": 207,
+          "sha256": "a155d1ac010422f4fe3b006faa5fd6cd8f132a98304029ff0fe357d9e8f4617d"
+        },
+        "guard": {
+          "path": "logs/profile-instruments-guard-v1.guard.jsonl",
+          "bytes": 43108,
+          "sha256": "3665857ca376a9609715ed46b6530401015fc7e1932c2f500dfb86145f03df0c"
+        },
+        "samples": 137,
+        "footprint_cap_bytes": 12884901888,
+        "timeout_seconds": 240,
+        "max_sampled_footprint_bytes": 7135402368,
+        "min_sampled_headroom_bytes": 26855391232,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-instruments-export-v1",
+        "argv": {
+          "path": "logs/profile-instruments-export-v1.argv.json",
+          "bytes": 674,
+          "sha256": "9feb876e14abd433fa94e4ae1b1e6446bc4d3c1f6ea14d11151637d67070a49f"
+        },
+        "output": {
+          "path": "logs/profile-instruments-export-v1.out",
+          "bytes": 197,
+          "sha256": "ab6e4221c32f97abf87f448578669a61a620f6033d702cf6e136be8ad4e4ddd9"
+        },
+        "guard": {
+          "path": "logs/profile-instruments-export-v1.guard.jsonl",
+          "bytes": 18046,
+          "sha256": "e3d0ff20635db1dac1ef9983c777c0b70e582ec285b081579399e32f3d23ed1b"
+        },
+        "samples": 56,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 240,
+        "max_sampled_footprint_bytes": 1694602352,
+        "min_sampled_headroom_bytes": 33562689536,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-full-api-only-v2",
+        "argv": {
+          "path": "logs/profile-full-api-only-v2.argv.json",
+          "bytes": 1106,
+          "sha256": "66b1aa674b21888f6d3306665191d9325ae1f2f443d1e5e22187736d47aa4a58"
+        },
+        "output": {
+          "path": "logs/profile-full-api-only-v2.out",
+          "bytes": 1144,
+          "sha256": "30e6d0d0393cc7479075e503e6d3bdf9d4ec4ba7755387475dc11e5c970978e3"
+        },
+        "guard": {
+          "path": "logs/profile-full-api-only-v2.guard.jsonl",
+          "bytes": 26126,
+          "sha256": "b9c36f0af6138631374ab5f8b7aa23f1a3eeaa5b1fd03b9ac3855b2361926161"
+        },
+        "samples": 82,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_seconds": 600,
+        "max_sampled_footprint_bytes": 5154752984,
+        "min_sampled_headroom_bytes": 29100949504,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-instruments-analysis-v3",
+        "argv": {
+          "path": "logs/profile-instruments-analysis-v3.argv.json",
+          "bytes": 681,
+          "sha256": "957281fa1688713da9a6b8008796b50fcae029546380e91a35925ae50a475203"
+        },
+        "output": {
+          "path": "logs/profile-instruments-analysis-v3.out",
+          "bytes": 2576,
+          "sha256": "bd92e4adc5e6cf800f7b236c7b83a5ed8a0e42f8d38108aa796b255faa962c3e"
+        },
+        "guard": {
+          "path": "logs/profile-instruments-analysis-v3.guard.jsonl",
+          "bytes": 1974,
+          "sha256": "0975f1ec2fffeac82a2f08f797af970c294fa712dcbae9b5f1800803c2f11eb9"
+        },
+        "samples": 4,
+        "footprint_cap_bytes": 2147483648,
+        "timeout_seconds": 120,
+        "max_sampled_footprint_bytes": 171180848,
+        "min_sampled_headroom_bytes": 39729119232,
+        "max_sampled_swap_growth_bytes": 0
+      },
+      {
+        "name": "profile-small-final-v3",
+        "argv": {
+          "path": "logs/profile-small-final-v3.argv.json",
+          "bytes": 1129,
+          "sha256": "94fe397f8d36699aa8a7e22cb947cedd3ae1168e583d54fb37a52ecb747eea86"
+        },
+        "output": {
+          "path": "logs/profile-small-final-v3.out",
+          "bytes": 696,
+          "sha256": "2ded8dede70abc123075dc747eae6661d34c9d9aba819591946090997ef1fb86"
+        },
+        "guard": {
+          "path": "logs/profile-small-final-v3.guard.jsonl",
+          "bytes": 7550,
+          "sha256": "6274d7e700e91ed91ad7b5ab380099f670562267a4fae0ddaca50613a6eac95f"
+        },
+        "samples": 22,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_seconds": 300,
+        "max_sampled_footprint_bytes": 1520846600,
+        "min_sampled_headroom_bytes": 38102958080,
+        "max_sampled_swap_growth_bytes": 0
+      }
+    ],
+    "runtime_floor_percent": 10,
+    "swap_growth_stop_bytes": 67108864,
+    "memory_limitation": "File cache included once. Polling is not a true peak guarantee or reservation; named allocation counters omit opaque MPS resources.",
+    "scripts": [
+      {
+        "path": "tmp/profile_run_v1.py",
+        "bytes": 2190,
+        "sha256": "31f423f6ca326c84832ccfdcabea08643abba4cf676fbc83b4259d39f64af62d"
+      },
+      {
+        "path": "tmp/run_guarded.py",
+        "bytes": 1116,
+        "sha256": "6e2782c8785bc62e38e75a45cf6bf02b7694544d16840489ec51d5d4f1c90954"
+      },
+      {
+        "path": "tmp/capture_pixelumm_profile_v1.py",
+        "bytes": 4818,
+        "sha256": "5189011edbb16b1d2d23320ff2f1580d3ec2b68a426c1ced84ae21418ff24802"
+      },
+      {
+        "path": "tmp/export_pixelumm_profile_v1.py",
+        "bytes": 2678,
+        "sha256": "e8e3e2c244bd7791bf7414d633b53721f79ee07b7c4f6ded0d1715848cceeebd"
+      },
+      {
+        "path": "tmp/analyze_pixelumm_instruments_v3.py",
+        "bytes": 6950,
+        "sha256": "fe61b72abd847f982633fb2d1279953f90ad55ddeff2d4e1ff8a8d18d22fa6cb"
+      },
+      {
+        "path": "tmp/analyze_pixelumm_continuations_v1.py",
+        "bytes": 23484,
+        "sha256": "6c4477c1e241d479afe4451f500f3fda3920532099b6684417726b4e3b0f31dc"
+      },
+      {
+        "path": "tmp/profile_evidence_index_v1.py",
+        "bytes": 15907,
+        "sha256": "5d914b9d6f6a36e865e650a3565ab5f4944637616346e48d5c781b7cf73f685b"
+      }
+    ],
+    "review": "Correlated Mini-Quad, not independent replication; phase-model audit and read-only native/Instruments/claim adversary review.",
+    "index_validation_run": {
+      "receipts": {
+        "argv.json": {
+          "path": "logs/profile-evidence-index-v3.argv.json",
+          "bytes": 669,
+          "sha256": "98e59df7d077bfade041c4ac6921b8efc236fe70672bfeb83ba384d211eeae0f"
+        },
+        "out": {
+          "path": "logs/profile-evidence-index-v3.out",
+          "bytes": 209,
+          "sha256": "35c42df8ba0a5ada0ac73592a3638914639a5ca32aa29815e61f969b67c49167"
+        },
+        "guard.jsonl": {
+          "path": "logs/profile-evidence-index-v3.guard.jsonl",
+          "bytes": 1668,
+          "sha256": "f3813172b2dce478e3b53c313bd1857b9d87d3f52114074d75e0afa03cd7bcfe"
+        }
+      },
+      "returncode": 0,
+      "observed": {
+        "compared_tensors": 288,
+        "guarded_runs": 12,
+        "packet": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/.landmark/evidence/2026-10-27-hy-nomas-pixelumm-profile.json",
+        "reports": 6,
+        "requests": 48
+      },
+      "scope": "Completed report/input/source/guard checks; no recursive packet self-hash or claim that packet structure proves runtime behavior."
+    },
+    "final_review": {
+      "verdict": "ROBUST within the stated scope",
+      "reviewer": "pixelumm_profile_adversary",
+      "lineage": "Correlated read-only review, not independent replication",
+      "scope": "Native instrumentation arithmetic/cadence diff, exact parity/counts, corrected Compute root alignment, sampled shader attribution and cross-run binary/source receipt linkage. Exclusive kernel costs, exact off/on continuation placement, blocking cause and speedup remain unqualified."
+    }
+  },
+  "refuted_route": {
+    "analysis_v1_output": {
+      "path": "logs/profile-instruments-analysis-v1.out",
+      "bytes": 209,
+      "sha256": "2ce144eec2b5226951e00f1eb99698134975872e013c408373b22d9cbc9a17a4"
+    },
+    "reason": "Broad PID/CBID join failed the original alignment gate on two non-Compute Fragment rows. Compute-only analysis retains excluded rows and passes the same2us telemetry gate; numerical tolerances unchanged."
+  },
+  "decision": "Profile FFN dense gate/up/down at real geometry against MPS next, preserving BF16 rounding/reduction. No arithmetic optimization promoted by this profiling change.",
+  "rollback": "Omit profile:true / --profile-order; old unprofiled FFI retained. Disabled path still includes a no-op Graph-scope hook; off/on is same-binary instrumentation comparison, not prepatch overhead.",
+  "residual_limits": [
+    "One block with diagnostic captures, not complete36 decoder or video throughput/quality.",
+    "Root timestamp intervals are not exclusive phase kernel costs; candidate ranges overlap.",
+    "No additional inference waits/submissions in instrumentation; root-count parity observed, exact off/on continuation placement not measured.",
+    "No numerical tolerance widened; all compared words exact at finite atol=rtol=2e-5.",
+    "No shared legacy packet validator exists in this checkout; this script checks actual reports, input hashes, guards and selected live source pins."
+  ],
+  "links": {
+    "frontier": "docs/hy-nomas-pixelumm-block-frontier.md",
+    "landmarks": "LANDMARKS.md"
+  }
+}

@@ -1,0 +1,572 @@
+{
+  "adversary": {
+    "correlation": "Same-lineage Mini-Quad source/receipt review; decisive output-hash analyzer recheck and CPU specs were executed by the root.",
+    "open": "A causal 3-4 percent DiT penalty is VULNERABLE: order drift is larger, thermal readings are unavailable, and an allocation-only control is absent.",
+    "scope": "Matched-input integrity, display parity, diagnostic lifecycle and sampled guard only.",
+    "verdict": "ROBUST"
+  },
+  "claim": "The fixed-input standalone/after-DiT ABBA diagnostic completed with same-owner decoder repeats, bitwise display parity to the admitted saved source-MPS oracle, and sampled guard limits intact. The prior roughly twofold contrast was not reproduced in this experiment.",
+  "claim_limits": [
+    "Mean after-DiT/standalone latency ratios are descriptive; neither a causal 3-4 percent penalty nor absence of a penalty under other conditions is established.",
+    "Resources are the same live owners within a cell; fresh processes use identical construction, values and geometry, not the same cross-process object identities.",
+    "The treatment includes DiT setup, compute and release; co-residency and an allocation-only control are excluded.",
+    "Cold timing includes an extra GPU display snapshot and first-use conversion state. Compare like pass labels across modes, not a pure cold/warm effect.",
+    "GPU timing is the sum of command-buffer start/end elapsed spans, not active compute time.",
+    "Tracked MetalBuffer methods exclude opaque MPS allocations; memory results are sampled.",
+    "Only final display values are compared here. No full DiT trajectory, unmodified CUDA/FlexAttention, raw intermediates, motion quality or speedup claim is established."
+  ],
+  "date": "2026-10-31",
+  "next_falsifier": "Fixed-input PixelUMM A/A with controlled recovery intervals and observable thermal/frequency state; then allocation-only DiT prelude if a residual operational effect survives.",
+  "protocol": {
+    "cold_passes_per_cell": 1,
+    "guard_limits": {
+      "max_footprint_mib": 26624,
+      "max_swap_growth_mib": 64,
+      "memory_accounting": "file-cache",
+      "runtime_floor_pct": 10,
+      "runtime_floor_pct_exact": "10",
+      "timeout_sec": 1200
+    },
+    "named_budget_bytes": 25769803776,
+    "order": [
+      "standalone",
+      "after-dit",
+      "after-dit",
+      "standalone"
+    ],
+    "pause_between_passes_seconds": 1,
+    "pause_between_processes_seconds": 30,
+    "same_inputs": {
+      "frames": 120,
+      "geometry": "768x416",
+      "input_sha256": "dcbe51749742701a2ee1a6d09a10e2f20e663f3ff54f646d801c743e17c7a104",
+      "latent_sha256": "ea79dc6896f3e956035acd0caa69b1730554d5459d80893989023493de4b5bba",
+      "noise_sha256": "166ea19d2812c0b4dedfedefd4f101b2abe8b4ec48364fb63705f781e1828547",
+      "output_sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+      "raw_capture": false
+    },
+    "same_owner_repeats_per_cell": 1,
+    "upstream_oracle": {
+      "display_sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+      "parent_evidence": ".landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json",
+      "report": {
+        "bytes": 7128,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/cinematic-20261031-v1/decoder-source.json",
+        "sha256": "a91ad030b8cd682f4ca6c00ebfad41c4a3ea56a9bcff41155318f6fb12d2ea7e"
+      },
+      "scope": "Pinned source-MPS PixelUMM with the admitted gathered FP32 attention adapter; see prior same-latent oracle qualification."
+    }
+  },
+  "refresh_triggers": [
+    "Changed inputs, latent/noise, source/weights/oracle, geometry, decoder kernels or restart lifecycle invalidate parity consumption until rerun.",
+    "Changed binary, MPS/OS/device, command/resource schedule, pause policy or host load requires a fresh guarded timing matrix.",
+    "This packet indexes observed evidence; it is not itself a proof or a general performance guarantee."
+  ],
+  "rejected_initial_attempt": {
+    "failure": {
+      "bytes": 257,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v1/failure.json",
+      "sha256": "bdf2b10734f603146add926b622ae9be13ef235a00fe54ede07d6fec5b0a7ca4"
+    },
+    "scope": "Guard exit 75 before any model/GPU process started: 31.48 GiB startup headroom below unchanged 26 GiB cap plus 6.4 GiB reserve. Successful retry retained every limit."
+  },
+  "risk_and_rollback": {
+    "guards": [
+      "Require the exact successful completed prior chain, one terminal wait, complete window schedule and finalized output before mutating either child owner.",
+      "Poison the full display on GPU before each decode; snapshot cold display on GPU and defer both exports/hashes until after both terminal waits.",
+      "Check 42 owner identities, tracked allocation/readback/wait counters, source/binary identities and external sampled guard for every cell."
+    ],
+    "reason": "A diagnostic same-owner repeat needs guarded reset of originally single-use stem and assembly cursors.",
+    "risk": "CAUTION",
+    "rollback": "Remove the opt-in diagnostic entrypoint/helper, launcher/specs and Makefile targets. Production generator imports no replay helper and its execution path is unchanged.",
+    "strongest_failure_mode": "A repeated pass could export stale output or reset an incomplete/failed owner while GPU resources remain live."
+  },
+  "run": {
+    "analysis": {
+      "bytes": 8024,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/analysis.json",
+      "sha256": "ad9fcd1eb77915b2d059adee721e53f9297f999cec7064cebce527e507c3d472"
+    },
+    "cells": [
+      {
+        "completion": {
+          "bytes": 920,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-01-standalone/completion.json",
+          "sha256": "e2eae0f44c90ae14c6df9a37f353a25fde760c77f58347b30958e85418d6e621"
+        },
+        "guard": {
+          "bytes": 238522,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-01-standalone/guard.jsonl",
+          "sha256": "ef34c692fcb4a1302145c80ec5ce6ec5ba933af109f22639d8ef772dc1c0774b"
+        },
+        "mode": "standalone",
+        "name": "cell-01-standalone",
+        "output_bytes_each": 460062720,
+        "outputs": {
+          "cold": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-01-standalone/output/cold-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          },
+          "warm": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-01-standalone/output/warm-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          }
+        },
+        "passes": [
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 161.733329958,
+            "gpu_seconds": 162.57291991461534,
+            "label": "cold",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 0.911215417,
+            "waits": 1,
+            "wall_seconds": 162.644545666
+          },
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 208.703666083,
+            "gpu_seconds": 209.8789329563151,
+            "label": "warm",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.196064708,
+            "waits": 1,
+            "wall_seconds": 209.899730875
+          }
+        ],
+        "receipt": {
+          "bytes": 3590,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-01-standalone/output/receipt.json",
+          "sha256": "6bfb47320cf254c4f14f8213b386c056480d179d893427b97993a27df09eb336"
+        },
+        "sampled_memory": {
+          "maximum_swap_growth_bytes": 0,
+          "minimum_headroom_bytes": 14056718336,
+          "minimum_pressure_free_pct": 76,
+          "peak_footprint_bytes": 21795466952,
+          "sample_count": 772
+        },
+        "thermal_after": {
+          "machdep.xcpm.cpu_thermal_level": null,
+          "machdep.xcpm.gpu_thermal_level": null
+        },
+        "timings": {
+          "decoder_setup_seconds": 22.554529292
+        }
+      },
+      {
+        "completion": {
+          "bytes": 919,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-02-after-dit/completion.json",
+          "sha256": "baaa7bf98b9a6f4f16b61550fbbc64520855c4a53515cfd0bab1a0157a961259"
+        },
+        "guard": {
+          "bytes": 319333,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-02-after-dit/guard.jsonl",
+          "sha256": "cc0d80a29da544372a3a5025fd867538b9d0f0c31decf6b50b4872886166bc4d"
+        },
+        "mode": "after-dit",
+        "name": "cell-02-after-dit",
+        "output_bytes_each": 460062720,
+        "outputs": {
+          "cold": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-02-after-dit/output/cold-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          },
+          "warm": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-02-after-dit/output/warm-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          }
+        },
+        "passes": [
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 183.251021,
+            "gpu_seconds": 184.21738304500468,
+            "label": "cold",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.01826075,
+            "waits": 1,
+            "wall_seconds": 184.269281958
+          },
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 223.302279958,
+            "gpu_seconds": 224.4269883352681,
+            "label": "warm",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.144472166,
+            "waits": 1,
+            "wall_seconds": 224.446752291
+          }
+        ],
+        "receipt": {
+          "bytes": 3702,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-02-after-dit/output/receipt.json",
+          "sha256": "1fa2bfc3a974aad917ae70fbbb66f5ab3dc442cd7a771c8065de8fe398a6c18d"
+        },
+        "sampled_memory": {
+          "maximum_swap_growth_bytes": 0,
+          "minimum_headroom_bytes": 12429164544,
+          "minimum_pressure_free_pct": 68,
+          "peak_footprint_bytes": 25846674104,
+          "sample_count": 1033
+        },
+        "thermal_after": {
+          "machdep.xcpm.cpu_thermal_level": null,
+          "machdep.xcpm.gpu_thermal_level": null
+        },
+        "timings": {
+          "decoder_setup_seconds": 23.202267792,
+          "dit_gpu_seconds": 75.50248454563553,
+          "dit_setup_seconds": 20.871203541,
+          "dit_wall_seconds": 76.181163375
+        }
+      },
+      {
+        "completion": {
+          "bytes": 919,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-03-after-dit/completion.json",
+          "sha256": "e5292d56812973b272b185de0fa0f63f0a3b8142c074312307cc7a9f7b0b8cfd"
+        },
+        "guard": {
+          "bytes": 369198,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-03-after-dit/guard.jsonl",
+          "sha256": "5833d722ec87f4405929e7b3842791ef176b448e047c1437c8c0364a733c8f79"
+        },
+        "mode": "after-dit",
+        "name": "cell-03-after-dit",
+        "output_bytes_each": 460062720,
+        "outputs": {
+          "cold": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-03-after-dit/output/cold-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          },
+          "warm": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-03-after-dit/output/warm-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          }
+        },
+        "passes": [
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 212.834386875,
+            "gpu_seconds": 214.25031312409556,
+            "label": "cold",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.466783666,
+            "waits": 1,
+            "wall_seconds": 214.301170791
+          },
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 286.33026375,
+            "gpu_seconds": 287.6250115451985,
+            "label": "warm",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.3164985,
+            "waits": 1,
+            "wall_seconds": 287.646762459
+          }
+        ],
+        "receipt": {
+          "bytes": 3707,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-03-after-dit/output/receipt.json",
+          "sha256": "2eec79f33515b25471cdb0696f1855cba121693da60fa2af2cd2982a917e8430"
+        },
+        "sampled_memory": {
+          "maximum_swap_growth_bytes": 0,
+          "minimum_headroom_bytes": 9498230784,
+          "minimum_pressure_free_pct": 74,
+          "peak_footprint_bytes": 25846100664,
+          "sample_count": 1195
+        },
+        "thermal_after": {
+          "machdep.xcpm.cpu_thermal_level": null,
+          "machdep.xcpm.gpu_thermal_level": null
+        },
+        "timings": {
+          "decoder_setup_seconds": 23.035044209,
+          "dit_gpu_seconds": 71.50115870981244,
+          "dit_setup_seconds": 19.657518375,
+          "dit_wall_seconds": 71.585804041
+        }
+      },
+      {
+        "completion": {
+          "bytes": 921,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-04-standalone/completion.json",
+          "sha256": "935acde749fc4f8bfad6fea473e2ec7ea4f82417addee5cd241a3620f256e83a"
+        },
+        "guard": {
+          "bytes": 317900,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-04-standalone/guard.jsonl",
+          "sha256": "cf16f1d1abef33234816a82399ba5f516cfc8aa6f2724e21632fa1c6072a81ab"
+        },
+        "mode": "standalone",
+        "name": "cell-04-standalone",
+        "output_bytes_each": 460062720,
+        "outputs": {
+          "cold": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-04-standalone/output/cold-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          },
+          "warm": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-04-standalone/output/warm-display.f32le",
+            "sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+            "upstream_bitwise_equal": true
+          }
+        },
+        "passes": [
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 223.024309375,
+            "gpu_seconds": 224.25781570957042,
+            "label": "cold",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.29211125,
+            "waits": 1,
+            "wall_seconds": 224.31642075
+          },
+          {
+            "encode_allocations": 0,
+            "encode_readbacks": 0,
+            "encode_seconds": 279.692543459,
+            "gpu_seconds": 281.06787471083226,
+            "label": "warm",
+            "preterminal_waits": 0,
+            "segments": 11731,
+            "terminal_wait_seconds": 1.396842375,
+            "waits": 1,
+            "wall_seconds": 281.089386084
+          }
+        ],
+        "receipt": {
+          "bytes": 3589,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/cell-04-standalone/output/receipt.json",
+          "sha256": "dc4027a6f34ca15fd17920218c55f9a3be7f894f2fc2abec50c5467aacc4a0e5"
+        },
+        "sampled_memory": {
+          "maximum_swap_growth_bytes": 0,
+          "minimum_headroom_bytes": 14681194496,
+          "minimum_pressure_free_pct": 75,
+          "peak_footprint_bytes": 21792616184,
+          "sample_count": 1022
+        },
+        "thermal_after": {
+          "machdep.xcpm.cpu_thermal_level": null,
+          "machdep.xcpm.gpu_thermal_level": null
+        },
+        "timings": {
+          "decoder_setup_seconds": 21.757938875
+        }
+      }
+    ],
+    "completion": {
+      "bytes": 4247,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/completion.json",
+      "sha256": "1062629cf3d0318e9a46dc4d1d549b1d600d9ce27a05628c265ee11c2201d3a6"
+    },
+    "launch": {
+      "bytes": 42860,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/matrix-v2/launch.json",
+      "sha256": "1fea4bd8280d1e3c7847bbcc7e19782aedb27e9aaae84dfca68afa0854912c63"
+    },
+    "ratios": {
+      "cold": {
+        "gpu_seconds": {
+          "adjacent_pair_ratios": [
+            {
+              "after_dit_cell": 2,
+              "after_dit_over_standalone": 1.13313695258569,
+              "standalone_cell": 1
+            },
+            {
+              "after_dit_cell": 3,
+              "after_dit_over_standalone": 0.9553750108828524,
+              "standalone_cell": 4
+            }
+          ],
+          "after_dit_mean": 199.23384808455012,
+          "after_dit_over_standalone": 1.0300828229849348,
+          "after_dit_samples": [
+            184.21738304500468,
+            214.25031312409556
+          ],
+          "standalone_mean": 193.41536781209288,
+          "standalone_samples": [
+            162.57291991461534,
+            224.25781570957042
+          ]
+        },
+        "wall_seconds": {
+          "adjacent_pair_ratios": [
+            {
+              "after_dit_cell": 2,
+              "after_dit_over_standalone": 1.132957033409578,
+              "standalone_cell": 1
+            },
+            {
+              "after_dit_cell": 3,
+              "after_dit_over_standalone": 0.9553521319325884,
+              "standalone_cell": 4
+            }
+          ],
+          "after_dit_mean": 199.28522637449998,
+          "after_dit_over_standalone": 1.030001698725652,
+          "after_dit_samples": [
+            184.269281958,
+            214.301170791
+          ],
+          "standalone_mean": 193.480483208,
+          "standalone_samples": [
+            162.644545666,
+            224.31642075
+          ]
+        }
+      },
+      "warm": {
+        "gpu_seconds": {
+          "adjacent_pair_ratios": [
+            {
+              "after_dit_cell": 2,
+              "after_dit_over_standalone": 1.0693164157737598,
+              "standalone_cell": 1
+            },
+            {
+              "after_dit_cell": 3,
+              "after_dit_over_standalone": 1.023329371388005,
+              "standalone_cell": 4
+            }
+          ],
+          "after_dit_mean": 256.0259999402333,
+          "after_dit_over_standalone": 1.0429887553676247,
+          "after_dit_samples": [
+            224.4269883352681,
+            287.6250115451985
+          ],
+          "standalone_mean": 245.47340383357368,
+          "standalone_samples": [
+            209.8789329563151,
+            281.06787471083226
+          ]
+        },
+        "wall_seconds": {
+          "adjacent_pair_ratios": [
+            {
+              "after_dit_cell": 2,
+              "after_dit_over_standalone": 1.0693046215703015,
+              "standalone_cell": 1
+            },
+            {
+              "after_dit_cell": 3,
+              "after_dit_over_standalone": 1.0233284382108985,
+              "standalone_cell": 4
+            }
+          ],
+          "after_dit_mean": 256.04675737499997,
+          "after_dit_over_standalone": 1.0429834329561367,
+          "after_dit_samples": [
+            224.446752291,
+            287.646762459
+          ],
+          "standalone_mean": 245.4945584795,
+          "standalone_samples": [
+            209.899730875,
+            281.089386084
+          ]
+        }
+      }
+    },
+    "sampled_memory": {
+      "maximum_footprint_bytes": 25846674104,
+      "maximum_swap_growth_bytes": 0,
+      "minimum_headroom_bytes": 9498230784
+    }
+  },
+  "schema": "cogni_ml.pixelumm_after_dit_evidence/v1",
+  "source_state": {
+    "base_commit": "b57e8d791ad96a7b9f6e59fc081948fa7d5b1d20",
+    "source_sha256": {
+      "Makefile": "906bd7ecd939e6d7c900a8f5aa48d9884ee8aac8fa4d02ff234d3f956fd18cd1",
+      "examples/pixelumm_after_dit_probe.cr": "9b17f69a1b44e2c5ee580f962f6fff2d6de2b8dfe4fb868574b38d3ca6de388d",
+      "examples/support/hy_nomas_decoder_replay.cr": "aac72491dad7d4035d3844574d3fbca5f70f8e561c2f43c9ad956e9652965a39",
+      "examples/support/pixelumm_after_dit_matrix.py": "a8bb860336d3ab7e2075a96ea605bea094d4fd8af0faf08469312097b0903d27",
+      "examples/support/pixelumm_decoder_replay.metal": "899a34123ef74c795660c7c8dc104d10413c47c9be46e1a38a350405b29e1775",
+      "spec/hy_nomas_decoder_replay_spec.cr": "a0d1b853c322b92b50660e87fad2c48e9f41f6ad5f3d5941dcab7bb034b83dc3",
+      "spec/support/test_pixelumm_after_dit_matrix.py": "fac59a0719005bfb959db22e3512116d3be8cf2d856c7e5d3e7a3f81a1224e94"
+    },
+    "tested_release_binary": {
+      "device": 16777290,
+      "inode": 21803247,
+      "mode": 493,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1/pixelumm_after_dit_probe",
+      "sha256": "03a6ef1ce665b6a8463366b4424cfb5d0867b7f16ef6be7df03ec13c231eb187",
+      "size_bytes": 2745368
+    },
+    "tested_source_manifest_sha256": "d1b95779f042d89b0bf86857f35936efd5d299ef288bec14cab7fc6ddabe2901",
+    "tested_working_tree_status_sha256": "c85242ffafe667d0446ebf4748880357bf9cb87ac4491cf3b1d5c48613c8b6cd",
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+  },
+  "verification": {
+    "analysis_recheck": {
+      "command": "python3 -B examples/support/pixelumm_after_dit_matrix.py --output-root /opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/matrix-v2 --analyze-only",
+      "observed": "Exit zero; eight output files rehashed; report equals original analysis.",
+      "report": {
+        "bytes": 8024,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/build-v1/analysis-recheck.json",
+        "sha256": "ad9fcd1eb77915b2d059adee721e53f9297f999cec7064cebce527e507c3d472"
+      }
+    },
+    "analyzer_falsifiers": {
+      "command": "TMPDIR=/opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/tmp python3 -B spec/support/test_pixelumm_after_dit_matrix.py",
+      "log": {
+        "bytes": 103,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/build-v1/python-spec-final.log",
+        "sha256": "0a7487dd447ed39892a423a22370611e100bf0b90f72781bde8e794e93941693"
+      },
+      "observed": "5 tests, OK"
+    },
+    "build_command": "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/crystal-cache TMPDIR=/opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/tmp make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1 pixelumm_after_dit_probe spec_hy_nomas_decoder_replay",
+    "build_log": {
+      "bytes": 3189,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/build-v1/build-qualified.log",
+      "sha256": "c6673d6221fb400ca4046edef3a2704a71fba96a4f8c38b182c3689a867ca26a"
+    },
+    "diff_command": "git diff --check",
+    "diff_observed": "Exit zero",
+    "format_command": "crystal tool format --check examples/pixelumm_after_dit_probe.cr examples/support/hy_nomas_decoder_replay.cr spec/hy_nomas_decoder_replay_spec.cr",
+    "format_observed": "Exit zero",
+    "launch_command": "python3 -B examples/support/pixelumm_after_dit_matrix.py --binary /opt/mldata_ssd/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1/pixelumm_after_dit_probe --output-root /opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/matrix-v2 --pause-seconds 30",
+    "replay_guard_specs": {
+      "command": "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1 spec_hy_nomas_decoder_replay",
+      "log": {
+        "bytes": 1418,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-after-dit-20261031/build-v1/replay-spec-final.log",
+        "sha256": "113fa24575942e2b4dc2fb6df1531f3dd6f2df2ad1b4d1a6cf28819ce79fb2d3"
+      },
+      "observed": "4 examples, 0 failures, 0 errors"
+    }
+  }
+}

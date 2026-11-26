@@ -1,0 +1,137 @@
+{
+  "schema": "cogni_ml.hy_nomas_reference_action_evidence/v1",
+  "date": "2026-11-02",
+  "claim_scope": "Separate authenticated caption T0/action T1 conditioning and paired diagnostic admission. Animation remains incomplete; full DiT parity failed.",
+  "parent_revision": "8d3803ff018dad6bf491f1493c4d7880bb789e67",
+  "risk": "CAUTION: text conditioning and history behavior",
+  "rollback": "Omit --reference-action-inputs and --reference-action-inputs-sha to retain the old explicitly experimental shared-text control.",
+  "local_artifacts": "/opt/mldata_ssd/cogni-ml/rolewright-reference-action-20261102.pruxm9c2",
+  "lineage": {
+    "upstream_reference_contract_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "upstream_model_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "control_torch_version": "2.8.0",
+    "files": {
+      "Makefile": "71a8c5fdf61fefb0e8fc7c9eefca821ac3310182cbc30a0f1c7739225af5a1d5",
+      "examples/hy_nomas_sequence_generate.cr": "6890a53f27f9ed3a0a008a92bd18971b04d239bd6a50e4e15fcb782fc581e85b",
+      "examples/support/hy_nomas_sequence.cr": "beaf75db00ac430207e3821a93c311eb536ac3e77c6fd306147c183d530eb7a0",
+      "src/ml/video/hy_nomas_reference_action.cr": "ad2af8bbfd0b0417f7c91923cd9c811b2eda9ab7f07c2f9ad38e9fc9c47d2fad",
+      "spec/hy_nomas_reference_action_spec.cr": "7b7634b19a23daf903410ab506a5bf92c1bc61f08e3ba453c99b291a3ecf9526",
+      "spec/support/hy_nomas_reference_continuation_control.py": "273d37ae7aa7c73034b86840299d433648ffb1b9428697606ff0e60d8b7873b7",
+      "spec/hy_nomas_reference_continuation_control_spec.py": "9d11a3058cdfcfdf6f33892926de989c32ad701a8144d6114ce547425aa66391",
+      "examples/hy_nomas_decode_latent.cr": "97f4d3b0247b7396700fc827f7e2edc7c65a92a6d405caf7df30be87a1cc61ea",
+      "examples/support/hy_nomas_decode_latent_admission.cr": "2373a685429dec795bc730988579b2b85715fbaf91692fe6abcd28afa951d930",
+      "spec/hy_nomas_decode_latent_admission_spec.cr": "ea2c26fb08cc6e4953d07983964d937a84575aee47fd35db6ab983e641022862"
+    },
+    "native_binary": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/build/hy_nomas_sequence_generate",
+      "sha256": "7d23fd433587f19f56dcf36f60d74d76cb4d2e10672216d7777303383a0c4aa5"
+    },
+    "decode_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/build/hy_nomas_decode_latent",
+      "sha256": "99385cc63bc536c02553ea5fe32ffff8d8aeff95407f89e12540376e62282f80"
+    },
+    "common_decoder_source": {
+      "path": "examples/support/hy_nomas_generation.cr",
+      "sha256": "cf094fe8a16dc4c09d26558dde31ca5203d8f1e41c62d6f7801ccef6c789f206",
+      "note": "Both native sequence and imported-latent diagnostic use HyNomasGeneration::Decoder."
+    }
+  },
+  "observed_checks": [
+    {
+      "command": "make spec_hy_nomas_reference_handoff",
+      "result": "87 examples, 0 failures, 0 errors"
+    },
+    {
+      "command": "crystal spec -D cpu_only spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr",
+      "result": "22 examples, 0 failures, 0 errors"
+    },
+    {
+      "command": "python3 -B spec/hy_nomas_reference_continuation_control_spec.py",
+      "result": "6 tests, OK"
+    },
+    {
+      "artifact": "cli-admission-checks-confirmed.json",
+      "result": "4 compiled CLI negative admissions rejected before Metal"
+    },
+    {
+      "artifact": "checks.json",
+      "result": "Root-observed builds, plan-only admissions, format/diff checks and guarded runtime summaries; index, not independent proof"
+    }
+  ],
+  "guarded_runs": {
+    "native": {
+      "peak_sampled_footprint_gib": 25.463377729058266,
+      "min_sampled_headroom_gib": 20.624862670898438,
+      "swap_growth_bytes": 0,
+      "exit_code": 0
+    },
+    "upstream-retry": {
+      "peak_sampled_footprint_gib": 19.56923082470894,
+      "min_sampled_headroom_gib": 27.836410522460938,
+      "swap_growth_bytes": 0,
+      "exit_code": 0
+    },
+    "source-decode": {
+      "peak_sampled_footprint_gib": 18.40798620134592,
+      "min_sampled_headroom_gib": 22.49151611328125,
+      "swap_growth_bytes": 0,
+      "exit_code": 0
+    }
+  },
+  "terminal_numerical_gate": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "T0": {
+      "values": 138240,
+      "max_abs_error": 0.0,
+      "rms_error": 0.0,
+      "mae": 0.0,
+      "mismatches": 0,
+      "byte_identical": true,
+      "source_rms": 1.5105038818034124
+    },
+    "T1": {
+      "values": 138240,
+      "max_abs_error": 1.31640625,
+      "rms_error": 0.039258895533623835,
+      "mae": 0.019579613815855098,
+      "mismatches": 121423,
+      "byte_identical": false,
+      "source_rms": 1.5515798714736058
+    },
+    "passed": false,
+    "first_error_localized": false
+  },
+  "visual_result": {
+    "method": "root inspected 25 ordered native frames and 25 ordered source frames",
+    "source_sheet": "source-generated-dense-sheet.png",
+    "native_sheet": "generated-dense-sheet.png",
+    "native": "Resume makes a late hand-to-self gesture and facial changes; Alex almost stationary",
+    "source": "Same broad limited Resume gesture, Alex almost stationary; no requested two-character acting",
+    "script_fulfilled": false,
+    "first_error_localized": false,
+    "full_upstream_video_parity": false
+  },
+  "paired_provenance": {
+    "artifact": "paired-decode-review.json",
+    "sha256": "cb8efffc6eb42d1f02553da2221991ec5f15215d5ffd20ab362bdd0da1eec050",
+    "checks": "executed assertions: conditioning/payload identities, T0 values, T1 latent artifact, DiT index, global decoder noise/RoPE/prefix/window settings and executable",
+    "common_decoder": "native PixelUMM on both sides; source DiT is pinned BF16 Torch 2.8 MPS adaptation, not stock CUDA/Flash3"
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "correlated read-only contract/cache/admission and decode pairing review, plus root runtime/visual falsifiers; excludes complete animation, speedup and full numerical parity",
+    "artifact": "adversary-review.json",
+    "final_claim_review": "Correlated read-only review cross-checked source/native artifacts and retained incomplete motion and failed parity. ROBUST within this scope; no concrete blocker."
+  },
+  "next_falsifier": "Compare T0 writer/history and first T1 forward on identical inputs and source BF16 boundaries, then locate first divergent layer.",
+  "limitations": [
+    "Native full DiT activations/history remain F32; source BF16 MPS adaptation on Torch 2.8.0 is not stock CUDA/Flash3.",
+    "Both visual controls share native PixelUMM; source adaptation, common decoder and prompt/model behavior are not excluded as contributors.",
+    "No requested two-character acting or speed improvement is established.",
+    "Sampling does not bound between-poll memory peaks; opaque MPS resources are outside named-byte accounting.",
+    "Evidence is local-only. Hashes cannot recover deleted artifacts."
+  ],
+  "decay_trigger": "Source, binary, input, weights, geometry, precision/cache semantics, backend/compiler/runtime/device change or local artifact loss.",
+  "refresh": "Rerun focused admissions and the authenticated guarded paired probe at the same scope; retain failed gates rather than widening tolerances."
+}

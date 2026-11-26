@@ -1,0 +1,250 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 48019,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/qualification-summary-02.json",
+      "sha256": "3b041cbc77f6608e944f7f8a217a2e804348f3624ccb8702fe274f4dd2df5916"
+    },
+    {
+      "bytes": 3235,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/adversary-review-02.json",
+      "sha256": "2c5e691f074539d726a46e22a2a6737dcce8666422f006039b42fd251be19b1c"
+    },
+    {
+      "bytes": 1035,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/logs/collect-qualification-02-command.json",
+      "sha256": "05a4e2ad2906208211cfdd56a588c5db8ef8d76445d804616c10355ede3ff580"
+    },
+    {
+      "bytes": 44385,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/logs/collect-qualification-02.jsonl",
+      "sha256": "fb93197b4c06b38f91dacac42651ea2710cf7805f837a816fccd32931ef639d7"
+    },
+    {
+      "bytes": 124,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/logs/collect-qualification-02.out",
+      "sha256": "1c661fd1c033aa23584ef4041fbbd3d6a8a91a2a9e23eb47801db8af05448bf0"
+    },
+    {
+      "bytes": 2624,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/checker-source-pins-03.json",
+      "sha256": "ead93d031bfeddc018043e4263e752a197b4b30ba403aadfe905acf992cf7244"
+    },
+    {
+      "bytes": 4305,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/videos/export-validation.json",
+      "sha256": "2f761d4a57bdd40bc909b64d7f452b5cc4def23387b46c6571356387ca4caa30"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "spec/support/hy_nomas_prompt_edit_qbit_reference.py",
+      "spec/hy_nomas_prompt_edit_qbit_reference_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-prompt-edit-qbit.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "spec/support/hy_nomas_prompt_edit_qbit_reference.py",
+      "spec/hy_nomas_prompt_edit_qbit_reference_test.py",
+      "docs/hy-nomas-generation-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-prompt-edit-qbit.json"
+    ],
+    "out_of_scope": [
+      "UI",
+      "Multiple or combined edits",
+      "Changing defaults or live F32 history",
+      "Full upstream DiT/decoder/video parity",
+      "Perceptual-equivalence or speedup claim",
+      "Same-QBit unedited control and isolated prompt causality"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "State bundles, weights, binaries, logs and media stay outside Git; hashes do not recover lost files.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "checkpoints": {
+    "parent_qbit_a:1": {
+      "cache_record_count": 108,
+      "codec_identity_sha256": "ea955dce372f5b32e87e0ab36387be1732fe056ffd83735632aa5ce39289cbdc",
+      "exact_f32_cache_bytes": 4314857472,
+      "file_bytes": 2005497939,
+      "logical_inventory_bytes": 4318175232,
+      "logical_packed_kv_bytes": 2001104400,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/parent-qbit-a/boundary.hnqc",
+      "physical_record_payload_bytes": 2004449351,
+      "tier_counts": {
+        "f32": 2314622,
+        "p4": 1369956,
+        "p5": 283061,
+        "p8": 4459817
+      }
+    },
+    "qbit_restart_chain:2": {
+      "cache_record_count": 108,
+      "codec_identity_sha256": "ea955dce372f5b32e87e0ab36387be1732fe056ffd83735632aa5ce39289cbdc",
+      "exact_f32_cache_bytes": 8654487552,
+      "file_bytes": 4007409948,
+      "logical_inventory_bytes": 8657805312,
+      "logical_packed_kv_bytes": 4003016096,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/qbit-restart-1-2/boundary.hnqc",
+      "physical_record_payload_bytes": 4006361360,
+      "tier_counts": {
+        "f32": 4665378,
+        "p4": 3072559,
+        "p5": 539998,
+        "p8": 8625361
+      }
+    }
+  },
+  "claim": {
+    "decay_trigger": "Source/binary/prompt/input/noise/weights/codec/geometry/runtime/backend/device changes or modification/loss of referenced local artifacts.",
+    "level": "VERIFIED",
+    "scope": "Tested three-segment native compact restart, scoped upstream boundaries, authenticated same-edit exact/QBit media integrity.",
+    "text": "A single edited B prompt through QBit A/B checkpoints preserves A and reproduces regenerated C bitwise after restart."
+  },
+  "created_at": "2026-11-01T18:38:31.428843+00:00",
+  "definition_of_done": {
+    "commands": [
+      "crystal spec spec/hy_nomas_segment_prompt_edit_spec.cr spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_prompt_history_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_sequence_admission_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr -Dcpu_only",
+      "python3 -B -m unittest spec.hy_nomas_prompt_edit_qbit_reference_test spec.hy_nomas_compact_resume_reference_test spec.hy_nomas_prompt_edit_resume_reference_test spec.hy_nomas_segment_edit_video_compare_test spec.hy_nomas_segment_edit_resume_reference_test spec.hy_nomas_segment_edit_reference_test spec.hy_nomas_cache_qbit_video_compare_test -v",
+      "Four serial native intervals, codec/history probes, native preflight rejects, decoder and substantive collector; exact guarded commands are linked by qualification-summary-02.json.",
+      "git diff --check"
+    ],
+    "expected": "A exact; eight B/C steps, two slices and full timeline bitwise across QBit control/restart; authenticated actual compact files; unchanged tolerance, zero added encode waits/readbacks/allocations, 10% reserve; 44 Crystal examples and 95 Python tests pass.",
+    "observed": "Passed at the linked source/binary pins; all four real pre-model negatives reject; same-edit exact/QBit media freshly revalidated."
+  },
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/matrix-validation.json",
+      "result": "passed",
+      "signal": "552960 A latent bytes and unused post-stop noise exact; eight Euler captures, two segment slices and all 829440 timeline values bitwise; edited B585/C557 state inventory authenticated."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/matrix-validation.json",
+      "result": "diagnostic_only",
+      "signal": "QBit-vs-exact edited bank is lossy: max absolute latent difference 3.53125 and unchanged 2e-5 tolerance fails. This is not the restart parity or quality gate."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/state-rejections.json",
+      "result": "passed",
+      "signal": "Four wrong prompt/branch/boundary/old compact states reject before Metal setup; old-state case also differs in binary identity."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/qualification-summary-02.json",
+      "result": "passed",
+      "signal": "Fresh GPU codec reconstruction bitwise; fresh GPU changing-text history matches pinned upstream at 2e-5. Prior Qwen/refiner boundary evidence reused after hash authentication."
+    },
+    {
+      "kind": "guarded_native_run",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/qualification-summary-02.json",
+      "result": "passed",
+      "signal": "Four DiT processes sampled peak 30.1257 GiB, minimum cache-aware headroom 15.7548 GiB, zero swap growth; cap 32 GiB, 10% reserve, 64 MiB swap stop, 900 s deadline. Encoder counters 0/0/0; one terminal wait each."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/decode/pair-validation.json",
+      "result": "passed",
+      "signal": "Matched same-edited-prompt exact F32 vs QBit native decodes: authenticated banks/noise/weights/settings, finite pixels, exact first 100 frames, current 360-frame/24 fps/15 s exports."
+    },
+    {
+      "kind": "executed_test",
+      "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/logs/python-regression.out",
+      "result": "passed",
+      "signal": "95 Python tests including 19 new hostile cases; 44 focused Crystal examples also pass."
+    }
+  ],
+  "full_upstream_video_parity": false,
+  "id": "LM-HY-NOMAS-PROMPT-EDIT-QBIT-2026-11-01",
+  "limitations": [
+    "QBit-vs-exact differences are lossy diagnostics, not a relaxed parity/quality gate.",
+    "Native execution is GPU; setup authentication and terminal file/media I/O use CPU.",
+    "Instrumented counters omit opaque MPS allocations; guards sample rather than bound all spikes.",
+    "Scoped upstream Qwen/refiner/history checks do not establish full DiT/decoder neural parity.",
+    "No same-QBit unedited control; observed edited differences do not isolate prompt causality.",
+    "A latent bytes stay exact; the final20 A pixel frames overlap B in the decoder.",
+    "Ordered functional runs provide no speedup claim; live history remains F32.",
+    "Local-only hashes detect changes and cannot recover lost artifacts.",
+    "No Landmark graph validator is present; JSON, source path inventory and referenced hashes are checked directly, without treating structure as substantive proof."
+  ],
+  "quality_verdict": "Pending user motion review.",
+  "rollback": "Revert this atomic commit to 8159dd5b. Defaults/kernels/codec remain unchanged; executable-bound states require fresh parents after rebuilding.",
+  "source_state": {
+    "base_commit": "8159dd5b9de6d0ee57ae20a955c484309c7060d1",
+    "branch": "codex/hy-nomas-native",
+    "format_refresh_note": {
+      "after_sha256": "6f853c17ec64fd5e6eba76ed21fcbdaed3c4666c6a22c5ef4aee36a32b5c536f",
+      "ast_equal": true,
+      "ast_sha256": "8e9c5685d958226afff87fb925b84aaf254d4baf3f4117483e263e717eadd1af",
+      "before_sha256": "d661d2498b92d05048cfee9a44b04951df189092d04add9536f9a3dce989be63",
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_prompt_edit_qbit_reference.py",
+      "schema": "cogni_ml.hy_nomas_checker_format_refresh/v1",
+      "scope": "Trailing blank lines only, after the 95-test run; no native source/binary/model change.",
+      "snapshot": "/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/probe/checker-before-eof-format.py"
+    },
+    "native_binary_sha256": "f1b3a0bdd6e7cad933d2a390558eaa0850b7e183de85a0bce4540b22dab597ff",
+    "qualification_source_sha256": {
+      "LANDMARKS.md": "ce041dcd3c6386d8e7bd2faa11b04765332114dfc8ac18f2bb199c2c764be0a3",
+      "docs/hy-nomas-generation-frontier.md": "b362b0d9c29086a646de58c13a1696c2486bbb58b894e9d85cd3209f58d3e25f",
+      "examples/hy_nomas_compact_sequence_probe.cr": "d34d40efc553a52fa2adde817a71e9fdb55557a0bd2092043a8cbf9361f4cb10",
+      "spec/hy_nomas_prompt_edit_qbit_reference_test.py": "bb9e6966028111d26cb61856c4a3e53d575c45f7667d972096ca765ba51658fe",
+      "spec/support/hy_nomas_prompt_edit_qbit_reference.py": "6f853c17ec64fd5e6eba76ed21fcbdaed3c4666c6a22c5ef4aee36a32b5c536f"
+    },
+    "source_note": "HEAD is informational; actual native, checker and runner source bytes and binary are pinned by the phase-specific manifests.",
+    "source_sha256": {
+      "Makefile": "9681e64ae7be954d456f5cba52ddcd05b320491819ed21ce0600895267dd0402",
+      "examples/hy_nomas_compact_sequence_probe.cr": "d34d40efc553a52fa2adde817a71e9fdb55557a0bd2092043a8cbf9361f4cb10",
+      "examples/hy_nomas_prompt_history_probe.cr": "0f04c5a48bcafed0e09ef0b1e3b289c435d5c172aa1717799bda3f3b751fca7a",
+      "examples/support/hy_nomas_cache_qbit.cr": "ea8b3b335720aaa88dd0235af7db6c93568aecbf0d0d53570f8a193b145413a1",
+      "examples/support/hy_nomas_cache_qbit.metal": "f0eabb601f609b57891c783cd3a19c579bcd4691b2775ca21124f78797dee280",
+      "examples/support/hy_nomas_cache_qbit_checkpoint.cr": "05db5354097a52da274eaaa9312af13ca1ca64f9687ed2f2981222bf4f5dca35",
+      "examples/support/hy_nomas_prompt_history_probe.cr": "0d3e5b1ecd4ffdf5815b31b48726086b1bd3fbd389245d09f16da6628cbc31e1",
+      "examples/support/hy_nomas_sequence.cr": "702d1348461a6ba6d3fcdda3b97975aec7c35ad68e82e3e6ed30c8eb1dbebc7b",
+      "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+      "spec/support/hy_nomas_prompt_history_reference.py": "b6238c7db695e2eb5bbcb6f51d44397a2f28e90333e6a7ff3e8e941203331114",
+      "src/ml/gguf/qwen_qbit_gaussian_codec.cr": "6397a42e05a44bf6c1a5b588aa02e197de617252ecb6bab0044f8146efd7eab5",
+      "src/ml/video/hy_nomas_continuation_history.cr": "8d535710fb94cfed4a1fbbd0b5b0452faab1b2788b2ce7554b3246f9fea30f84",
+      "src/ml/video/hy_nomas_segment_edit.cr": "34836a1f7f41a26402c4e5b5fea9460a9b49c44180398168f48ae8dc491027e0"
+    },
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+  },
+  "verdict": {
+    "created_at": "2026-11-01T18:38:31.347213+00:00",
+    "limitations": [
+      "QBit versus exact F32 output is lossy and fails the unchanged strict tolerance; it remains diagnostic and does not invalidate the separate exact QBit restart comparison.",
+      "No same-QBit unedited control isolates prompt causality; no perceptual-quality or full upstream neural/video parity verdict.",
+      "Instrumented counters omit opaque MPS allocations; sampled memory guards cannot bound every between-sample spike.",
+      "Hashes establish local consistency, not signed provenance or recovery of lost files."
+    ],
+    "observations": [
+      "The blanket compact-input/roundtrip CLI rejection was narrowed to restored final intervals; initial and nonterminal combinations still reject.",
+      "Review found an overbroad future-suffix assertion. The corrected checker accepts generated B/C and protects A and each post-stop unused suffix; the hostile test exercises both acceptance and rejection.",
+      "All eight B/C Euler captures, two segment slices and the entire timeline match bitwise between the QBit control and split restart; the state lineage binds C to the actual edited B file and contract.",
+      "Both actual HNRS envelopes, codec manifests, row headers, payload inventories and prompt geometry are authenticated; logical exact inventory and physical compact file bytes remain distinct.",
+      "All 15 final checker/runner/collector source pins match. Root freshly rehashed all 54 qualification-summary artifact entries with no mismatch.",
+      "The same-edit media pair binds the exact edited decode and new QBit decode to their consumed banks and matching native decoder weights, noise and settings. Current exports have 360 frames, 24 fps and 15-second duration.",
+      "All A latent bytes are exact. First 100 output frames are exact; final 20 A output frames overlap B and differ in 2470988 of 8847360 values, max absolute difference 0.14453125.",
+      "The collector recomputes matrix, consumed-bank and raw pixel predicates; it does not promote the external exporter boolean to substantive truth.",
+      "Final formatting removes exactly two terminal newline bytes from the checker; the preserved snapshot, before/after hashes and identical AST proof were freshly verified by the read-only review and root.",
+      "Final source pins03 authenticate the formatted checker and refreshed collector; final collector02 freshly recomputes matrix and raw/media predicates. The agent and root each rehashed all 54 current artifact entries successfully."
+    ],
+    "phase_note": "Final source differs from the tested checker only by EOF whitespace; native binary and all model/math source remain unchanged. The 95-test receipt predates this AST-identical cleanup.",
+    "review_type": "Same-lineage correlated read-only agent review with root artifact rehash; not independent neural or visual-quality evidence.",
+    "schema": "cogni_ml.hy_nomas_prompt_edit_qbit_adversary/v1",
+    "scope": "Tested QBit edited-prompt state authentication, exact latent-A preservation, continuous/split restart parity and declared decoded-overlap/media integrity.",
+    "summary_sha256": "3b041cbc77f6608e944f7f8a217a2e804348f3624ccb8702fe274f4dd2df5916",
+    "verdict": "ROBUST"
+  }
+}

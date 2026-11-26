@@ -1,0 +1,184 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "canonical_status": "canonical_summary",
+  "created_at": "2026-11-02T13:10:30.008011+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "An opt-in native block-0 attention consumer reads physical BF16 first-T0 K/V and exactly matches the captured upstream Torch branch on identical active-prefix Q/K/V.",
+    "scope": "one native block-0 active-prefix attention operation using the same Q and physical first-T0 BF16 stored K/V; 4849 active rows; no padded Torch, Flash3, cache append, full upstream T0 handoff, rest block, other layers, T1, or generation parity",
+    "decay_trigger": "Source, binary, input, weights, geometry, precision, cache policy, backend, compiler/runtime/device change or local artifact modification/loss."
+  },
+  "capability_status": {
+    "image_conditioned_continuation": "IN_PROGRESS",
+    "block0_active_prefix_attention": "VERIFIED on trusted fixture and captured source run",
+    "padded_torch_or_flash3": "NOT_QUALIFIED",
+    "residual_ffn_or_complete_block": "NOT_QUALIFIED",
+    "all_layer_history_or_multisegment_append": "NOT_QUALIFIED",
+    "experimental_opt_in_still_required": true,
+    "generated_t1_or_full_video": false
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_attention_probe.cr",
+      "spec/hy_nomas_reference_workspace_spec.cr",
+      "spec/hy_nomas_reference_attention_probe_spec.cr",
+      "spec/hy_nomas_reference_attention_test.py",
+      "spec/support/hy_nomas_reference_attention.py",
+      "src/ml/video/hy_nomas_reference_block_mps.cr",
+      "src/ml/video/hy_nomas_reference_kv_cache.cr",
+      "src/ml/video/hy_nomas_reference_attention.cr",
+      "src/ml/video/hy_nomas_reference_attention_bridge.mm",
+      ".landmark/evidence/2026-11-02-hy-nomas-reference-attention.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_attention_probe.cr",
+      "spec/hy_nomas_reference_workspace_spec.cr",
+      "spec/hy_nomas_reference_attention_probe_spec.cr",
+      "spec/hy_nomas_reference_attention_test.py",
+      "spec/support/hy_nomas_reference_attention.py",
+      "src/ml/video/hy_nomas_reference_block_mps.cr",
+      "src/ml/video/hy_nomas_reference_kv_cache.cr",
+      "src/ml/video/hy_nomas_reference_attention.cr",
+      "src/ml/video/hy_nomas_reference_attention_bridge.mm",
+      ".landmark/evidence/2026-11-02-hy-nomas-reference-attention.json"
+    ],
+    "default_policy": "Existing generation/defaults remain unchanged; preserve unrelated Python caches and user work. No generated artifacts/binaries in Git.",
+    "out_of_scope": [
+      "Full padded5600 Torch or Flash3 attention semantics",
+      "Residual/FFN, other layers, history append and full upstream T0 preprocessing/RNG",
+      "T1/full video generation, RoleWright identity/style quality or speed claims"
+    ],
+    "raw_artifacts": [
+      {
+        "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm",
+        "availability": "local_only",
+        "note": "External fixtures, binaries, logs and receipts; hashes cannot recover missing local bytes."
+      }
+    ]
+  },
+  "definition_of_done": {
+    "commands": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/qualification-commands.json",
+    "expected": "73 CPU Crystal, 49 Python and nine Metal examples pass; byte-exact Q/K/V and output at unchanged 2e-5; 44 old-mode and four history tensors exact; repaired value mutations rejected; tracked native counters 0/0/0/1; 10% file-cache-aware floor with process/swap guards.",
+    "observed": "All positive checks pass; 9,930,752 output values exact, maximum/RMS error zero, no mismatches. Both mutation controls rejected. Nineteen guarded commands meet expected exits and sampled limits; the earlier fused comparison is an expected failed control."
+  },
+  "evidence": [
+    {
+      "kind": "captured_pinned_upstream_branch",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/oracle/source-attention.json",
+      "result": "passed",
+      "signal": "Actual pinned Hy-Nomas Torch branch body invoked on MPS with trusted active-prefix BF16 Q/K/V; CPU fallback disabled. Append, full T0 and padded-path parity remain outside scope."
+    },
+    {
+      "kind": "exact_native_attention",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/oracle/native-attention-final-comparison.json",
+      "result": "passed",
+      "signal": "All three input tensors byte-identical; all 9,930,752 output values byte-identical at fixed atol=rtol=2e-5."
+    },
+    {
+      "kind": "rejected_fused_sdpa",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/oracle/native-attention-comparison.json",
+      "result": "refuted_for_fixture",
+      "signal": "Exact Q/K/V but 997,904 output mismatches, maximum 0.5. Explicit BF16 QK, F32 scaling, BF16 logits, softmax and PV graph passes. Original binary, bridge and source state preserved under rejected-direct-bf16-sdpa."
+    },
+    {
+      "kind": "physical_cache_and_lifecycle_discriminator",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/logs/metal-spec-final.stdout",
+      "result": "passed",
+      "signal": "Distinct physical V per token/head/channel with zero Q/K; prospective sources poisoned, tail canary preserved; alias/extent and latest-chain release guards pass."
+    },
+    {
+      "kind": "numeric_and_input_negative_controls",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/oracle/negative-output-comparison.json",
+      "result": "expected_rejection",
+      "signal": "Hash-repaired output change produces one mismatch (exit 1); hash-repaired Q change rejected before comparison (exit 2, logs/negative-input.stderr)."
+    },
+    {
+      "kind": "regressions_and_guard_counters",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/qualification-summary.json",
+      "result": "passed",
+      "signal": "22 BF16 and 22 F32 old-mode captures and four history tensors exact; 73 Crystal, 49 Python and nine Metal tests pass. Native zero tracked allocations/readbacks/preterminal waits and one terminal drain. Named 2,441,745,920 bytes exclude opaque MPS resources. Source/native cap 6 GiB, floor 10%, swap-growth stop 64 MiB; sampled swap growth zero."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/qualification-summary.json",
+      "bytes": 45990,
+      "sha256": "53ca97e3f95b76b78af9803306232f057db828816b7b711e16734111cdbdefc6"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/qualification-commands.json",
+      "bytes": 67289,
+      "sha256": "4b6f7504dfb6930fa965f6224d7d8f2a488352f7af3c21839d563870fa10608c"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/collect_attention_evidence.py",
+      "bytes": 9633,
+      "sha256": "9c82afa0b4e76cbbc04999617f72f7596a306f2fef7112c60639b643e0a4af89"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/source-state-final.json",
+      "bytes": 3849,
+      "sha256": "858e2b9eefbbb60c04dc695aca380a40a35cc0fa78a355bef379348827a95b9e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/adversary-review.json",
+      "bytes": 1464,
+      "sha256": "3d12dde273027980e66ce1aac3ffa76e3c51a32143b6215d21018876718a9300"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/final-format-checks.json",
+      "bytes": 624,
+      "sha256": "989c47c81577f1f41deb8b7bdaca7a6bf40ef24d1d027c7fc2191f52f4bcd3b3"
+    }
+  ],
+  "source_state": {
+    "parent_revision": "2e95375dec6417739f3c5c02ca730517de23ca79",
+    "actual_checkout_branch": "codex/hy-nomas-native",
+    "final_code_files_sha256": "7740a18c861efc617f58e0c550f3f0765aff779c3ec0d3fa2440cb1c5ba4184e",
+    "final_binary_sha256": "b6334790d2e291ece8ac5eae88f00dc0440758c46a90b682a0af7bdeca968b42",
+    "upstream_reference_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "upstream_implementation_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "pins_ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/source-state-final.json",
+    "runtime_identity": {
+      "macos": "26.6.2",
+      "mps_available": true,
+      "mps_built": true,
+      "torch_git_revision": "2236df1770800ffea5697b11b0bb0d910b2e59e1",
+      "torch_path": "/opt/homebrew/Caskroom/miniconda/base/lib/python3.12/site-packages/torch/__init__.py",
+      "torch_version": "2.6.0"
+    },
+    "note": "Receipt native_revision is base HEAD; final dirty files and binary bound externally. Source attention receipt does not embed the Torch build; runtime identity is a separate same-run observation. Prior source Q/K/V is a trusted fixture, not independently attested."
+  },
+  "verification": {
+    "adversary_verdict": "ROBUST within the isolated block-0 active-prefix attention fixture",
+    "review_provenance": "Correlated same-lineage read-only review plus root guarded execution, physical buffer/lifecycle tests, numerical mutations and substantive collector assertions; not independent model evidence."
+  },
+  "validation": {
+    "collector": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm/collect_attention_evidence.py",
+    "observed_artifacts": 139,
+    "observed_guarded_commands": 19,
+    "repository_graph_validator": "No scripts/validate-landmark-graph.sh exists in this checkout. The executed external collector verifies actual digests, numerical predicates, expected exits, counters and sampled guards. Packet shape alone is not proof."
+  },
+  "next_falsifier": "Compare output projection/residual and FFN on identical attention context and modulation inputs, then complete block and per-layer history before T0/T1 continuation.",
+  "residual_risk": [
+    "Source receipt itself has no installed Torch/MPS package identity; bind to captured source run and external same-run identity only.",
+    "Prior Q/K/V source fixture is explicitly trusted, not independently attested.",
+    "No padded5600, Flash3, residual/FFN, append, other layers, full T0/T1, generation, speed or identity/style claim.",
+    "Sampling does not bound between-poll peaks; opaque MPS resources are outside named counters."
+  ],
+  "links": {
+    "frontier": "docs/hy-nomas-drafter-frontier.md",
+    "landmark": "LM-HY-NOMAS-REFERENCE-ATTENTION-2026-11-02",
+    "prior_packet": ".landmark/evidence/2026-11-01-hy-nomas-reference-history.json"
+  }
+}

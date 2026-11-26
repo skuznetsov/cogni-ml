@@ -1,0 +1,146 @@
+{
+  "adversary_verdict": "ROBUST",
+  "base_commit": "99d89f2964baa8ed98b1051650ea934846f74c4e",
+  "claim_level": "VERIFIED",
+  "exclusions": [
+    "Qwen encoder weights/workspaces",
+    "PixelUMM weights/workspaces",
+    "camera/history/KV state and camera execution workspace",
+    "refiner, input and final layer execution workspace",
+    "scheduler/latents and non-block conditioning buffers",
+    "host/runtime objects and allocations beyond the stated MPS heuristic",
+    "N-block execution is unimplemented; optional checkpoint snapshots are excluded from named-byte totals.",
+    "Budget comparisons do not authorize a run or bound physical/opaque peaks.",
+    "No fresh neural upstream numerical gate or video speed/quality measurement."
+  ],
+  "failure_policy": "Reject/narrow scope; preserve finite tolerances and runtime guards.",
+  "next_frontier": "One already-local actual block: GPU-produced BF16 source cache, exact BF16 bytes and unchanged upstream intermediate gate, before wider loading and full-J positional/output coverage.",
+  "observed": {
+    "all_parameter_j6560_scenario": {
+      "bf16_parameter_bytes": 17106869184,
+      "blocks": 54,
+      "cold_estimate_within_budget": false,
+      "cold_named_bytes": 56354907456,
+      "diagnostic_snapshots_included": false,
+      "estimated_cold_bytes": 56945780032,
+      "estimated_warm_bytes": 22732041664,
+      "f32_conversion_staging_bytes": 34213738368,
+      "full_pipeline_accounted": false,
+      "input_bytes": 59162624,
+      "name": "j6560_all_dit_parameters",
+      "optional_all_checkpoint_snapshot_bytes": 80127000576,
+      "proposed_two_bank_saving_bytes": 2794455040,
+      "retained_distinct_output_pairs": 54,
+      "runtime_launch_authorized": false,
+      "score_and_opaque_reserve_heuristic_bytes": 590872576,
+      "scratch_and_workspace_bytes": 4975137280,
+      "serial_block_count_implemented": false,
+      "warm_estimate_within_budget": false,
+      "warm_named_bytes": 22141169088
+    },
+    "bf16_parameter_bytes": 17106869184,
+    "highest_sampled_build_check_footprint_bytes": 1360955456,
+    "independent_header_closed_form_audit": "pass",
+    "metadata_specs": "8 passed,0 failures/errors/pending; also pass via filtered spec_hy_nomas integration.",
+    "minimum_sampled_cache_aware_headroom_bytes": 37499174912,
+    "native_gpu_buffer_allocations": 0,
+    "one_byte_budget_rejected": true,
+    "source_f32_bytes": 34213738368,
+    "swap_growth_bytes": 0,
+    "tampered_header_rejected": true
+  },
+  "receipt": {
+    "nbytes": 27429,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-receipt-v1.json",
+    "sha256": "d6d2be2e81ca4648b99263b15b6cc41f72dd3d541f3eb09976fa78de196ee42d"
+  },
+  "refresh_when": [
+    "pinned header/checkpoint or scoped source changes",
+    "scratch/capture/attention geometry changes",
+    "loader lifetime/accounting changes",
+    "artifact loss/hash mismatch",
+    "live memory snapshot must be refreshed before another probe"
+  ],
+  "review": {
+    "nbytes": 1059,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-review-final-v1.json",
+    "sha256": "186075c5f3b9542a200914af71b75621e4cf79cea22f9b7a74bbb6f214a6e820"
+  },
+  "rollback": "Omit this diagnostic; inference/default execution is unchanged.",
+  "schema": "landmark.evidence_packet.local.v1",
+  "scope": "Authenticated header inventory and serial-block named-byte estimates; metadata-only, no model execution or inference default change.",
+  "source_pins": [
+    {
+      "nbytes": 17939,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "96f65e1fcfa37ffbd4620fa6b6b2d826f60cd3129df11f587571c2e4ab14f0c7"
+    },
+    {
+      "nbytes": 4552502,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+      "sha256": "74fbe961ceea2ff17ae1b17942f4b6cb48b9560e01424864da5bcb86df8da6d2"
+    },
+    {
+      "nbytes": 105433,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-native-frontier.md",
+      "sha256": "8beae31c4c23bf5be5ac52e42e373ecb9e98bb3edb8bfaecfef9069481ebcd96"
+    },
+    {
+      "nbytes": 3138,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_residency_plan.cr",
+      "sha256": "1ee0c6d34808f7aff11bc18bf8dc225823471c0a69946b36c6a8caa81322f2f8"
+    },
+    {
+      "nbytes": 10431,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_residency_plan.cr",
+      "sha256": "fd6e8b2ce99d4e7641a757a8375c799bc2bc4a2cb13ff00b392963e7a98a7833"
+    },
+    {
+      "nbytes": 5329,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_residency_plan_spec.cr",
+      "sha256": "4b65a3027d3e2e63b886b6a6f989fe153f8f2e0f8755a1396b8e8efa683cfc03"
+    },
+    {
+      "nbytes": 57121,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_pretrained_serial_probe.cr",
+      "sha256": "b165278a6604e3aea24fd6871a4da2dfb7efcfb2b430036d00384a982cf01224"
+    },
+    {
+      "nbytes": 37589,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    },
+    {
+      "nbytes": 50888,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block.cr",
+      "sha256": "ec86ac586d9ed087cb4b6307165167ab8a24b40883187659c167f6e849e7e257"
+    },
+    {
+      "nbytes": 34231,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block_mps.cr",
+      "sha256": "64339a047ccc58fff2fd0dcf7ad97274b5bc243d6a97992cd06ea138d8b9f858"
+    },
+    {
+      "nbytes": 5354,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_serial_mps.cr",
+      "sha256": "f4324da4ae1a6af4ceae94e7be58e995cf490218b0b6c2e580bb8fb7ac0d7026"
+    },
+    {
+      "nbytes": 10185,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_attention_compact.cr",
+      "sha256": "5f68bfaf2d68ad6db6d3453f5e3c033b33012a6a5f875a33f1fb761cc613f93b"
+    },
+    {
+      "nbytes": 15713,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/checkpoint.cr",
+      "sha256": "72550c94330edd41caa57f18f63d90bb6d048307501803d2e1a168ef6d2a5217"
+    },
+    {
+      "nbytes": 506,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/video_allocation_counter.cr",
+      "sha256": "ccc8c9d7960592e65397e7aac8cbfa17acc761ab46d0efd27e7f876b4d3de0f6"
+    }
+  ],
+  "title": "Hy-Nomas full DiT header inventory and serial residency accounting",
+  "verification_scope": "Root-run metadata checks and correlated MiniQuad source/document review. Structure and artifact hashes are an evidence index, not numerical proof."
+}

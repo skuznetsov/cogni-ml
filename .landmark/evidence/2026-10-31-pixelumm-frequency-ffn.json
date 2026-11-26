@@ -1,0 +1,277 @@
+{
+  "adversary": {
+    "correlation": "Same-lineage reviews are correlated; source, native GPU results, and CPU falsifiers are the factual anchors.",
+    "residual": "Historical completion omitted observer-bundle digests. CLI now forces no trial admission for such receipts; descriptive frequencies are internally cross-checked but do not exclude coherent bundle replacement.",
+    "verdict": "ROBUST for scoped exact parity and rejection of this candidate; no affirmative receipt-bound frequency or speedup claim"
+  },
+  "artifacts": {
+    "parity": {
+      "bytes": 9742,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/pixelumm-ffn-graph-v4-20261031/results/graph-correctness.json",
+      "sha256": "f4f408f5d362630922e155d89c14a0c89d0a2094493b4db70cc7eeddcc8e935d"
+    },
+    "profile": {
+      "power/powermetrics.txt": {
+        "bytes": 148219,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/power/powermetrics.txt",
+        "sha256": "09b78302a1d89301e2aec2d48c034b529d3de031d68c06c898cfbcee67cfa7d0"
+      },
+      "power/samples.jsonl": {
+        "bytes": 306713,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/power/samples.jsonl",
+        "sha256": "2bb94f66627d7438653efa789fc823847c7a86f93c278171bc2fb5568c25157d"
+      },
+      "power/summary.json": {
+        "bytes": 4126,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/power/summary.json",
+        "sha256": "c26b15e7023526d2e5ace6c8dc650f065115e8ca962fcd2d8dd3decf0ce2ff1e"
+      },
+      "results/completion.json": {
+        "bytes": 141,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/results/completion.json",
+        "sha256": "6d7952980cf035df3e844df01b33d574c1904372842a8aef81cfc1360537759f"
+      },
+      "results/frequency-profile-analysis-v2.json": {
+        "bytes": 23909,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/results/frequency-profile-analysis-v2.json",
+        "sha256": "56e5422cf955df4651da4f6ee790a963934dd639910e49c7f4a6df859e23d7b0"
+      },
+      "results/launch.json": {
+        "bytes": 56581,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/results/launch.json",
+        "sha256": "9e3b8233ce1f8b34d556f598d440d70b69a90789c447997e495771253cf66ac4"
+      },
+      "results/normal-guard.jsonl": {
+        "bytes": 343905,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/results/normal-guard.jsonl",
+        "sha256": "9cbdabd2a4d4523a2729f6768c817b077d3d7fb558fe1e7ab855080bee12bbb2"
+      },
+      "results/normal.json": {
+        "bytes": 23319832,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-frequency-profile-v2-20261031/results/normal.json",
+        "sha256": "d27213643b11b6121a01a6cd79bb6230961a821201d2964e3fedf2e239bd5783"
+      }
+    },
+    "timing": {
+      "power/powermetrics.txt": {
+        "bytes": 59390,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/power/powermetrics.txt",
+        "sha256": "c806f123232905ca85ec0f0a268cc234fe3878af332555d92f8fb241012efdef"
+      },
+      "power/samples.jsonl": {
+        "bytes": 122475,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/power/samples.jsonl",
+        "sha256": "d93f5185284c171d0e40c7cf61869344dfb98d780677f8c98d762fc9414432f2"
+      },
+      "power/summary.json": {
+        "bytes": 4152,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/power/summary.json",
+        "sha256": "c298cd6da7f5a4c92c66c32fd67957941809e5deca724a99dc49879220b2ef71"
+      },
+      "results/analysis-v2.json": {
+        "bytes": 10611,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/analysis-v2.json",
+        "sha256": "cb26714410798776ef337dfcd166db6bcdac9e8dc417934e9eb723110ab809ee"
+      },
+      "results/completion.json": {
+        "bytes": 446,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/completion.json",
+        "sha256": "2b91b9e6d3539c8f8e08c71700415f810b796fbf5e73ca0686f3db4a9e197a42"
+      },
+      "results/ffn-stage-timing.json": {
+        "bytes": 1320622,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/ffn-stage-timing.json",
+        "sha256": "8a7d057a2122c0f287e5c833d83c69ac36379d1a6b0f987c9f76b3016b96e0bd"
+      },
+      "results/launch.json": {
+        "bytes": 55762,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/launch.json",
+        "sha256": "c0c2c11bff837b56d5418741abdbc95321a8d8586c76ff847516e03abfe49927"
+      },
+      "results/timing-guard.jsonl": {
+        "bytes": 138848,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/timing-guard.jsonl",
+        "sha256": "79df964fe9b44fded6a1dbaee87c1eb45007c1c0512ca2a4a23906bf33e4227b"
+      }
+    }
+  },
+  "checks": {
+    "commands": [
+      "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-20261031/build pixelumm_ffn_stage_timing_probe",
+      "crystal spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/pixelumm_decoder_profile_spec.cr spec/pixelumm_ffn_graph_contract_spec.cr spec/pixelumm_ffn_stage_timing_contract_spec.cr",
+      "python3 -B -m unittest spec.pixelumm_order_analysis_test spec.pixelumm_b2_phases_analysis_test spec.pixelumm_aa_analysis_test spec.pixelumm_frequency_profile_test spec.pixelumm_ffn_stage_timing_analysis_test",
+      "python3 -B examples/support/analyze_pixelumm_ffn_stage_timing.py --report /opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/ffn-stage-timing.json --launch /opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/launch.json --completion /opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/results/completion.json --observer-summary /opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/power/summary.json --samples /opt/mldata_ssd/cogni-ml/pixelumm-ffn-stage-timing-v2-20261031/power/samples.jsonl --output <fresh-output.json>"
+    ],
+    "crystal_examples": 41,
+    "native_timing_pass": true,
+    "python_tests": 46,
+    "release_build_pass": true,
+    "timing_cli_rejects_admission": true
+  },
+  "claim": "The diagnostic profile identifies dense FFN as the leading unambiguous root-interval bucket. A mandatory-four-output front plus separate down is bitwise exact on the isolated saved J5760 fixture, but fails its declared speed/admission gate.",
+  "claim_level": "VERIFIED for tested numerical and no-admission properties; acceleration remains unachieved",
+  "continuation": {
+    "active_goal": "Reduce PixelUMM latency at unchanged upstream tolerance and GPU-only execution.",
+    "confirmed_frontier": "Exact mandatory-output FFN fusion is not admitted for full-block timing. Production path remains unchanged.",
+    "next_attention_hypothesis": "Share GQA K/V panels across four query heads; rank-4 broadcast parity and actual speed remain untested, and byte savings alone do not establish a material full-request gain.",
+    "next_signal": "Identify measured avoidable GEMM/materialization/kernel work before another exact candidate. Do not repeat previously rejected shared/packed gate-up or coalescing unchanged.",
+    "standing_authority": "Bounded local profiling and parity checks, no full generation, 10% cache-aware reserve, no new explicit synchronization, unchanged 2e-5 tolerance."
+  },
+  "date": "2026-10-31",
+  "decay_triggers": [
+    "Changed source, weights, fixture, geometry, dtype, runtime or backend requires refreshed numerical qualification.",
+    "Changed device, queue policy, recovery or host conditions requires a fresh paired timing run.",
+    "Missing or changed external artifacts invalidate replay consumption; hashes are local receipts, not signatures."
+  ],
+  "execution": {
+    "all_active_comparisons_bitwise_equal": true,
+    "baseline_roots_per_128": 897,
+    "candidate_roots_per_128": 1153,
+    "graph_encode_calls": 3203,
+    "graph_nested_continuations": 10246,
+    "minimum_cache_aware_headroom_gib": 43.85003662109375,
+    "named_bytes": 2047869840,
+    "packed_post_wait_readbacks": 1,
+    "preterminal_readbacks": 0,
+    "sample_boundary_continuations": 20,
+    "sampled_peak_footprint_gib": 2.637499049305916,
+    "swap_growth_bytes": 0,
+    "terminal_waits": 1,
+    "total_continuations": 10266,
+    "tracked_encode_allocations": 0
+  },
+  "guards": {
+    "isolated_deadline_seconds": 600,
+    "isolated_process_cap_gib": 8,
+    "physical_reserve_percent": 10,
+    "profile_process_cap_gib": 28.5,
+    "sampled_only": true,
+    "swap_growth_cap_mib": 64
+  },
+  "isolated": {
+    "all_pairs_frequency_qualified": false,
+    "frequency_labels_are_descriptive_only": true,
+    "full_block_trial_admission": {
+      "every_pair_must_improve": true,
+      "minimum_median_gain": 0.03,
+      "observer_bundle_must_be_receipt_bound": true,
+      "passed": false
+    },
+    "median_observed_gpu_root_union_gain": 0.013311455345466683,
+    "observer_bundle_bound_to_completion": false,
+    "pairs": [
+      {
+        "baseline_sample": 2,
+        "candidate_sample": 3,
+        "frequency_qualified": true,
+        "observed_gpu_root_union_gain": 0.004368050906267018,
+        "order": "AB",
+        "qualified_gpu_root_union_gain": 0.004368050906267018,
+        "relative_mean_frequency_difference": 0.0027143862471096813
+      },
+      {
+        "baseline_sample": 5,
+        "candidate_sample": 4,
+        "frequency_qualified": true,
+        "observed_gpu_root_union_gain": 0.022254859784666348,
+        "order": "BA",
+        "qualified_gpu_root_union_gain": 0.022254859784666348,
+        "relative_mean_frequency_difference": 0.01337280522662311
+      },
+      {
+        "baseline_sample": 7,
+        "candidate_sample": 6,
+        "frequency_qualified": false,
+        "observed_gpu_root_union_gain": 0.030075510457854726,
+        "order": "BA",
+        "qualified_gpu_root_union_gain": null,
+        "relative_mean_frequency_difference": 0.02537099090473902
+      },
+      {
+        "baseline_sample": 8,
+        "candidate_sample": 9,
+        "frequency_qualified": true,
+        "observed_gpu_root_union_gain": -0.011102144299463212,
+        "order": "AB",
+        "qualified_gpu_root_union_gain": -0.011102144299463212,
+        "relative_mean_frequency_difference": 0.018478685960109504
+      }
+    ],
+    "qualified_median_gpu_root_union_gain": null,
+    "receipt_bound_frequency_gate_pass": false
+  },
+  "profile": {
+    "attribution": "Root intervals include stalls. Mixed/overlapping families remain separate. Host continuation wait phase does not identify the queued GPU cause.",
+    "current_graph_inventory": 7925,
+    "current_self_prepare_graphs": 34,
+    "request2_disjoint_root_seconds": {
+      "only_attention": 11.3335727482,
+      "only_down": 6.7342977917,
+      "only_gate_up": 12.8899454165,
+      "root_union": 42.3112879565
+    },
+    "request_wall_seconds": [
+      43.661722542,
+      43.591881084,
+      42.321835042,
+      42.273090959,
+      42.272526708,
+      42.280372834
+    ],
+    "two_sided_frequency_gate_pass": false
+  },
+  "rejected_forms": [
+    {
+      "completion": {
+        "bytes": 94,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v2-20261031/results/completion.json",
+        "sha256": "6ef527bf54adad264bd9a887baf181ac57aefb9c82c13aa2e84051ada32f759c"
+      },
+      "reason": "Full graph: captured gate/up/SiLU/product exact, both down outputs fail 6,585,038 values.",
+      "report": {
+        "bytes": 8172,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v2-20261031/results/graph-correctness.json",
+        "sha256": "52103f53e4f85b861a44d8515ee1b1a9b480df3999907fc9829843d41c853291"
+      }
+    },
+    {
+      "completion": {
+        "bytes": 94,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v3-20261031/results/completion.json",
+        "sha256": "2a2f2e2d7eaf786828c4a2085dfb67141653b1c8777a3a7db6778d209a4336c2"
+      },
+      "reason": "Separate down: captured stages exact, output-only down fails 7,398,981 values.",
+      "report": {
+        "bytes": 8709,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v3-20261031/results/graph-correctness.json",
+        "sha256": "66adbf143d12e1b1c727bce5dec21946f776f9f51f4132b364297dfc3c079a6a"
+      }
+    },
+    {
+      "completion": {
+        "bytes": 94,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v5-20261031/results/completion.json",
+        "sha256": "bba006fe8aaa06fd258d3cc9ec223878ebd8161d02b1129809c22052602e064a"
+      },
+      "reason": "Output-only product comparator localizes split-front mismatch before down: 8,219,268 failing product values.",
+      "report": {
+        "bytes": 10307,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-ffn-graph-v5-20261031/results/graph-correctness.json",
+        "sha256": "6516b63a3ba973135d0fe8ab6fd45808dff828ecbefe78b96feefcd49404c686"
+      }
+    }
+  ],
+  "return_pointer": "docs/hy-nomas-generation-frontier.md",
+  "schema": "cogni_ml.pixelumm_frequency_ffn_evidence/v1",
+  "scope": {
+    "atol": 2e-05,
+    "device": "Apple M2 Max, 64 GiB",
+    "ffn": "J5760, w0/block0, ten samples of 128 FFNs, one chain and terminal wait",
+    "full_generation": false,
+    "full_profile": "J21120, 36 decoder blocks plus head, six reused-resource A/A requests",
+    "production_promoted": false,
+    "rtol": 2e-05,
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+  },
+  "source_parent": "3bdc16c2525162a35104f40ff93d9dd4317ac233"
+}

@@ -1,0 +1,324 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_silu_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "0643630fb8f2fb7edb0449a5e2385be2a54a5e11",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected block0 MLP SiLU on one finite frozen T0 input, B1/V263/processed1280/H16/D128.",
+    "oracle": "Inherited caller-pinned Hy-Nomas 911cea6458a89c2663513ff7099561ec190dd491 on the PyTorch 2.8.0 MPS adapter.",
+    "adversary": "ROBUST within scope. Independent byte checks of the authenticated payloads, disabled preservation, fresh repeat and GPU sensitivity controls. Same-lineage review is correlated.",
+    "next_boundary": "block0.mlp_fc2. Separate GPU replay matches FC2 and the second residual exactly using BF16 RNE at the FC2 output and after the gated multiply and add. Connected FC2, second residual and block1 still differ.",
+    "refresh": "Rerun on source, binary, runtime, input, weights, layout, precision or evidence changes.",
+    "rollback": "Omit --refiner-source-mlp-silu-control, which defaults false."
+  },
+  "run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh",
+  "execution": {
+    "mixed_atol": 2e-05,
+    "mixed_rtol": 2e-05,
+    "exact_tolerance": 0,
+    "full_generation_executed": false,
+    "diagnostic_terminal_exports_per_gpu_compare_or_replay": 1,
+    "crystal_examples": 32,
+    "python_tests": 87,
+    "named_bytes": 944620612,
+    "native_instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    }
+  },
+  "first_divergence": {
+    "control": {
+      "full": "block0.mlp_silu",
+      "valid": "block0.mlp_silu",
+      "padding": "block0.mlp_silu"
+    },
+    "enabled": {
+      "full": "block0.mlp_fc2",
+      "valid": "block0.mlp_fc2",
+      "padding": "block0.mlp_fc2"
+    }
+  },
+  "metric_fields": [
+    "count",
+    "mismatch_count",
+    "max_abs"
+  ],
+  "silu_full_exact": {
+    "block0.mlp_silu": [
+      10485760,
+      0,
+      0.0
+    ],
+    "block1.mlp_silu": [
+      10485760,
+      1496652,
+      0.0625
+    ]
+  },
+  "valid_raw": {
+    "control": {
+      "block0.mlp_fc1": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        1846900,
+        0.015624523162841797
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        534233,
+        0.12755203247070312
+      ],
+      "block0.output": [
+        538624,
+        528856,
+        0.39825439453125
+      ],
+      "block1.input": [
+        538624,
+        528856,
+        0.39825439453125
+      ],
+      "block1.output": [
+        538624,
+        531638,
+        1.2974395751953125
+      ]
+    },
+    "enabled": {
+      "block0.mlp_fc1": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        527239,
+        0.1245574951171875
+      ],
+      "block0.output": [
+        538624,
+        528887,
+        0.398162841796875
+      ],
+      "block1.input": [
+        538624,
+        528887,
+        0.398162841796875
+      ],
+      "block1.output": [
+        538624,
+        531565,
+        1.2977142333984375
+      ]
+    }
+  },
+  "fc2_residual_replay": {
+    "silu_exact": {
+      "full": [
+        10485760,
+        0,
+        0.0
+      ],
+      "valid": [
+        2154496,
+        0,
+        0.0
+      ],
+      "padding": [
+        8331264,
+        0,
+        0.0
+      ]
+    },
+    "fc2_raw": {
+      "full": [
+        2621440,
+        2553043,
+        0.1245574951171875
+      ],
+      "valid": [
+        538624,
+        527239,
+        0.1245574951171875
+      ],
+      "padding": [
+        2082816,
+        2025804,
+        0.030801773071289062
+      ]
+    },
+    "fc2_rne": {
+      "full": [
+        2621440,
+        0,
+        0.0
+      ],
+      "valid": [
+        538624,
+        0,
+        0.0
+      ],
+      "padding": [
+        2082816,
+        0,
+        0.0
+      ]
+    },
+    "residual_source_raw": {
+      "full": [
+        2621440,
+        2571065,
+        0.39892578125
+      ],
+      "valid": [
+        538624,
+        528747,
+        0.39892578125
+      ],
+      "padding": [
+        2082816,
+        2042318,
+        0.222900390625
+      ]
+    },
+    "residual_source_final_rne": {
+      "full": [
+        2621440,
+        27408,
+        0.5
+      ],
+      "valid": [
+        538624,
+        6224,
+        0.5
+      ],
+      "padding": [
+        2082816,
+        21184,
+        0.25
+      ]
+    },
+    "residual_source_two_rne": {
+      "full": [
+        2621440,
+        0,
+        0.0
+      ],
+      "valid": [
+        538624,
+        0,
+        0.0
+      ],
+      "padding": [
+        2082816,
+        0,
+        0.0
+      ]
+    },
+    "residual_rounded_native_fc2_two_rne": {
+      "full": [
+        2621440,
+        0,
+        0.0
+      ],
+      "valid": [
+        538624,
+        0,
+        0.0
+      ],
+      "padding": [
+        2082816,
+        0,
+        0.0
+      ]
+    }
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "control",
+      "enabled",
+      "enabled-repeat",
+      "preservation",
+      "fc2-residual-replay",
+      "python",
+      "control-compare",
+      "enabled-compare"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 21525413888,
+    "peak_sampled_process_group_bytes": 2344159584,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/build/hy_nomas_reference_cache_probe",
+      "bytes": 2402784,
+      "sha256": "bab897c902a1a2683a0ac48102385a6730c1400a5fcaf2120b073759e6f627a3"
+    },
+    "native_enabled_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/enabled-blocks.json",
+      "bytes": 15480,
+      "sha256": "92917c7999eb7db00dcff8b9842b4abbdbabfa9c46f28af619f2873a9d20c296"
+    },
+    "native_enabled_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/enabled-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "81450433f6e4d7873c96530af560b2620c4b98e21ba76a9b60e4fd00aa61815a"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/control-compare.json",
+      "bytes": 64287,
+      "sha256": "d6a6b34a3060fa302c177326bf6439816fd476a06483cb3e6c4ed820dfa7bc23"
+    },
+    "enabled_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/enabled-compare.json",
+      "bytes": 64472,
+      "sha256": "2d3e8192092183e23043e0d8e18180895a1c1459dc9daba9aa8fc626dca852a0"
+    },
+    "fc2_residual_replay_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/fc2-residual-replay.py",
+      "bytes": 3439,
+      "sha256": "bdeb39ee8a0073d779b62ad36256216ff5d5f709b88a34df4b75d74944c03c9e"
+    },
+    "fc2_residual_replay_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/logs/fc2-residual-replay.out",
+      "bytes": 12499,
+      "sha256": "602e9a17b912a6d827d3a2d53f78e2f2b68a407bc57e7ba8d6d9c147bb604b91"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/logs/preservation.out",
+      "bytes": 1087,
+      "sha256": "570fda86b2a5b845db855ef581123e024e3565de5592cd759b215fb072ba7407"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-silu-20261104.mtctpQSh/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

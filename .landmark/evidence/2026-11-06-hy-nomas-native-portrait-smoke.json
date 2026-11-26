@@ -1,0 +1,241 @@
+{
+  "schema": "cogni_ml.native_portrait_smoke_evidence/v1",
+  "date": "2026-11-06",
+  "status": "VERIFIED for bounded native execution and terminal export; requested motion is not demonstrated",
+  "source_commit": "7173741a40f9b642813aca613ae99d85d2d5a6dc",
+  "executable": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_sequence_generate",
+    "sha256": "a65da5ef3c98fa4252d36e3f607c5237343fe1f2cfda05d9cb6b79902d01c613",
+    "bytes": 3945256
+  },
+  "scope": "One local user-supplied portrait; original BF16 weights, V263 source-BF16 path, technical T0 plus generated T1; no fresh whole-pipeline upstream video parity",
+  "source_sha256": {
+    "examples/hy_nomas_sequence_generate.cr": "0aa06a504782e31c11897cab196dd5ea343100ccbbebc55b3264c77f2c7c2d28",
+    "examples/support/hy_nomas_reference_encoder.cr": "a2a4d3fc2c405e1625ecbbd49317c5a32f6148a942728cb8621d49909f0d96d8",
+    "examples/support/hy_nomas_sequence.cr": "0cff234d907efb57865b985085c5cb495635591b38061199967baec9b43f4b8c",
+    "examples/hy_nomas_export.py": "7f56aaa3b6e3661bd3ecc39f0241d1ca3978475f20729fa17d6a279e8621d487",
+    "examples/wan_s2v_export.py": "4d9c0385393addc255c785f4b4897b951f0d850d1879fc4bcaa1e4853bb79719"
+  },
+  "inputs": {
+    "reference": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-reference/manifest.json",
+      "sha256": "04dd1a12f22d41336499b1d3d9d83d2bc92313900cd6116d3565392da04e6628",
+      "bytes": 738
+    },
+    "prompt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-prompt-v2.json",
+      "sha256": "f6978c01f40e871bf6e4a87d9d4140640f1818dbb87ce3341d52cc3b36b65848",
+      "bytes": 1155
+    },
+    "qwen_state26": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-qwen-v2.json",
+      "sha256": "255354715ed79c967205e6338e4a0f65ea5a83526c46d34d5ab494d51009f441",
+      "bytes": 386797
+    },
+    "generation": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-inputs-v2.json",
+      "sha256": "31528051793c3a184fc91a4c8d0bf45debab8cf38e6dd16d54fea780c3dd99eb",
+      "bytes": 40477
+    },
+    "continuation": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-continuation-v2.json",
+      "sha256": "0f35bb09964f2b28d28069e8d39a8a1d6194607d4269de6bb824ff54d828e2ac",
+      "bytes": 45143
+    },
+    "qwen_scope": "authenticated saved upstream state26 crop; native live text encoding excluded",
+    "qwen_valid_tokens": 263,
+    "encoder_sha256": "d0bbacbebe8960b147388d0bf61ec8bbc0eb8d575574d6ec5c5abe4878c8d6c1",
+    "pixelumm_cache_sha256": "7cbf6d8a3587f0cd23e07120a9ad1a222b4ffadfa4c1c840609c425d16e3476d"
+  },
+  "dod": {
+    "plan_command": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/portrait2-native-plan.command.json",
+      "sha256": "ee28e13a092ba24b79e9bce32d08041df420b2fc44261e6d1f687aa48a4a3b87",
+      "bytes": 1615
+    },
+    "execution_command": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/portrait2-native-execute.command.json",
+      "sha256": "99e28fa27b83b33c92269d8634dd33dabf2fd9f460c0e49ed2fbe2e2f8fbb8c3",
+      "bytes": 1603
+    },
+    "runner": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/run_photo_v2.py",
+      "sha256": "c4e79e5a2feca9f65c68bedf954266a8ff4ae3c48c8d98db35bca252fc120fa6",
+      "bytes": 3290
+    },
+    "plan_execution_identity": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/portrait2-plan-execution-identity.json",
+      "sha256": "d7001a945ac42d8d30514997fa0800ba86044155713a69667bd078ceec1280f2",
+      "bytes": 782
+    },
+    "final_receipt_identities_match_plan": true,
+    "native_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2/receipt.json",
+      "sha256": "ca8be135ef659497594dec9647c72240f911be8cfd6be989f0740fbf76cd66f5",
+      "bytes": 6861
+    },
+    "native_guard": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/portrait2-native-execute.guard.jsonl",
+        "sha256": "a06383cb9af622a5b8cc96f0f9e1ae70bfd5078d84e9ea100c1d4896130b2e97",
+        "bytes": 398910
+      },
+      "limits": {
+        "memory_accounting": "file-cache",
+        "runtime_floor_pct": 10,
+        "max_footprint_bytes": 32212254720,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 1800
+      },
+      "returncode": 0,
+      "peak_sampled_group_bytes": 26416691888,
+      "minimum_sampled_headroom_bytes": 18142445568,
+      "maximum_swap_growth_bytes": 0
+    },
+    "metrics": {
+      "reference_encoder_encode_allocations": 0,
+      "reference_encoder_encode_readbacks": 0,
+      "reference_encoder_preterminal_waits": 0,
+      "reference_encoder_segments": 903,
+      "reference_encoder_waits": 1,
+      "dit_encode_allocations": 0,
+      "dit_encode_readbacks": 0,
+      "dit_preterminal_waits": 0,
+      "dit_segments": 10645,
+      "dit_waits": 1,
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 13509,
+      "decoder_waits": 1
+    },
+    "timings_seconds": {
+      "preflight_seconds": 3.049435417,
+      "reference_encoder_setup_seconds": 1.390399,
+      "reference_encoder_wall_seconds": 356.696600875,
+      "reference_encoder_gpu_seconds": 356.6528284139931,
+      "dit_setup_seconds": 26.000020792,
+      "dit_wall_seconds": 58.559143375,
+      "dit_gpu_seconds": 58.256212214706466,
+      "decoder_setup_seconds": 25.44729775,
+      "decoder_wall_seconds": 193.763301792,
+      "decoder_gpu_seconds": 193.7000676766038,
+      "request_seconds": 669.736457167
+    },
+    "output_total_frames": 240,
+    "generated_frames": 120,
+    "generated_duration_seconds": 5,
+    "denoise_steps": 4,
+    "pixelumm": {
+      "steps": 1,
+      "window_latents": 10,
+      "overlap_latents": 5,
+      "global_windows": 11
+    },
+    "export_driver": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/export_portrait2.py",
+      "sha256": "978c5848cfd4fa63588a84b5b09cf32c7fab9558c0d45503334440ff13edeb34",
+      "bytes": 15073
+    },
+    "export_guard": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2-export.guard.jsonl",
+        "sha256": "63fc88a05f07784a34166570ca73905a82fe26d0f29fac8f3f2ad2dc1dc4c5c3",
+        "bytes": 2901
+      },
+      "limits": {
+        "memory_accounting": "file-cache",
+        "runtime_floor_pct": 10,
+        "max_footprint_bytes": 4294967296,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 600
+      },
+      "returncode": 0,
+      "peak_sampled_group_bytes": 109840064,
+      "minimum_sampled_headroom_bytes": 44511920128,
+      "maximum_swap_growth_bytes": 0
+    },
+    "export_analysis": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2-export/analysis.json",
+      "sha256": "4e4d6027f2686c8dd2095e3cf72baa63251b2ed3407ea0ed42909c3f8323d064",
+      "bytes": 8841
+    },
+    "source_pixels_sha256": "44af661a5157136472124a72bc12a0ba1b7bb00a4510941f6f8d44d776bad898",
+    "generated_crop_sha256": "d68b3f87f34c7de271421a7f80cef18715e6af80650ec90e921660b4917dc298",
+    "mp4": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2-export/generated-T1-5s.mp4",
+      "sha256": "8b5cb2c974df9810704ecb5533ce331462e8f7a33c6fd3986a8f40360fd82862",
+      "bytes": 92304
+    },
+    "contact_sheet": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2-export/generated-contact-sheet.png",
+      "sha256": "60af782d66f935d33015f9c342a9e2a1c52f89d561d3a4e059087f911f273b2d",
+      "bytes": 1772629
+    },
+    "ffprobe": {
+      "executable": "/opt/homebrew/Cellar/ffmpeg/9.0.2_1/bin/ffprobe",
+      "expectations": {
+        "avg_frame_rate": "24/1",
+        "codec_type": "video",
+        "duration_seconds": 5.0,
+        "duration_tolerance_seconds": 0.001,
+        "height": 288,
+        "nb_read_frames": "120",
+        "r_frame_rate": "24/1",
+        "width": 512
+      },
+      "format": {
+        "duration": "5.000000"
+      },
+      "validated": true,
+      "video_stream": {
+        "avg_frame_rate": "24/1",
+        "codec_type": "video",
+        "height": 288,
+        "nb_frames": "120",
+        "nb_read_frames": "120",
+        "r_frame_rate": "24/1",
+        "width": 512
+      }
+    }
+  },
+  "visual_observation": {
+    "method": "Original portrait, initial sparse contact sheet, then CPU-only inspection of stored F32 frames 0,96,114,115,116,117,118,119 and enlarged eye crops",
+    "observation": "Reference face remains recognizable without obvious onset ghosting in inspected frames; head is nearly static, with asymmetric eye deformation at the tail. A natural blink or convincing head turn is not demonstrated",
+    "user_playback_observation": "Changes were noticeable only in the last two frames; eyes shifted unnaturally rather than blinking",
+    "correction": "The earlier eyelid-closure description was interpreted as a blink from sparse sampling and is withdrawn. Tail frames show no complete close-and-reopen cycle; pixel differences alone cannot validate the requested motion",
+    "tail_review": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-eye-tail-review-v1/analysis.json",
+      "sha256": "3733a64550dd0566912728c4066eb397465f3b8d0faea2694212b763c21d320e",
+      "scope": "CPU terminal file inspection only; input crop digest checked before and after, no model/GPU execution or production-path change",
+      "limit": "Selected tail frames and descriptive eye-ROI differences do not establish the cause of the artifact or whole-pipeline parity"
+    },
+    "motion_statistic_scope": "descriptive scene-motion magnitude only; it does not measure acting quality, identity consistency, or semantic compliance",
+    "mean_adjacent_block_luma_delta": 0.0005395427714449321
+  },
+  "numerical_control": {
+    "packet": ".landmark/evidence/2026-11-06-hy-nomas-native-continuation.json",
+    "scope": "Earlier explicit same-latent/noise continuation fixture: all36 blocks and six windows bitwise against Torch2.6 MPS gathered adapter; not this photo full pipeline",
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "limits": [
+    "New portrait uses authenticated saved upstream Qwen state26; native live text encoding excluded",
+    "Full source-CUDA/RNG or photo whole-pipeline parity is not established",
+    "Per-frame differences do not prove natural motion or actor control",
+    "One run with technical reference initialization is not a paired speedup benchmark",
+    "File-backed headroom is an estimate and guard sampling cannot prevent between-poll spikes",
+    "Source/binary receipts are local lineage evidence, not hermetic attestation"
+  ],
+  "adversary": {
+    "verdict": "ROBUST for bounded execution, identity, counters and terminal export; head-turn capability remains unverified",
+    "reviewer": "continuation_native_block_probe; same-lineage review is correlated",
+    "checks": "Plan/execute/final receipt identities agree; all phase counters and sampled guard limits pass; channel-major crop and ffprobe confirm 120 generated frames at 24fps; selected frames show near-static expression",
+    "limits": "No photo full-pipeline upstream parity; stock CPU RNG values differ; selected frames and motion magnitude do not certify acting quality; guard is sampled and MPS workspace is opaque"
+  },
+  "refresh_on": [
+    "changed model/source/runtime/input/noise/precision/geometry/overlap",
+    "mutated or missing bound artifacts"
+  ],
+  "rollback": "Omit experimental reference arguments; native continuation opt-in can independently be omitted"
+}

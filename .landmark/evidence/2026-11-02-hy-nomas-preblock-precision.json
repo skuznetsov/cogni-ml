@@ -1,0 +1,638 @@
+{
+  "schema": "cogni_ml.hy_nomas_preblock_precision_evidence/v1",
+  "date": "2026-11-02",
+  "parent_revision": "64b394e5834a5530199b01b933e50850a7008dc9",
+  "claim_scope": "The standalone native T0 preblock fixture matches the source F32 precision-control trace at unchanged atol=rtol=2e-5. Source BF16 differs at this boundary; a causal BF16 operation, full T0/app, block/KV, T1 and motion are unqualified.",
+  "risk": "CAUTION: diagnostic execution and representation boundaries; no production inference changes",
+  "reason": "Full native/source T1 fails, so establish the earlier preprocessing boundary before interpreting a cache/block discrepancy.",
+  "rollback": "Remove the optional preblock capture/comparison helpers and their tests; retain production behavior.",
+  "local_artifacts": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a",
+  "source_files": {
+    "spec/support/hy_nomas_reference_preblock_control.py": "4ce8fa19b6b7d77a6ce6cdd9041280f2ebf05e98a1ba1859e4f3531fac0d7607",
+    "spec/support/hy_nomas_reference_preblock_compare.py": "68eb75d74fae66c506c7edd2ac6ef6c92e84f777480b36d8aca16494744e1069",
+    "spec/hy_nomas_reference_preblock_control_spec.py": "30c83b6952ae15f3d05691c644b6d57a73b08af7481bf6558d273ae5b08b07e1",
+    "spec/hy_nomas_reference_preblock_compare_spec.py": "220c4f018c07c01e36d7968bdc8c48bba3ab8fb0902e07adf85ad706bfead8e2"
+  },
+  "upstream": {
+    "model_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "prompt_app_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "native_probe_binary_sha256": "a64587887529fed5070f35bf01b7efea8b36cbbaf3a89e7d1486741a44918239",
+    "torch_version": "2.8.0"
+  },
+  "geometry": {
+    "latent_shape": [
+      1,
+      32,
+      30,
+      9,
+      16
+    ],
+    "video_rows": 4320,
+    "valid_caption_rows": 263,
+    "dit_text_rows": 320,
+    "writer_timestep": 206.897
+  },
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "gate": "abs(actual-reference) <= atol + rtol*abs(reference)",
+    "changed": false
+  },
+  "artifacts": {
+    "current-t0.safetensors": {
+      "path": "current-t0.safetensors",
+      "sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60"
+    },
+    "t0-extraction.json": {
+      "path": "t0-extraction.json",
+      "sha256": "2e14f172d6806f1aec69f22940f04a35fee61cfbd594821326e4da537fcc0b86"
+    },
+    "native-preblock.json": {
+      "path": "native-preblock.json",
+      "sha256": "c266a2af0cfbef524c10df16e6701bf8d2771dcc8d56764d7eb2fea557e90520"
+    },
+    "native-preblock.tensors.bin": {
+      "path": "native-preblock.tensors.bin",
+      "sha256": "dfc69da5c8f7d6b051a44724622770a1a3c88cdb319f7df00cddf415e5b921f0"
+    },
+    "source-preblock-final.json": {
+      "path": "source-preblock-final.json",
+      "sha256": "df04451183726b152ba87560e8dfc0056605b7f3aa64a76a40233697115b40a3"
+    },
+    "source-preblock-final.tensors.bin": {
+      "path": "source-preblock-final.tensors.bin",
+      "sha256": "726c82c50b9f8cda6d06fcb319a39ddfd917d65715dd1b77affbf554eb4505b9"
+    },
+    "source-preblock-f32.json": {
+      "path": "source-preblock-f32.json",
+      "sha256": "5798272e0bbbf396fb96501cc3272f4efd5db35107ea4b65fd46d4a715d14db2"
+    },
+    "source-preblock-f32.tensors.bin": {
+      "path": "source-preblock-f32.tensors.bin",
+      "sha256": "4d20a1c96fec1dd3c6bb7c996d27667fdca93411d9ad8d7a92c126768d646536"
+    },
+    "native-source-bf16-final-compare.json": {
+      "path": "native-source-bf16-final-compare.json",
+      "sha256": "37182090e08360d5de57be98a026ad44a4c0dddbef654707f18e2a2df365353b"
+    },
+    "native-source-f32-preblock-compare.json": {
+      "path": "native-source-f32-preblock-compare.json",
+      "sha256": "ef749ad61f4c5b86c2a854a89e7e03c4666b01d3072bd89831695db4e24b2ccf"
+    },
+    "native-preblock-v2.command.json": {
+      "path": "native-preblock-v2.command.json",
+      "sha256": "e9c7044e0f966a2b9eb19000d1ec9bad3a8b433a30eb66cd51b650ebdc6b12dc"
+    },
+    "native-preblock-v2.result.json": {
+      "path": "native-preblock-v2.result.json",
+      "sha256": "bde1e9430e2bd6c6d2f683021327efdf8f7d464b76d019cae992f4347498a91e"
+    },
+    "logs/native-preblock-v2.guard.jsonl": {
+      "path": "logs/native-preblock-v2.guard.jsonl",
+      "sha256": "3f68a174d50b9a72aae9846a5dc1a9abab6e88be78647e935cd53d1265acee58"
+    },
+    "source-preblock-final.command.json": {
+      "path": "source-preblock-final.command.json",
+      "sha256": "8e62646559851ecc1eabd5f984ecc8dd0b0644eb6e775562d9927c7055d14bad"
+    },
+    "source-preblock-final.result.json": {
+      "path": "source-preblock-final.result.json",
+      "sha256": "b5fa94ddb02d9c38a91f73d6d6b1868b824b34fdacc298b1af286296ed65d812"
+    },
+    "logs/source-preblock-final.guard.jsonl": {
+      "path": "logs/source-preblock-final.guard.jsonl",
+      "sha256": "eecdde00df03180b531224499ded292dbfb855a9c456fad2f7f85552a40571e3"
+    },
+    "source-preblock-f32.command.json": {
+      "path": "source-preblock-f32.command.json",
+      "sha256": "97f477b75f9142963390684ad1853fb3d23eb7fc35d904315b89512173fd2f1b"
+    },
+    "source-preblock-f32.result.json": {
+      "path": "source-preblock-f32.result.json",
+      "sha256": "10957af7873d32455e68c181016f9c50a0c1650b442a27605823a9cf0e061d47"
+    },
+    "logs/source-preblock-f32.guard.jsonl": {
+      "path": "logs/source-preblock-f32.guard.jsonl",
+      "sha256": "5f167d169aea5e178c3fcf915df82b06662a1cfb8ce6c71fdf5d22c9200dc92e"
+    },
+    "compare-bf16-final.command.json": {
+      "path": "compare-bf16-final.command.json",
+      "sha256": "445e9990a8ca9ec9d845daf6ec1afee9c352dde773bcca8411ff070473abcbc6"
+    },
+    "compare-bf16-final.result.json": {
+      "path": "compare-bf16-final.result.json",
+      "sha256": "b4d6d280ea51191adb96323dd016c1479557dacf6f4f0be6f16d44e1ea35e5b3"
+    },
+    "logs/compare-bf16-final.guard.jsonl": {
+      "path": "logs/compare-bf16-final.guard.jsonl",
+      "sha256": "4a83b8e3ec96b3bc0292519c1beb2f62c8284290a3bf1d37127b31afc0ca9931"
+    },
+    "compare-f32.command.json": {
+      "path": "compare-f32.command.json",
+      "sha256": "4d3571a84cb758461b85914e55c94acd2bef0f8b683d549a3bc5c9b75bcbdfed"
+    },
+    "compare-f32.result.json": {
+      "path": "compare-f32.result.json",
+      "sha256": "9c7954494abe1d461dd5021fa606379dd3bb19a5426731d236a8d6bd6dac5ec6"
+    },
+    "logs/compare-f32.guard.jsonl": {
+      "path": "logs/compare-f32.guard.jsonl",
+      "sha256": "6a84a9bed39e84556f5e131e91f42d391ffc0ae2fb14e355be2fa7099504ff3f"
+    },
+    "plan.json": {
+      "path": "plan.json",
+      "sha256": "6faf8b1bca7f1e1d022fe6fde1530c0ecf222a8762ac2db5165f6eb697575ff1"
+    },
+    "execute.py": {
+      "path": "execute.py",
+      "sha256": "a3972b952eaf3efb77665541b4e781fd8be8c16427be36d3471cbaca8f3aa665"
+    },
+    "source-preblock.json": {
+      "path": "source-preblock.json",
+      "sha256": "f40043c360169c81c061eaef7f1b1fdb0de0fbd32009490371ec52c7e9fcc10d"
+    },
+    "source-preblock.tensors.bin": {
+      "path": "source-preblock.tensors.bin",
+      "sha256": "726c82c50b9f8cda6d06fcb319a39ddfd917d65715dd1b77affbf554eb4505b9"
+    },
+    "R/source-snapshot/hy_nomas_reference_preblock_control.py": {
+      "path": "R/source-snapshot/hy_nomas_reference_preblock_control.py",
+      "sha256": "6ae69a88ffc2e412c97fc85d205df9d13d9505e58139654a5e90fa4481385e6d"
+    },
+    "R/source-snapshot/hy_nomas_reference_preblock_control_spec.py": {
+      "path": "R/source-snapshot/hy_nomas_reference_preblock_control_spec.py",
+      "sha256": "01d8cfc3ee1c143277aaa0cabcec2437a54dab4dacac42c323dbb003a8469b92"
+    }
+  },
+  "stage_summary": {
+    "path": "final-stage-summary.json",
+    "sha256": "c39d3425ec3cfd795bf4c58eb1da0a8156878ae1cc4b7d8ec26f5fa5ceedaec4"
+  },
+  "observed_checks": [
+    {
+      "command": "python3 -B -m unittest spec.hy_nomas_reference_preblock_control_spec spec.hy_nomas_reference_preblock_compare_spec spec.hy_nomas_structured_reference_control_spec -v",
+      "observed": "21 tests, OK, exit 0",
+      "note": "Observed in this Codex turn; this index is not a raw test log."
+    },
+    {
+      "command": "python3 -B /Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a/execute.py compare-bf16-final",
+      "expected": "Authenticated comparison report; raw BF16-source mismatch must remain visible",
+      "observed": "exit 0 means report produced; numeric_gate_passed=false; sensitivity controls pass"
+    },
+    {
+      "command": "python3 -B /Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a/execute.py compare-f32",
+      "expected": "All nine raw tensors pass unchanged tolerance; positive/negative controls discriminate",
+      "observed": "exit 0; numeric_gate_passed=true; eight byte-exact tensors; text max 7.62939453125e-6; sensitivity controls pass"
+    }
+  ],
+  "source_bf16": {
+    "numeric_gate_passed": false,
+    "raw_tensors": [
+      {
+        "kind": "raw",
+        "tensor": "reference.latent_bf16",
+        "count": 138240,
+        "finite_count": 138240,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "cache.noisy_latent_f32",
+        "count": 138240,
+        "finite_count": 138240,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.img_f32",
+        "count": 8847360,
+        "finite_count": 8847360,
+        "max_abs": 0.003772258758544922,
+        "mae": 0.0001758714352035895,
+        "rms": 0.0002678244491107762,
+        "mismatch_count": 7368339,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.txt_valid_f32",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 1.2783203125,
+        "mae": 0.04000041261315346,
+        "rms": 0.06521912664175034,
+        "mismatch_count": 535706,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.vec_f32",
+        "count": 2048,
+        "finite_count": 2048,
+        "max_abs": 0.00043955445289611816,
+        "mae": 4.1864619561238214e-05,
+        "rms": 6.210216088220477e-05,
+        "mismatch_count": 1280,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.vec_txt_f32",
+        "count": 2048,
+        "finite_count": 2048,
+        "max_abs": 0.00043955445289611816,
+        "mae": 4.1864619561238214e-05,
+        "rms": 6.210216088220477e-05,
+        "mismatch_count": 1280,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.rope_cos_f32",
+        "count": 552960,
+        "finite_count": 552960,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.rope_sin_f32",
+        "count": 552960,
+        "finite_count": 552960,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "cache.timestep_f32",
+        "count": 1,
+        "finite_count": 1,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "rounded_native_views": {
+      "scope": "diagnostic rounding view of native F32 activation exports; it is not a claim that all source F32 arithmetic boundaries are emulated",
+      "tensors": [
+        {
+          "kind": "native_bf16_rounding_view",
+          "tensor": "cache.noisy_latent_f32",
+          "count": 138240,
+          "finite_count": 138240,
+          "max_abs": 0.0,
+          "mae": 0.0,
+          "rms": 0.0,
+          "mismatch_count": 0,
+          "passed": true,
+          "atol": 2e-05,
+          "rtol": 2e-05
+        },
+        {
+          "kind": "native_bf16_rounding_view",
+          "tensor": "block.img_f32",
+          "count": 8847360,
+          "finite_count": 8847360,
+          "max_abs": 0.0,
+          "mae": 0.0,
+          "rms": 0.0,
+          "mismatch_count": 0,
+          "passed": true,
+          "atol": 2e-05,
+          "rtol": 2e-05
+        },
+        {
+          "kind": "native_bf16_rounding_view",
+          "tensor": "block.txt_valid_f32",
+          "count": 538624,
+          "finite_count": 538624,
+          "max_abs": 1.0,
+          "mae": 0.03507845848798752,
+          "rms": 0.07244931161403656,
+          "mismatch_count": 237292,
+          "passed": false,
+          "atol": 2e-05,
+          "rtol": 2e-05
+        },
+        {
+          "kind": "native_bf16_rounding_view",
+          "tensor": "block.vec_f32",
+          "count": 2048,
+          "finite_count": 2048,
+          "max_abs": 0.00048828125,
+          "mae": 1.9309110939502716e-05,
+          "rms": 5.62537279620301e-05,
+          "mismatch_count": 444,
+          "passed": false,
+          "atol": 2e-05,
+          "rtol": 2e-05
+        },
+        {
+          "kind": "native_bf16_rounding_view",
+          "tensor": "block.vec_txt_f32",
+          "count": 2048,
+          "finite_count": 2048,
+          "max_abs": 0.00048828125,
+          "mae": 1.9309110939502716e-05,
+          "rms": 5.62537279620301e-05,
+          "mismatch_count": 444,
+          "passed": false,
+          "atol": 2e-05,
+          "rtol": 2e-05
+        }
+      ]
+    },
+    "sensitivity_controls": {
+      "passed": true,
+      "a_vs_a": {
+        "kind": "sensitivity_control",
+        "tensor": "a_vs_a",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      "deliberate_perturbation": {
+        "kind": "sensitivity_control",
+        "tensor": "deliberate_perturbation",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.010000228881835938,
+        "mae": 0.010000169277191162,
+        "rms": 0.010000170208513737,
+        "mismatch_count": 16,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "final_payload_matches_initial_capture": true
+  },
+  "source_f32_precision_control": {
+    "numeric_gate_passed": true,
+    "raw_tensors": [
+      {
+        "kind": "raw",
+        "tensor": "reference.latent_bf16",
+        "count": 138240,
+        "finite_count": 138240,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "cache.noisy_latent_f32",
+        "count": 138240,
+        "finite_count": 138240,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.img_f32",
+        "count": 8847360,
+        "finite_count": 8847360,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.txt_valid_f32",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 7.62939453125e-06,
+        "mae": 3.07831982127027e-08,
+        "rms": 2.0452695537187537e-07,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.vec_f32",
+        "count": 2048,
+        "finite_count": 2048,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.vec_txt_f32",
+        "count": 2048,
+        "finite_count": 2048,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.rope_cos_f32",
+        "count": 552960,
+        "finite_count": 552960,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block.rope_sin_f32",
+        "count": 552960,
+        "finite_count": 552960,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "cache.timestep_f32",
+        "count": 1,
+        "finite_count": 1,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "sensitivity_controls": {
+      "passed": true,
+      "a_vs_a": {
+        "kind": "sensitivity_control",
+        "tensor": "a_vs_a",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      "deliberate_perturbation": {
+        "kind": "sensitivity_control",
+        "tensor": "deliberate_perturbation",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.010000228881835938,
+        "mae": 0.010000169277191162,
+        "rms": 0.010000170208513737,
+        "mismatch_count": 16,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "changes_together": [
+      "global module dtypes with exact BF16 checkpoint values widened to F32",
+      "actual BF16 noisy latent and Qwen inputs widened at module prehooks",
+      "F32 refiner-attention adapter"
+    ]
+  },
+  "native_instrumentation": {
+    "actual_named_bytes": 944620612,
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "preterminal_waits": 0,
+    "terminal_waits": 1
+  },
+  "guard": {
+    "accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "process_cap_mib": 6144,
+    "max_swap_growth_mib": 64
+  },
+  "stage_observations": {
+    "native-preblock-v2": {
+      "returncode": 0,
+      "wall_seconds": 3.19312779197935,
+      "sampled_peak_group_footprint_bytes": 9142656,
+      "minimum_file_cache_aware_headroom_bytes": 45916028928,
+      "max_sampled_swap_growth_bytes": 0,
+      "final_sample_live_processes": 0
+    },
+    "source-preblock-final": {
+      "returncode": 0,
+      "wall_seconds": 11.023438415955752,
+      "sampled_peak_group_footprint_bytes": 1558742816,
+      "minimum_file_cache_aware_headroom_bytes": 43502731264,
+      "max_sampled_swap_growth_bytes": 0,
+      "final_sample_live_processes": 0
+    },
+    "source-preblock-f32": {
+      "returncode": 0,
+      "wall_seconds": 11.021194499917328,
+      "sampled_peak_group_footprint_bytes": 1424017112,
+      "minimum_file_cache_aware_headroom_bytes": 43895865344,
+      "max_sampled_swap_growth_bytes": 0,
+      "final_sample_live_processes": 0
+    },
+    "compare-bf16-final": {
+      "returncode": 0,
+      "wall_seconds": 1.6392671660287306,
+      "sampled_peak_group_footprint_bytes": 1186235928,
+      "minimum_file_cache_aware_headroom_bytes": 43894063104,
+      "max_sampled_swap_growth_bytes": 0,
+      "final_sample_live_processes": 0
+    },
+    "compare-f32": {
+      "returncode": 0,
+      "wall_seconds": 1.6503631670493633,
+      "sampled_peak_group_footprint_bytes": 1342555696,
+      "minimum_file_cache_aware_headroom_bytes": 43160748032,
+      "max_sampled_swap_growth_bytes": 0,
+      "final_sample_live_processes": 0
+    }
+  },
+  "safety_limits": "Sampled process footprint is not a bound on complete Metal residency, opaque MPS resources or between-poll peaks. File-backed memory is a reclaimability estimate.",
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "standalone native T0 fixture versus F32 source preblock at unchanged mixed tolerance only",
+    "lineage": "same-lineage correlated review; primary evidence is captured GPU tensors and comparison"
+  },
+  "not_qualified": [
+    "full T0/app trajectory",
+    "block0/KV cache parity",
+    "T1 parity",
+    "motion root cause",
+    "performance improvement"
+  ],
+  "next_falsifier": "Compare source BF16 masked mean, timestep/context embeddings and input projection on the current T0; then compare actual block-0 K/V writes on matched inputs. The attention-only BF16 switch is insufficient for full-prelude parity.",
+  "decay_trigger": "Source/runtime, native binary, weight/cache, reference/noise, caption/mask, geometry or precision-control changes; missing/mutated retained evidence.",
+  "refresh": "Reauthenticate inputs, rebuild if needed, rerun sentinel admission, guarded source/native captures and unchanged GPU comparison; review scope before downstream use.",
+  "failure_policy": "Keep dependent full T0/KV/T1/motion claims open. An exit-0 diagnostic report does not override a false numeric_gate_passed field."
+}

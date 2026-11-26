@@ -1,0 +1,174 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 35859,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/qualification-summary.json",
+      "sha256": "29299e79cb7ddd76d49cdeace5c98a74f8f64c16a1c85377e4dc897353d7e51f"
+    },
+    {
+      "bytes": 8640,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/qualification-commands.json",
+      "sha256": "449583d43e71c067f3dcb9ca4ada716a43a2b2e44e330bca0bb6a132a193459f"
+    },
+    {
+      "bytes": 1711,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/adversary-review.json",
+      "sha256": "120520cc9d149523851c8faf06e4f24534232d568bda926d11f91d07ddb56585"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_sequence_generate.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_timeline_ops_spec.cr",
+      "spec/video_checkpoint_spec.cr",
+      "src/ml/video/bf16_weight_cache.cr",
+      "src/ml/video/checkpoint.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "src/ml/video/kernels/hy_nomas_timeline_ops.metal",
+      "examples/dcae_v_encoder_probe.cr",
+      "examples/hy_nomas_reference_timeline_probe.cr",
+      "examples/support/dcae_v_checkpoint.py",
+      "examples/support/hy_nomas_reference_encoder.cr",
+      "examples/support/hy_nomas_reference_image.cr",
+      "examples/support/hy_nomas_reference_image.py",
+      "spec/dcae_v_checkpoint_test.py",
+      "spec/dcae_v_encoder_spec.cr",
+      "spec/dcae_v_reference_test.py",
+      "spec/hy_nomas_reference_encoder_spec.cr",
+      "spec/hy_nomas_reference_image_spec.cr",
+      "spec/hy_nomas_reference_image_test.py",
+      "spec/support/dcae_v_reference.py",
+      "src/ml/video/dcae_v_encoder.cr",
+      "src/ml/video/dcae_v_mps.cr",
+      "src/ml/video/dcae_v_mps_bridge.mm",
+      "src/ml/video/dcae_v_norm_mps.cr",
+      "src/ml/video/dcae_v_norm_mps_bridge.mm",
+      "src/ml/video/kernels/dcae_v_encoder.metal",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_sequence_generate.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_timeline_ops_spec.cr",
+      "spec/video_checkpoint_spec.cr",
+      "src/ml/video/bf16_weight_cache.cr",
+      "src/ml/video/checkpoint.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "src/ml/video/kernels/hy_nomas_timeline_ops.metal",
+      "examples/dcae_v_encoder_probe.cr",
+      "examples/hy_nomas_reference_timeline_probe.cr",
+      "examples/support/dcae_v_checkpoint.py",
+      "examples/support/hy_nomas_reference_encoder.cr",
+      "examples/support/hy_nomas_reference_image.cr",
+      "examples/support/hy_nomas_reference_image.py",
+      "spec/dcae_v_checkpoint_test.py",
+      "spec/dcae_v_encoder_spec.cr",
+      "spec/dcae_v_reference_test.py",
+      "spec/hy_nomas_reference_encoder_spec.cr",
+      "spec/hy_nomas_reference_image_spec.cr",
+      "spec/hy_nomas_reference_image_test.py",
+      "spec/support/dcae_v_reference.py",
+      "src/ml/video/dcae_v_encoder.cr",
+      "src/ml/video/dcae_v_mps.cr",
+      "src/ml/video/dcae_v_mps_bridge.mm",
+      "src/ml/video/dcae_v_norm_mps.cr",
+      "src/ml/video/dcae_v_norm_mps_bridge.mm",
+      "src/ml/video/kernels/dcae_v_encoder.metal",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json"
+    ],
+    "out_of_scope": [
+      "Full image-conditioned video or visual identity/style qualification",
+      "Actual layer-specific DiT cache comparison",
+      "Clean-reference PixelUMM reconstruction",
+      "Full+partial final tiles and other production geometries",
+      "Cinematic, checkpoint restore/edit/capture or mid-session reference replacement",
+      "UI, full generation and performance speedup claim"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "Weights, fixtures, binaries and logs stay outside Git; digests cannot recover lost files.",
+        "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Source/binary/input/weights/geometry/cache/backend/compiler/runtime/device change or referenced artifact modification/loss.",
+    "level": "VERIFIED",
+    "scope": "Fixed 512x288x120 encoder, prior T4/T80 captures, ingestion and CPU/synthetic schedule tests. Full image-conditioned continuation remains experimental.",
+    "text": "Native DCAE-V reference encoding matches pinned upstream at the tested BF16 boundaries; the image-conditioned CLI has explicit guarded T0 initialization."
+  },
+  "created_at": "2026-11-02T00:58:39.202805+00:00",
+  "definition_of_done": {
+    "commands": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/qualification-commands.json",
+    "expected": "Unchanged 2e-5 tolerance; exact captured BF16 input/stage5/latent; no tracked encode allocations/readbacks/preterminal waits; 10% floor; focused tests/build/plan pass.",
+    "observed": "Full encoder and all captured payloads byte-identical; 52 CPU and 29 linked Crystal examples, 14 Python tests, full-J synthetic timeline and guarded build/CPU plan pass."
+  },
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/fixtures/native-full-comparison.json",
+      "result": "passed",
+      "signal": "Input, stage5 tiles 0/1/2 and latent have zero error at 2e-5."
+    },
+    {
+      "kind": "payload_comparison",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/fixtures/native-full-bitwise.json",
+      "result": "passed",
+      "signal": "All five BF16 tensor payloads byte-identical."
+    },
+    {
+      "kind": "guarded_native_run",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/logs/native-full-v1-guard.jsonl",
+      "result": "passed",
+      "signal": "Sampled peak 8.8276 GiB, minimum cache-aware headroom 32.7720 GiB, zero swap; 12 GiB cap and 10% floor."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/logs/reference-sequence-plan-v2.out",
+      "result": "passed",
+      "signal": "CPU-only authentication of one image/encoder and technical T0 + generated T1 memory plan; not model execution."
+    }
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-drafter-frontier.md",
+    "landmark": "LM-HY-NOMAS-REFERENCE-ENCODER-2026-11-01"
+  },
+  "residual_risk": [
+    "Arbitrary same-size low-level MetalBuffer inputs do not prove BF16 provenance; the current CLI only supplies authenticated Session output.",
+    "Full tile plus partial final tile and other production geometries are unqualified.",
+    "MPSGraph private resources are opaque to named counts and guards only sample total footprint.",
+    "Actual per-layer DiT cache parity, clean-reference PixelUMM reconstruction and full image-conditioned video/character quality remain unverified."
+  ],
+  "source_state": {
+    "note": "Source hashes exclude this self-referential canonical packet. Small T4/T80 results predate final binding/guard-only changes; full T120 uses final encoder binary.",
+    "parent_revision": "b79ef29a0ae992f67d76f6c33fc8960713456cbf",
+    "pins_ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/qualification-summary.json"
+  },
+  "validation": {
+    "collector": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/collect_reference_evidence.py",
+    "repository_graph_validator": "Not present in this repository or skill directory; local collector executes artifact/source digests, tolerance/byte assertions, guard exits and scope checks."
+  },
+  "verification": {
+    "adversary_verdict": "ROBUST",
+    "review_provenance": "Correlated same-lineage source review plus root runtime/artifact checks; not independent.",
+    "trust": {
+      "F": "Executed numeric/byte checks and negative admission tests",
+      "G": "Declared fixed geometry/captures and CLI boundary only",
+      "R": "Pinned upstream/weights; fresh full native run, sampled memory limits"
+    }
+  }
+}

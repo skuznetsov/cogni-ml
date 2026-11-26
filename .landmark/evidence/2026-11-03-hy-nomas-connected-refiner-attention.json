@@ -1,0 +1,257 @@
+{
+  "schema": "cogni_ml.hy_nomas_connected_refiner_attention_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "a75f8fe280c527732ea79882ef961199f8e93a7f",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected block0 attention on one frozen T0 input, B1/V263/processed1280/H16/D128.",
+    "result": "Exact Q/K/V and complete context. The first valid divergence moves to projection. Both blocks were executed and complete numeric parity still fails.",
+    "adversary": "ROBUST for block0 context only. Same-lineage mini-Quad review is correlated. Block1 is not an isolated input comparison.",
+    "refresh": "Rerun after source, binary, runtime, input, weights, layout, precision or evidence changes."
+  },
+  "execution": {
+    "risk": "CAUTION",
+    "rollback": "Omit --refiner-source-attention-control, which defaults false.",
+    "oracle": "Inherited caller-pinned Hy-Nomas PyTorch 2.8.0 MPS adapter, revision 911cea6458a89c2663513ff7099561ec190dd491. Stock CUDA/Magi is outside scope.",
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_gate_atol": 0,
+    "exact_gate_rtol": 0,
+    "native_math": "Metal on the existing chain. Comparator and diagnostic replay use MPS with CPU fallback disabled and one terminal packed-metric export each.",
+    "full_generation_executed": false,
+    "pin_scope": "Selected source pins verified before and after each stage. Toolchain closure is outside scope."
+  },
+  "first_divergence": {
+    "disabled": {
+      "full": "block0.attention",
+      "valid": "block0.attention",
+      "padding": "block0.residual1"
+    },
+    "enabled": {
+      "full": "block0.proj",
+      "valid": "block0.proj",
+      "padding": "block0.residual1"
+    }
+  },
+  "valid_metrics": {
+    "disabled_block0_attention": {
+      "count": 538624,
+      "mismatch_count": 397504,
+      "max_abs": 0.29186487197875977
+    },
+    "enabled": {
+      "block0.q": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.k": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.v": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.attention": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.proj": {
+        "count": 538624,
+        "mismatch_count": 528996,
+        "max_abs": 0.062488555908203125
+      },
+      "block0.residual1": {
+        "count": 538624,
+        "mismatch_count": 527065,
+        "max_abs": 0.475311279296875
+      },
+      "block0.output": {
+        "count": 538624,
+        "mismatch_count": 533703,
+        "max_abs": 0.6151275634765625
+      },
+      "block1.input": {
+        "count": 538624,
+        "mismatch_count": 533703,
+        "max_abs": 0.6151275634765625
+      },
+      "block1.attention": {
+        "count": 538624,
+        "mismatch_count": 351722,
+        "max_abs": 0.84375
+      },
+      "block1.output": {
+        "count": 538624,
+        "mismatch_count": 535325,
+        "max_abs": 1.1998291015625
+      }
+    }
+  },
+  "exact_attention": [
+    {
+      "kind": "source_attention_valid_exact",
+      "tensor": "block0.attention",
+      "region": "valid",
+      "count": 538624,
+      "mismatch_count": 0,
+      "max_abs": 0.0
+    },
+    {
+      "kind": "source_attention_padding_zero_exact",
+      "tensor": "block0.attention",
+      "region": "padding",
+      "count": 2082816,
+      "mismatch_count": 0,
+      "max_abs": 0.0
+    },
+    {
+      "kind": "source_attention_valid_exact",
+      "tensor": "block1.attention",
+      "region": "valid",
+      "count": 538624,
+      "mismatch_count": 351727,
+      "max_abs": 0.84375
+    },
+    {
+      "kind": "source_attention_padding_zero_exact",
+      "tensor": "block1.attention",
+      "region": "padding",
+      "count": 2082816,
+      "mismatch_count": 0,
+      "max_abs": 0.0
+    }
+  ],
+  "diagnostic_replay": {
+    "projection_after_bf16_mismatches": 0,
+    "residual_after_bf16_product_and_sum_mismatches": 0,
+    "full_count": 2621440,
+    "valid_residual_final_round_only_mismatches": 6196,
+    "valid_residual_final_round_only_max_abs": 0.5
+  },
+  "preservation": {
+    "comparisons": {
+      "control": {
+        "preblock": {
+          "sha256": "0c1776171fc1db71e6f5d2c433d3c5736c729218df38e181136521bd8db6e4b7",
+          "tensor_count": 9
+        },
+        "refiner": {
+          "sha256": "c9c97714ea6e94ae7ec0b261296d2b624060bd4e12300aaa3d65d6527718c3ba",
+          "tensor_count": 16
+        },
+        "blocks": {
+          "sha256": "078a67f71849e29f805d2ca7c863ae70818263a7d824e93944150a58b8f2e746",
+          "tensor_count": 37
+        }
+      },
+      "connected-repeat": {
+        "preblock": {
+          "sha256": "009b080e3ec4e6122a80764c7d6587c777d6c594ef2eadf78810e93a360380b0",
+          "tensor_count": 9
+        },
+        "refiner": {
+          "sha256": "c9c97714ea6e94ae7ec0b261296d2b624060bd4e12300aaa3d65d6527718c3ba",
+          "tensor_count": 16
+        },
+        "blocks": {
+          "sha256": "8b6128600fb10d38c04a9466aa52aceb0b98b559fb4d3905721c92af73f9687d",
+          "tensor_count": 37
+        }
+      }
+    },
+    "instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "named_bytes": 944620612
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "python-final",
+      "control",
+      "connected",
+      "connected-repeat",
+      "preservation",
+      "control-compare-final",
+      "connected-compare-final",
+      "replay"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 21314895872,
+    "peak_sampled_process_group_bytes": 2341882232,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/build/hy_nomas_reference_cache_probe",
+      "bytes": 2384288,
+      "sha256": "609f8e3555f76c3b9356f636d17ddf3e67b94eb7d3275932a0c8ad42d3f45f9c"
+    },
+    "native_connected_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/connected-blocks.json",
+      "bytes": 15339,
+      "sha256": "8d4073f26652879d911427749eabf79ecb361d65784c2adab267e50aee766503"
+    },
+    "native_connected_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/connected-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "8b6128600fb10d38c04a9466aa52aceb0b98b559fb4d3905721c92af73f9687d"
+    },
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "source_prelude_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.json",
+      "bytes": 13573,
+      "sha256": "cdfa93533c10a5e16859619200fecf75432365fa87be429d438d90540de029a7"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/control-compare-final.json",
+      "bytes": 61674,
+      "sha256": "43213e6a57bc5e73fda13edd60cedb64b923e280424f8c6076446d6f9b369987"
+    },
+    "connected_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/connected-compare-final.json",
+      "bytes": 62226,
+      "sha256": "ef3fc2f86ea433fff6bd4b41bc58346fc3312340550279a93843cb9930393290"
+    },
+    "replay_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/replay.py",
+      "bytes": 2994,
+      "sha256": "ec57d5140f6f139c52388ee5128c7884c4e1fc6834ee7401deabd78d144f95b6"
+    },
+    "replay_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/logs/replay.out",
+      "bytes": 9011,
+      "sha256": "7dcc34444a60c28f1b53beaf5104525ca004995df577aac37fd310dd9d89d705"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/logs/preservation.out",
+      "bytes": 1089,
+      "sha256": "fe56a4d4b9ed78bad3394daaf19f7a7f8685a1991ce08ac0d9b0191bb84c675c"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

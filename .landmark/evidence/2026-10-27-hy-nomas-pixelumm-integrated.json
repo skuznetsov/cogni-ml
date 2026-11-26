@@ -1,0 +1,549 @@
+{
+  "schema": "cogni_ml.pixelumm_integrated_evidence/v1",
+  "created_at": "2026-10-27T22:47:38.545173+00:00",
+  "base_revision": "521f0c78ea0dd3b5fd30aa5164a5706d09d92392",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded opt-in full-J 36-block plus global head in one native GPU chain: 129 finite bitwise-exact comparisons over three requests/two inputs, direct same-buffer handoff, lifecycle/poison negatives and observed sampled process fit under the unchanged guard. Not full generation or full-pipeline fit.",
+    "adversary_verdict": "ROBUST within integrated native parity, launched source/artifact/comparator, buffer ownership/lifecycle and sampled-memory scope. The 43-69 second timing variance is unexplained; no throughput closure.",
+    "review_correlation": "Same-lineage Mini-Quad review; not an independent neural backend.",
+    "decay_trigger": "Refresh after scoped source, artifacts, backend/device/OS/Torch/toolchain, geometry/precision/layout/lifetime, guard/clock changes or evidence loss; memory admission always expires at launch."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "examples/pixelumm_decoder_integrated_probe.cr",
+      "examples/support/pixelumm_decoder_probe.cr",
+      "spec/pixelumm_decoder_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-integrated.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/pixelumm_decoder_integrated_probe.cr",
+      "examples/support/pixelumm_decoder_probe.cr",
+      "spec/pixelumm_decoder_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-integrated.json"
+    ],
+    "rollback": "Omit the new opt-in probe and wrapper, or revert its atomic local commit; existing arithmetic/defaults remain unchanged.",
+    "excluded": [
+      "full generation",
+      "diffusion",
+      "display postprocessing",
+      "video quality",
+      "stable throughput",
+      "fresh connected upstream neural execution",
+      "independent CUDA backend",
+      "full-pipeline memory fit",
+      "between-poll memory bounds",
+      "zero Metal allocator residency after wrapper release"
+    ]
+  },
+  "geometry": {
+    "grid": [
+      6,
+      44,
+      80
+    ],
+    "J": 21120,
+    "blocks": 36,
+    "width": 4096,
+    "output_shape": [
+      1,
+      3,
+      24,
+      704,
+      1280
+    ],
+    "dtype": "BF16 storage, existing qualified F32 FFN and head math"
+  },
+  "memory_inventory": {
+    "block_unique_named_bytes": 22958105572,
+    "head_owned_named_bytes": 1124851204,
+    "head_new_weight_named_bytes": 25188352,
+    "total_unique_named_bytes": 24108145128,
+    "duplicated_head_input_bytes": 0,
+    "shared_block_workspace": true,
+    "block_output_banks": 2,
+    "head_scratch_aliases_block_workspace": false,
+    "integrated_fit_verified": true,
+    "sampled_integrated_process_group_peak_bytes": 28585872368,
+    "sampled_native_phase_peak_bytes": 28585724912,
+    "fit_scope": "The completed epoch under sampled 28.5 GiB process-group cap and 10% cache-aware reserve; not full pipeline or future admission.",
+    "after_release": {
+      "schema": "cogni_ml.pixelumm_memory_phase/v1",
+      "sequence": 497,
+      "timestamp_clock": "CLOCK_MONOTONIC",
+      "monotonic_ns": 192431241622000,
+      "guard_timestamp_clock": "mach_absolute_time",
+      "guard_monotonic_ns": 192438400005500,
+      "phase": "after_session_release",
+      "slot": null,
+      "request": null,
+      "phase_bytes_kind": null,
+      "phase_bytes": null,
+      "process_phys_footprint_bytes": 1730661912,
+      "process_rss_bytes": 2351349760,
+      "metal_device_allocated_bytes": 24108908544,
+      "named_metal_buffer_live_count": 0,
+      "named_metal_buffer_live_bytes": 0,
+      "named_metal_buffer_peak_bytes": 24108145128,
+      "crystal_gc_heap_bytes": 1623867392,
+      "crystal_gc_free_bytes": 927535104,
+      "crystal_gc_unmapped_bytes": 141426688,
+      "crystal_gc_total_bytes": 44554881443,
+      "memory_categories_additive": false,
+      "memory_category_notes": "Process footprint, RSS, Metal allocation, named MetalBuffer counters, and Crystal GC counters overlap; do not sum them. Opaque MPS bytes are not estimated."
+    }
+  },
+  "guard": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "native_process_cap_bytes": 30601641984,
+    "max_swap_growth_bytes": 67108864,
+    "native_timeout_seconds": 900,
+    "serial_gpu_jobs": true,
+    "samples_do_not_bound_between_poll_spikes": true,
+    "first_startup": {
+      "exit_code": 75,
+      "headroom_bytes": 35047276544,
+      "required_bytes": 37473589658,
+      "child_launched": false
+    },
+    "earlier_rejected_snapshot": {
+      "headroom_bytes": 29908041728,
+      "deficit_bytes": 7565547930
+    },
+    "successful_startup": {
+      "epoch": "native-integrated-full-v2",
+      "source": "native-integrated-full-v2.guard.jsonl first sample",
+      "headroom_bytes": 39332544512,
+      "required_bytes": 37473589658,
+      "child_launched": true,
+      "exit_code": 0
+    },
+    "sample_count": 682,
+    "sampled_process_group_peak_bytes": 28585872368,
+    "minimum_sampled_headroom_bytes": 15875194880,
+    "observed_max_swap_growth_bytes": 0,
+    "process_cap_margin_bytes": 2015769616
+  },
+  "preflight": {
+    "release_build_exit": 0,
+    "crystal_examples": 44,
+    "crystal_failures": 0,
+    "budget_minus_one_bytes": 24108145127,
+    "budget_rejection_exit": 1,
+    "budget_rejection_requests": 0,
+    "budget_rejection_named_live_and_peak_bytes": 0,
+    "composed_edge_pairs": 2,
+    "composition_mutations_rejected": 7,
+    "source_receipt_audit_passed": true,
+    "scoped_source_pins": {
+      "Makefile": "4e8b3e79c47fc1945f6dc0eab287a0460da25fc22bb922f39433aa1846001697",
+      "examples/pixelumm_decoder_integrated_probe.cr": "44c02418d5321274998f53378d1cb4d79d7a735584f019fde5c361c0913a9c20",
+      "examples/support/pixelumm_decoder_probe.cr": "f9e2525c369e01cfa4792def7d9617684875713b6b4323897979e569e2ca1d66",
+      "spec/pixelumm_decoder_probe_spec.cr": "e2ddef025e74c6ec2a2471ed5e117ae8c6150ddfb736062f9f81391b53bc4a1c"
+    }
+  },
+  "oracle": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "hf_revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "checkpoint_header_sha256": "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11",
+    "policy": "Compose separately authenticated source-method MPS controls only at exact block35-output/head-input SHA identity; no fresh connected upstream execution. Full36 and head fixture payload authentication remains enforced by native session construction. Only selected edge/head-weight ranges were freshly streamed in this CPU audit."
+  },
+  "evidence": [
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/integrated-spec-v1.pre-execution.json",
+      "sha256": "01560f96b6b176fc39b7c78821f746bd78f50a417f467e02200a434edf9a4dd2",
+      "bytes": 8677,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/integrated-spec-v1.completion.json",
+      "sha256": "1515d9a1fced2f69b9ad5ec03b80bb5e153c3938823c5812d6267c977aa1dadc",
+      "bytes": 61,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/integrated-spec-v1.out",
+      "sha256": "1c6bd2eebc24921e2af9416fdf7812eff7edc0a02ce98a514572e62476e963ab",
+      "bytes": 300,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/integrated-spec-v1.guard.jsonl",
+      "sha256": "c1153bd31bec7588d4375d4cbb6bd4313b9f3de015d68c84c625e934b5ac9582",
+      "bytes": 3531,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/integrated-build-v1.pre-execution.json",
+      "sha256": "b4be6b8ec7b3c914a640a1fa786af5c7f9d99e5200cdb412d4a188ac738622e9",
+      "bytes": 8853,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/integrated-build-v1.completion.json",
+      "sha256": "b4feb7e3e370e3563b286bd80f4508f83f1eb83e56b947df4841e5bc18ab5a30",
+      "bytes": 62,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/integrated-build-v1.out",
+      "sha256": "2bdb18b999768e9a5d6e6353b47c2cc37c9d33c987ecd814f1242814b5433077",
+      "bytes": 1960,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/integrated-build-v1.guard.jsonl",
+      "sha256": "85651ef198e330953e17cf643f43dc09e1654bffd268c0a6c026f03ad342ca53",
+      "bytes": 8173,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-budget-minus-one-v1.pre-execution.json",
+      "sha256": "a0d7b42fa94f17326b6e30a53d21a6eb680bdb919dd2159b3c64df3c28fdb9c2",
+      "bytes": 13997,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-budget-minus-one-v1.completion.json",
+      "sha256": "729eff750304075559db83ddbc6ff7900a87ef187d27688c7e273ad8bbb956d2",
+      "bytes": 62,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-budget-minus-one-v1.out",
+      "sha256": "43c5f54d601186a9ce9a7ef7dda871f75c6b5fca7396fc80518785bb144401a3",
+      "bytes": 3528,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-budget-minus-one-v1.guard.jsonl",
+      "sha256": "ac73312bd41fbb41058e44d0a1fe1096bd2efee5b5758a315b1736ba71a69193",
+      "bytes": 2589,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v1.pre-execution.json",
+      "sha256": "7e05f69b36702e6ce894ea1d79af47eff0bcbf2bb3198ae6786ae6f9831f9b12",
+      "bytes": 13960,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v1.completion.json",
+      "sha256": "ea3aaf1f77550523b9513de22710709f5268420361d8d206a98cd89c86f67fc5",
+      "bytes": 64,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-full-v1.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-full-v1.guard.jsonl",
+      "sha256": "994fcc8d9cfe53447dc9657813f12f57ef9cb0635491ad9cbc8e89be2ee9e245",
+      "bytes": 1115,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/preflight-qualification-audit-v1.json",
+      "sha256": "d932db7f3e8793bf1b99b1b34e37529915fbeae5b1cad1146929c1b3cd20896a",
+      "bytes": 1303,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/source/qualification_audit_v1.py",
+      "sha256": "85715ed3261b18a0dd5cbaaa22173ffa4c02e28dc0238647f968582873687061",
+      "bytes": 9365,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/pixelumm-decoder-composition-audit-v1.json",
+      "sha256": "196f7df17df55202503f84eb3e64d4dfbfe1a7e354071f48d162f94a0ff853c3",
+      "bytes": 15100,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/source/pixelumm_decoder_composition_audit.py",
+      "sha256": "4316d39dcda36a08316f401fd20bd91944167ad92d9173d401d54b67cafc107f",
+      "bytes": 42111,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-budget-minus-one-v1.json",
+      "sha256": "e76f0c5a47137b6ec3f4faf06b2cf56876bf10f3f6591bed641f8dca09a72f52",
+      "bytes": 7012,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/preflight-snapshot-v2.json",
+      "sha256": "36dd54d7c4bf72ff9531bb44bb88b4486fd74dbde0e9d736df00e48a66d2b47f",
+      "bytes": 421,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/source/experiment-plan-v1.json",
+      "sha256": "4a3ed9edb409683aa989b0d1d17e04b7a55d7af8f9d15cccbaef491f72c8d2bb",
+      "bytes": 1662,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/tmp/run_guarded_v1.py",
+      "sha256": "67b8d49c053419920dfa4f04721fbd96685161caefadd9542f2b503bb8625fb1",
+      "bytes": 6441,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/tmp/launch_integrated_v1.py",
+      "sha256": "58169ef8a43a6f8a98a9fa04ecf993f9d47ef55c7a993a6d26e18f92ddf022b2",
+      "bytes": 1705,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v2.pre-execution.json",
+      "sha256": "28255526382ec99dd7e19eb802a2666cc2c8c4e67600ac8bd10ecf7a94bc519b",
+      "bytes": 13960,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v2.completion.json",
+      "sha256": "69e095e1742eb36adb9cd9caf1700f045e712e2214646899fa97ff9b46e6bbc1",
+      "bytes": 62,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-full-v2.out",
+      "sha256": "c116f2baec8024c6369dcbfe56d459a3c60dc8e3c2c78fc64b578281508472cd",
+      "bytes": 476492,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/logs/native-integrated-full-v2.guard.jsonl",
+      "sha256": "b0a5f09a32dd7dd679c367daa511524704946c6b7d60360ed7d3577895574b3b",
+      "bytes": 210277,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v2.json",
+      "sha256": "5629862a8720c3fa6343aba6e22386618a7ef85733572c5beeafd23e937db5dc",
+      "bytes": 623842,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/source/qualification_audit_v2.py",
+      "sha256": "0c173e923f4700b8d3a15530077fdb59cb6519846456638eb3cec84659ebe1f9",
+      "bytes": 12184,
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/qualification-audit-full-v2.json",
+      "sha256": "63c1b6e1cf9e39912be6c27564559baa6e6ef1f57874f8d0a010b56ddf6a1afb",
+      "bytes": 4191,
+      "availability": "Local external SSD; refresh if missing or changed."
+    }
+  ],
+  "repository_graph_validator": "The skill template and scripts/validate-landmark-graph.sh are absent in this checkout. Packet paths/digests/scope are checked locally. Structural validation is separate from executed GPU and guard evidence.",
+  "updated_at": "2026-10-27T22:59:47.142450+00:00",
+  "numerical": {
+    "comparisons": 129,
+    "finite": true,
+    "bitwise_equal": true,
+    "different_inputs": 2,
+    "requests": 3,
+    "captures_per_request": 43,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "capture_order": [
+      "block0.attention",
+      "block1.attention",
+      "block2.attention",
+      "block3.attention",
+      "block4.attention",
+      "block5.attention",
+      "block6.attention",
+      "block7.attention",
+      "block8.attention",
+      "block9.attention",
+      "block10.attention",
+      "block11.attention",
+      "block12.attention",
+      "block13.attention",
+      "block14.attention",
+      "block15.attention",
+      "block16.attention",
+      "block17.attention",
+      "block18.attention",
+      "block19.attention",
+      "block20.attention",
+      "block21.attention",
+      "block22.attention",
+      "block23.attention",
+      "block24.attention",
+      "block25.attention",
+      "block26.attention",
+      "block27.attention",
+      "block28.attention",
+      "block29.attention",
+      "block30.attention",
+      "block31.attention",
+      "block32.attention",
+      "block33.attention",
+      "block34.attention",
+      "block34.output",
+      "block35.attention",
+      "block35.output",
+      "head.final_norm_tile_major",
+      "head.restored_thw",
+      "head.head_norm_thw",
+      "head.linear_thw",
+      "head.output_thw"
+    ],
+    "unretained_early_block_output_aliases": [
+      "block0.output",
+      "block1.output",
+      "block2.output",
+      "block3.output",
+      "block4.output",
+      "block5.output",
+      "block6.output",
+      "block7.output",
+      "block8.output",
+      "block9.output",
+      "block10.output",
+      "block11.output",
+      "block12.output",
+      "block13.output",
+      "block14.output",
+      "block15.output",
+      "block16.output",
+      "block17.output",
+      "block18.output",
+      "block19.output",
+      "block20.output",
+      "block21.output",
+      "block22.output",
+      "block23.output",
+      "block24.output",
+      "block25.output",
+      "block26.output",
+      "block27.output",
+      "block28.output",
+      "block29.output",
+      "block30.output",
+      "block31.output",
+      "block32.output",
+      "block33.output"
+    ]
+  },
+  "execution": {
+    "terminal_waits_per_request": [
+      1,
+      1,
+      1
+    ],
+    "named_allocations_during_encode": [
+      0,
+      0,
+      0
+    ],
+    "activation_readbacks_before_terminal_wait": [
+      0,
+      0,
+      0
+    ],
+    "postterminal_diagnostic_readbacks": [
+      43,
+      43,
+      43
+    ],
+    "command_segments_per_request": [
+      4579,
+      4579,
+      4579
+    ],
+    "head_input_same_buffer_per_request": [
+      true,
+      true,
+      true
+    ],
+    "named_counter_scope": "ML::MetalBuffer counters; no claim to separately enumerate opaque MPS resources.",
+    "lifecycle_falsifiers": {
+      "head_before_blocks_rejected": true,
+      "early_release_rejected": true,
+      "early_read_rejected": true,
+      "early_reuse_rejected": true,
+      "early_poison_rejected": true
+    },
+    "last_request_poisoned": true
+  },
+  "timing": {
+    "preparation_seconds": 49.650273791000004,
+    "requests": [
+      {
+        "kind": "numerical_gate",
+        "encode_seconds": 43.467001583,
+        "terminal_wait_seconds": 0.9855685,
+        "total_seconds": 44.454365292,
+        "gpu_elapsed_seconds": 44.39258145765052
+      },
+      {
+        "kind": "timed",
+        "encode_seconds": 42.41482725,
+        "terminal_wait_seconds": 0.9408215,
+        "total_seconds": 43.355926875,
+        "gpu_elapsed_seconds": 43.38201837448287
+      },
+      {
+        "kind": "poisoned_different_input_gate",
+        "encode_seconds": 68.164240042,
+        "terminal_wait_seconds": 1.289664083,
+        "total_seconds": 69.455764667,
+        "gpu_elapsed_seconds": 69.47287966587464
+      }
+    ],
+    "scope": "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
+    "interpretation": "One repeat with observers enabled; alternate input request is slower. No causal attribution, stable benchmark, speedup or seconds-per-video-second claim."
+  },
+  "executed_dod": {
+    "command": [
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/tmp/launch_integrated_v1.py",
+      "native",
+      "native-integrated-full-v2"
+    ],
+    "expected": "Three requests/two distinct inputs; every ordered capture finite within unchanged tolerances, one terminal wait/request, zero encode named allocations/preterminal activation reads, direct same-buffer handoff, poison/lifecycle checks and sampled memory through cleanup.",
+    "followup_audit_command": [
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/source/qualification_audit_v2.py",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/qualification-audit-full-v2.json",
+      "native-integrated-full-v2"
+    ],
+    "observed": "PASS_WITHIN_RECORDED_SCOPE; native exit 0, all 129 captures bitwise exact, guard and lifecycle checks pass.",
+    "qualification_audit": "PASS_WITHIN_RECORDED_SCOPE",
+    "report_mutations_rejected": 5,
+    "source_binary_artifact_pins_in_successful_receipt": 43
+  },
+  "reviews": [
+    {
+      "reviewer": "head_upstream_audit",
+      "verdict": "ROBUST within integrated native parity",
+      "method": "Read launched source pins, report, small fixture metadata hashes and edge composition; independently checked all 129 reported actual hashes, order, finite/error counts, two inputs and request counters. No whole tensor-payload rehash.",
+      "limit": "Correlated same-lineage review and common MPS backend; same-buffer report is a runtime-checked boolean, not serialized raw handle identity."
+    },
+    {
+      "reviewer": "head_budget_adversary",
+      "verdict": "ROBUST within lifecycle and sampled-memory scope",
+      "method": "Read source/lifecycle checks, report counters/cleanup and all 682 external samples; confirmed current guard startup, peak margin, reserve and zero observed swap growth.",
+      "limit": "Samples do not bound inter-poll spikes; post-release Metal counter remains nonzero and opaque allocation lifetimes are not decomposed."
+    }
+  ]
+}

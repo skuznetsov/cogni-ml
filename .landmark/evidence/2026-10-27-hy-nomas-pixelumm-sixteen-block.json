@@ -1,0 +1,1491 @@
+{
+  "schema": "cogni_ml.pixelumm_sixteen_block_evidence/v1",
+  "created_at": "2026-10-27T17:46:57.436359+00:00",
+  "base_revision": "52d71ff5331f6321586e49b42477e269d5a1be29",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Sixteen consecutive pretrained PixelUMM blocks pass small/full-J real encoded-image input gates using shared GPU scratch, authenticated BF16 weights and default-off F32 FFN graph operands.",
+    "scope": "Blocks0-15; static repeated official image encoded with actual upstream DCAE and PixelUMM noise/stem; small416stages and full32attention/output boundaries; no denoised sample or complete decoder.",
+    "decay_trigger": "Refresh after scoped source/checkpoint/fixture/toolchain/device/OS/backend/geometry/precision/ownership/lifetime/guard change or loss of external evidence."
+  },
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen",
+  "artifact_alias": "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen",
+  "source": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "hf_repository": "tencent/Hy-Nomas",
+    "hf_revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "hf_path": "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+    "whole_checkpoint_bytes": 31553868864,
+    "whole_checkpoint_hash_verified": false,
+    "downloaded_scope": "Decoder layers0-15 plus169DCAE encoder tensors and4PixelUMM stem tensors; no layers16-35/global head."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "precision": "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; gate/up/down operands cast to F32 graph tensors, with BF16 output casts; graph types do not certify backend physical accumulation precision",
+    "oracle": "Pinned upstream semantics adapted to gathered PyTorch2.6 MPS attention; not compiled upstream CUDA Flex. Native measured path contains no PyTorch.",
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "generation": false,
+    "default_ffn_f32": false
+  },
+  "real_input_and_cache": {
+    "real_inputs": [
+      {
+        "grid": [
+          2,
+          32,
+          32
+        ],
+        "input_lineage": {
+          "clip_construction": "repeat_static_image",
+          "clip_frames": 8,
+          "dcae_encoder_source_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+          "encode_temporal_tile_latent_size": 10,
+          "encode_temporal_tile_overlap_factor": 0.0,
+          "encode_temporal_tile_size": 40,
+          "encoder_receipt_sha256": "f10a1782fda2dbffe0f151cd8f1170f072941c287a8468d2e3c8d15ada654e92",
+          "encoder_subset_bytes": 3666640744,
+          "encoder_subset_sha256": "4c52fbb02ce61fa61e7a90fad521c3daed512247b53492005e72908318203b65",
+          "latent_device": "mps",
+          "latent_dtype": "BF16",
+          "latent_shape": [
+            1,
+            32,
+            2,
+            16,
+            16
+          ],
+          "num_pad_frames": 0,
+          "pixelumm_model_source_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "pixelumm_noise_source_sha256": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+          "source_image_color_order": "RGB",
+          "source_image_crop_xyxy": [
+            384,
+            104,
+            896,
+            616
+          ],
+          "source_image_height": 720,
+          "source_image_resize": false,
+          "source_image_sha256": "53a5d9b435adaf15dd8ffcab1a833b61da4a63079200fb9cec33127ee10f733b",
+          "source_image_width": 1280,
+          "stem_receipt_sha256": "88d8dbda211d5dbe0c817d1036069e1efd57b6567f0eb01b9ab5b691c3409014",
+          "stem_subset_bytes": 52511088,
+          "stem_subset_sha256": "7eb73ebf42f6681e21870dc2d2d4b592846ba15ed5bf5f9a6c7a83d39c2d8d04",
+          "stem_weights_hash_definition": "SHA256 of the contiguous raw F32 safetensors payload for the four stem tensors in original checkpoint data-offset order; the safetensors header is excluded",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+          "vae_input_range": [
+            -1.0,
+            1.0
+          ],
+          "x_dtype": "BF16",
+          "x_permutation_sha256": "daf6c844bc2d4de7b9f4ab6dc1a3d4475bc00b6c75e3e1086705286309d8c2fd",
+          "x_shape": [
+            1,
+            2048,
+            4096
+          ],
+          "x_stem_expression": "embed(patchify(xt.to(dtype))) + _condition_tokens(latent.to(dtype))",
+          "x_token_order": "tile_major",
+          "xt_device": "mps",
+          "xt_dtype": "F32",
+          "xt_frame_seed_formula": "seed*1000003+frame_index",
+          "xt_noise_source": "hymm.models.vae.pixelumm_decoder.autoencoder.PixelUMMDCAELatentDecoder._make_noise",
+          "xt_seed": 42,
+          "xt_shape": [
+            1,
+            3,
+            8,
+            512,
+            512
+          ]
+        },
+        "input_provenance": {
+          "derived_x_sha256": "a0e84523b5b5060798488dd0982a32804192b4b814dc81faa72d269d8d578b46",
+          "kind": "real_latent_xt_pixelumm_stem",
+          "latent_sha256": "22ab04cb2f47c1db5fe8ce6e04e979c3aae695b0d54f037459368b6ec29e01c7",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "xt_sha256": "eef728ab778693bb804ffa6b92e24a6b494762aa6dbe50322c673b9d4d173b0d"
+        },
+        "input_records": {
+          "latent": {
+            "dtype": "BF16",
+            "nbytes": 32768,
+            "offset": 0,
+            "sha256": "22ab04cb2f47c1db5fe8ce6e04e979c3aae695b0d54f037459368b6ec29e01c7",
+            "shape": [
+              1,
+              32,
+              2,
+              16,
+              16
+            ]
+          },
+          "x": {
+            "dtype": "BF16",
+            "nbytes": 16777216,
+            "offset": 25198592,
+            "sha256": "a0e84523b5b5060798488dd0982a32804192b4b814dc81faa72d269d8d578b46",
+            "shape": [
+              1,
+              2048,
+              4096
+            ]
+          },
+          "xt": {
+            "dtype": "F32",
+            "nbytes": 25165824,
+            "offset": 32768,
+            "sha256": "eef728ab778693bb804ffa6b92e24a6b494762aa6dbe50322c673b9d4d173b0d",
+            "shape": [
+              1,
+              3,
+              8,
+              512,
+              512
+            ]
+          }
+        },
+        "manifest_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input-small-seed42.json",
+        "manifest_sha256": "15f996467859edba6f7854b77934e88a6849726f92a72df0d11242cc18c55bb7",
+        "payload_bytes": 41975808,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input-small-seed42.bin",
+        "payload_sha256": "6c3d57d9d0262ae2097ac931ce9c51db3cfb962edf0c6727c343441de22d4e84",
+        "producer_source_sha256": "96094831ba9444e761893d5e2d6c20f2398e65e483907d1bbb22ebb458a5dcf4",
+        "profile": "small",
+        "seed": 42
+      },
+      {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "input_lineage": {
+          "clip_construction": "repeat_static_image",
+          "clip_frames": 24,
+          "dcae_encoder_source_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+          "encode_temporal_tile_latent_size": 10,
+          "encode_temporal_tile_overlap_factor": 0.0,
+          "encode_temporal_tile_size": 40,
+          "encoder_receipt_sha256": "f10a1782fda2dbffe0f151cd8f1170f072941c287a8468d2e3c8d15ada654e92",
+          "encoder_subset_bytes": 3666640744,
+          "encoder_subset_sha256": "4c52fbb02ce61fa61e7a90fad521c3daed512247b53492005e72908318203b65",
+          "latent_device": "mps",
+          "latent_dtype": "BF16",
+          "latent_shape": [
+            1,
+            32,
+            6,
+            22,
+            40
+          ],
+          "num_pad_frames": 0,
+          "pixelumm_model_source_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "pixelumm_noise_source_sha256": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+          "source_image_color_order": "RGB",
+          "source_image_crop_xyxy": [
+            0,
+            8,
+            1280,
+            712
+          ],
+          "source_image_height": 720,
+          "source_image_resize": false,
+          "source_image_sha256": "53a5d9b435adaf15dd8ffcab1a833b61da4a63079200fb9cec33127ee10f733b",
+          "source_image_width": 1280,
+          "stem_receipt_sha256": "88d8dbda211d5dbe0c817d1036069e1efd57b6567f0eb01b9ab5b691c3409014",
+          "stem_subset_bytes": 52511088,
+          "stem_subset_sha256": "7eb73ebf42f6681e21870dc2d2d4b592846ba15ed5bf5f9a6c7a83d39c2d8d04",
+          "stem_weights_hash_definition": "SHA256 of the contiguous raw F32 safetensors payload for the four stem tensors in original checkpoint data-offset order; the safetensors header is excluded",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+          "vae_input_range": [
+            -1.0,
+            1.0
+          ],
+          "x_dtype": "BF16",
+          "x_permutation_sha256": "4e81c6026e99ee2c17c176c4394682ca632602c198c3065ad311a83a3839cf33",
+          "x_shape": [
+            1,
+            21120,
+            4096
+          ],
+          "x_stem_expression": "embed(patchify(xt.to(dtype))) + _condition_tokens(latent.to(dtype))",
+          "x_token_order": "tile_major",
+          "xt_device": "mps",
+          "xt_dtype": "F32",
+          "xt_frame_seed_formula": "seed*1000003+frame_index",
+          "xt_noise_source": "hymm.models.vae.pixelumm_decoder.autoencoder.PixelUMMDCAELatentDecoder._make_noise",
+          "xt_seed": 42,
+          "xt_shape": [
+            1,
+            3,
+            24,
+            704,
+            1280
+          ]
+        },
+        "input_provenance": {
+          "derived_x_sha256": "16dc5c8342db84af16efb5d23c6441ddbc7f841f6efd001560488cab471bda2d",
+          "kind": "real_latent_xt_pixelumm_stem",
+          "latent_sha256": "94e62932bd94be4f1995d93f8aaac00ab9198492e9afbe561b0500778a6f4048",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "xt_sha256": "81e408afe0950902f400957e66a42921c71c9b214e91de4286ec95634dd27622"
+        },
+        "input_records": {
+          "latent": {
+            "dtype": "BF16",
+            "nbytes": 337920,
+            "offset": 0,
+            "sha256": "94e62932bd94be4f1995d93f8aaac00ab9198492e9afbe561b0500778a6f4048",
+            "shape": [
+              1,
+              32,
+              6,
+              22,
+              40
+            ]
+          },
+          "x": {
+            "dtype": "BF16",
+            "nbytes": 173015040,
+            "offset": 259860480,
+            "sha256": "16dc5c8342db84af16efb5d23c6441ddbc7f841f6efd001560488cab471bda2d",
+            "shape": [
+              1,
+              21120,
+              4096
+            ]
+          },
+          "xt": {
+            "dtype": "F32",
+            "nbytes": 259522560,
+            "offset": 337920,
+            "sha256": "81e408afe0950902f400957e66a42921c71c9b214e91de4286ec95634dd27622",
+            "shape": [
+              1,
+              3,
+              24,
+              704,
+              1280
+            ]
+          }
+        },
+        "manifest_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input.json",
+        "manifest_sha256": "1810b9ae81f569f08178ad81442400363e91ece21ccce3cdfdc5baff3d278d61",
+        "payload_bytes": 432875520,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input.bin",
+        "payload_sha256": "63871115fd7ed8b5660c14ab1a212ebfea96b2653f5f9eaf207f7bb42288b468",
+        "producer_source_sha256": "96094831ba9444e761893d5e2d6c20f2398e65e483907d1bbb22ebb458a5dcf4",
+        "profile": "full",
+        "seed": 42
+      },
+      {
+        "grid": [
+          6,
+          44,
+          80
+        ],
+        "input_lineage": {
+          "clip_construction": "repeat_static_image",
+          "clip_frames": 24,
+          "dcae_encoder_source_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+          "encode_temporal_tile_latent_size": 10,
+          "encode_temporal_tile_overlap_factor": 0.0,
+          "encode_temporal_tile_size": 40,
+          "encoder_receipt_sha256": "f10a1782fda2dbffe0f151cd8f1170f072941c287a8468d2e3c8d15ada654e92",
+          "encoder_subset_bytes": 3666640744,
+          "encoder_subset_sha256": "4c52fbb02ce61fa61e7a90fad521c3daed512247b53492005e72908318203b65",
+          "latent_device": "mps",
+          "latent_dtype": "BF16",
+          "latent_shape": [
+            1,
+            32,
+            6,
+            22,
+            40
+          ],
+          "num_pad_frames": 0,
+          "pixelumm_model_source_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "pixelumm_noise_source_sha256": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+          "source_image_color_order": "RGB",
+          "source_image_crop_xyxy": [
+            0,
+            8,
+            1280,
+            712
+          ],
+          "source_image_height": 720,
+          "source_image_resize": false,
+          "source_image_sha256": "53a5d9b435adaf15dd8ffcab1a833b61da4a63079200fb9cec33127ee10f733b",
+          "source_image_width": 1280,
+          "stem_receipt_sha256": "88d8dbda211d5dbe0c817d1036069e1efd57b6567f0eb01b9ab5b691c3409014",
+          "stem_subset_bytes": 52511088,
+          "stem_subset_sha256": "7eb73ebf42f6681e21870dc2d2d4b592846ba15ed5bf5f9a6c7a83d39c2d8d04",
+          "stem_weights_hash_definition": "SHA256 of the contiguous raw F32 safetensors payload for the four stem tensors in original checkpoint data-offset order; the safetensors header is excluded",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+          "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+          "vae_input_range": [
+            -1.0,
+            1.0
+          ],
+          "x_dtype": "BF16",
+          "x_permutation_sha256": "4e81c6026e99ee2c17c176c4394682ca632602c198c3065ad311a83a3839cf33",
+          "x_shape": [
+            1,
+            21120,
+            4096
+          ],
+          "x_stem_expression": "embed(patchify(xt.to(dtype))) + _condition_tokens(latent.to(dtype))",
+          "x_token_order": "tile_major",
+          "xt_device": "mps",
+          "xt_dtype": "F32",
+          "xt_frame_seed_formula": "seed*1000003+frame_index",
+          "xt_noise_source": "hymm.models.vae.pixelumm_decoder.autoencoder.PixelUMMDCAELatentDecoder._make_noise",
+          "xt_seed": 43,
+          "xt_shape": [
+            1,
+            3,
+            24,
+            704,
+            1280
+          ]
+        },
+        "input_provenance": {
+          "derived_x_sha256": "88f20d788b91e4c891e44779d9ffafbeb6a286a4bf47f0877364448a856bc02d",
+          "kind": "real_latent_xt_pixelumm_stem",
+          "latent_sha256": "94e62932bd94be4f1995d93f8aaac00ab9198492e9afbe561b0500778a6f4048",
+          "stem_weights_sha256": "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c0f0ec1b",
+          "xt_sha256": "ae70506acdfd0fac7e69fe792cdb647ddd3c24654b0d06a63f87794ac015a17e"
+        },
+        "input_records": {
+          "latent": {
+            "dtype": "BF16",
+            "nbytes": 337920,
+            "offset": 0,
+            "sha256": "94e62932bd94be4f1995d93f8aaac00ab9198492e9afbe561b0500778a6f4048",
+            "shape": [
+              1,
+              32,
+              6,
+              22,
+              40
+            ]
+          },
+          "x": {
+            "dtype": "BF16",
+            "nbytes": 173015040,
+            "offset": 259860480,
+            "sha256": "88f20d788b91e4c891e44779d9ffafbeb6a286a4bf47f0877364448a856bc02d",
+            "shape": [
+              1,
+              21120,
+              4096
+            ]
+          },
+          "xt": {
+            "dtype": "F32",
+            "nbytes": 259522560,
+            "offset": 337920,
+            "sha256": "ae70506acdfd0fac7e69fe792cdb647ddd3c24654b0d06a63f87794ac015a17e",
+            "shape": [
+              1,
+              3,
+              24,
+              704,
+              1280
+            ]
+          }
+        },
+        "manifest_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input-full-seed43.json",
+        "manifest_sha256": "cdc14693daadac084b22563fb66df049672e706ac2244cbed340a61f1a5213c2",
+        "payload_bytes": 432875520,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-real-input-full-seed43.bin",
+        "payload_sha256": "f1d19e0cfe28746125a74d51fc4fec769d0498bf21b808f7ef55151d28dab341",
+        "producer_source_sha256": "96094831ba9444e761893d5e2d6c20f2398e65e483907d1bbb22ebb458a5dcf4",
+        "profile": "full",
+        "seed": 43
+      }
+    ],
+    "cache_summary": [
+      {
+        "metadata_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-sixteen-bf16-cache.json",
+        "metadata_sha256": "2426d2e032ca3a7e3dc6670047e95188b79b5b6e27fecb4f70c6ae6cb2c46ba8",
+        "payload_bytes": 6174285824,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/source/pixelumm-sixteen-bf16-cache.bin",
+        "payload_sha256": "6550cff79d915fd6c29efcc52edc5c91809c4eb6bbe379e310b57b10eaec167b",
+        "weight_count": 208
+      },
+      {
+        "metadata_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block01-bf16-cache.json",
+        "metadata_sha256": "ee2f4b17cbc4d0c6705c460df726d614c264581d2d425f40dbfccaffe6e21374",
+        "payload_bytes": 771785728,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block01-bf16-cache.bin",
+        "payload_sha256": "d3ac87bc7bee285d4ff2cce2eb0f4f72c10d8b34de5bba09c5dd4b4b39e435ca",
+        "weight_count": 26
+      },
+      {
+        "metadata_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block0123-bf16-cache-v1.json",
+        "metadata_sha256": "c302e06ef2e73a08120cd0ed96fd48cdff3e77bf5e499d6231108e44fbe61846",
+        "payload_bytes": 1543571456,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block0123-bf16-cache-v1.bin",
+        "payload_sha256": "b743eea7fbd5d744911c52bfa0b5181592027c0812e2e9784ef1b0bf2741e1c6",
+        "weight_count": 52
+      },
+      {
+        "metadata_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block01234567-bf16-cache-v1.json",
+        "metadata_sha256": "eb46d757e5b9db9b4516edde58adbb7956360998c82a4d748f3e2705433a8b1e",
+        "payload_bytes": 3087142912,
+        "payload_path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/source/block01234567-bf16-cache-v1.bin",
+        "payload_sha256": "f29b45fa8a1f6d809f102977866ba4cbbee40dd7d987b3d27242ceaef86e1d06",
+        "weight_count": 104
+      }
+    ],
+    "finite_check_scope": "Producer checks terminal serialization copies of latent/xt/x. Reference checks imported BF16 x payload on CPU before prefix execution. Native graph has no added wait/readback.",
+    "provenance_boundary": "Native validates authenticated provenance metadata and x hash; origin relies on pinned executed Python producer/consumer, not metadata fields alone."
+  },
+  "native_runs": {
+    "native-regression-two-f32-v1": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-regression-two-f32-v1.json",
+        "bytes": 44409,
+        "sha256": "0841997da6eec3edbc7196884e9caa8ba39a1fdcb5d6745504c55a931931c4cd"
+      },
+      "blocks": 2,
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "named_bytes": 1981686916,
+      "owned_named_bytes": 1191026820,
+      "borrowed_bytes": 790660096,
+      "ffn_f32_by_slot": [
+        true,
+        true
+      ],
+      "preparation_seconds": 3.255288375,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.234425209,
+          "gpu_elapsed_seconds": 0.21500891671166755,
+          "command_segments": 33,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 52,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.214976918,
+          "gpu_elapsed_seconds": 0.21338770820875652,
+          "command_segments": 33,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 52,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 0.214976918
+    },
+    "native-regression-four-f32-v1": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-regression-four-f32-v1.json",
+        "bytes": 86043,
+        "sha256": "62ed73f16fa0f5efbeab9e06f5dab90bbb0db95d3a81c8d4a2d35db6bf22c2b6"
+      },
+      "blocks": 4,
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "named_bytes": 3687245956,
+      "owned_named_bytes": 2124800132,
+      "borrowed_bytes": 1562445824,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "preparation_seconds": 6.1135395,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.43269962500000003,
+          "gpu_elapsed_seconds": 0.42278345840168186,
+          "command_segments": 67,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 104,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.43489058399999997,
+          "gpu_elapsed_seconds": 0.42408474994590506,
+          "command_segments": 67,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 104,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 0.43489058399999997
+    },
+    "native-regression-eight-f32-v1": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-regression-eight-f32-v1.json",
+        "bytes": 169246,
+        "sha256": "eeb0fc159b52070e341a3f0b6657ebdcbe4c78a0f68d42ae2fc5dd80a96b61fe"
+      },
+      "blocks": 8,
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "named_bytes": 7098364036,
+      "owned_named_bytes": 3992346756,
+      "borrowed_bytes": 3106017280,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "preparation_seconds": 12.603188625,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.8687564999999999,
+          "gpu_elapsed_seconds": 0.8580564582371153,
+          "command_segments": 135,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 208,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.843145209,
+          "gpu_elapsed_seconds": 0.8405449584242888,
+          "command_segments": 135,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 208,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 0.843145209
+    },
+    "native-sixteen-real-small-f32-v1": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-sixteen-real-small-f32-v1.json",
+        "bytes": 335989,
+        "sha256": "1216608d881cfd59bdf15b4edc46f4cce01c1d81591cff89a0b9e469c4db058f"
+      },
+      "blocks": 16,
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "named_bytes": 13920600196,
+      "owned_named_bytes": 7727440004,
+      "borrowed_bytes": 6193160192,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "preparation_seconds": 22.176257,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 1.65874925,
+          "gpu_elapsed_seconds": 1.6447761664458085,
+          "command_segments": 271,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 416,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 1.64740125,
+          "gpu_elapsed_seconds": 1.6447605835273862,
+          "command_segments": 271,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 416,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 1.64740125
+    },
+    "native-sixteen-real-full-f32-v1": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-sixteen-real-full-f32-v1.json",
+        "bytes": 44397,
+        "sha256": "7c8e8fceb1483115efa66a56d3d6e3297240fc56eccc199dd6ba6240149081f7"
+      },
+      "blocks": 16,
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 14202158052,
+      "owned_named_bytes": 7833230308,
+      "borrowed_bytes": 6368927744,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "preparation_seconds": 24.69533475,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 19.43060475,
+          "gpu_elapsed_seconds": 19.410620333161205,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "warmup",
+          "passed": true,
+          "total_seconds": 19.071555833999998,
+          "gpu_elapsed_seconds": 19.078562874841737,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 2,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 20.753747668,
+          "gpu_elapsed_seconds": 20.765894500364084,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 3,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 20.657599417,
+          "gpu_elapsed_seconds": 20.66983966616681,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 4,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 21.690570417,
+          "gpu_elapsed_seconds": 21.70012920766021,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 5,
+          "kind": "poisoned_different_input_gate",
+          "passed": true,
+          "total_seconds": 21.631355501,
+          "gpu_elapsed_seconds": 21.637709624657873,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": true,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 20.753747668
+    },
+    "native-sixteen-real-full-f32-v2": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/native-sixteen-real-full-f32-v2.json",
+        "bytes": 44406,
+        "sha256": "5d61433d4452229d801a6365bd5ff52bfd826e1022aeda094de41b3ee6b2cb31"
+      },
+      "blocks": 16,
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 14202158052,
+      "owned_named_bytes": 7833230308,
+      "borrowed_bytes": 6368927744,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "preparation_seconds": 14.842658583,
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 20.449610083,
+          "gpu_elapsed_seconds": 20.434010748489527,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": true,
+          "early_release_rejected": true,
+          "early_read_rejected": true,
+          "early_reuse_rejected": true,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 1,
+          "kind": "warmup",
+          "passed": true,
+          "total_seconds": 19.319078874000002,
+          "gpu_elapsed_seconds": 19.326982124854112,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 2,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 19.138901125,
+          "gpu_elapsed_seconds": 19.15048991542426,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 3,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 19.115199458000003,
+          "gpu_elapsed_seconds": 19.12703420795151,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 0,
+          "all_compared_words_finite_and_exact": false
+        },
+        {
+          "request": 4,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 19.45738025,
+          "gpu_elapsed_seconds": 19.469021291239187,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": false,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        },
+        {
+          "request": 5,
+          "kind": "poisoned_different_input_gate",
+          "passed": true,
+          "total_seconds": 19.585413917,
+          "gpu_elapsed_seconds": 19.59293487414834,
+          "command_segments": 2033,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "wrong_order_rejected": false,
+          "early_release_rejected": false,
+          "early_read_rejected": false,
+          "early_reuse_rejected": false,
+          "shared_scratch_poisoned_before_request": true,
+          "compared_tensors": 32,
+          "all_compared_words_finite_and_exact": true
+        }
+      ],
+      "timed_median_seconds": 19.138901125
+    }
+  },
+  "numerical_summary": {
+    "all_comparisons": 1752,
+    "sixteen_block_comparisons": 1024,
+    "earlier_depth_regression_comparisons": 728,
+    "full_sixteen_boundary_comparisons": 192,
+    "small_sixteen_stage_comparisons": 832,
+    "all_compared_words_finite_and_exact": true,
+    "native_processes": 6,
+    "native_requests": 20,
+    "sixteen_block_requests": 14,
+    "full_sixteen_timed_requests": 6,
+    "fifteen_direct_gpu_handoffs_per_sixteen_request": true
+  },
+  "memory": {
+    "full_sixteen_named_bytes": 14202158052,
+    "sampled_not_true_peak": true,
+    "gpu_run_summaries": [
+      {
+        "cap_mib": 12288,
+        "duration_seconds": 12.9400333329977,
+        "end_monotonic": 169896.427985166,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 83,
+        "minimum_sampled_headroom_bytes": 34858319872,
+        "name": "native-regression-two-f32-v1",
+        "sampled_peak_group_footprint_bytes": 2908260752,
+        "samples": 27,
+        "start_monotonic": 169883.487951833,
+        "timeout_sec": 600
+      },
+      {
+        "cap_mib": 12288,
+        "duration_seconds": 23.899462040979415,
+        "end_monotonic": 169920.437994916,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 80,
+        "minimum_sampled_headroom_bytes": 33164607488,
+        "name": "native-regression-four-f32-v1",
+        "sampled_peak_group_footprint_bytes": 4672769672,
+        "samples": 48,
+        "start_monotonic": 169896.538532875,
+        "timeout_sec": 600
+      },
+      {
+        "cap_mib": 12288,
+        "duration_seconds": 48.340618291986175,
+        "end_monotonic": 169968.901937,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 75,
+        "minimum_sampled_headroom_bytes": 27401797632,
+        "name": "native-regression-eight-f32-v1",
+        "sampled_peak_group_footprint_bytes": 8176949344,
+        "samples": 95,
+        "start_monotonic": 169920.561318708,
+        "timeout_sec": 600
+      },
+      {
+        "cap_mib": 12288,
+        "duration_seconds": 40.47946404200047,
+        "end_monotonic": 170021.598283625,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 79,
+        "minimum_sampled_headroom_bytes": 30408835072,
+        "name": "real-input-small-producer-v1",
+        "sampled_peak_group_footprint_bytes": 5001381688,
+        "samples": 80,
+        "start_monotonic": 169981.118819583,
+        "timeout_sec": 600
+      },
+      {
+        "cap_mib": 12288,
+        "duration_seconds": 41.06466133298818,
+        "end_monotonic": 170370.498584541,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 79,
+        "minimum_sampled_headroom_bytes": 24098750464,
+        "name": "real-input-small-producer-v2",
+        "sampled_peak_group_footprint_bytes": 5003544304,
+        "samples": 81,
+        "start_monotonic": 170329.433923208,
+        "timeout_sec": 600
+      },
+      {
+        "cap_mib": 20480,
+        "duration_seconds": 58.57881704199826,
+        "end_monotonic": 170484.866759,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 66,
+        "minimum_sampled_headroom_bytes": 19190890496,
+        "name": "sixteen-reference-real-small-v3",
+        "sampled_peak_group_footprint_bytes": 17682302944,
+        "samples": 115,
+        "start_monotonic": 170426.287941958,
+        "timeout_sec": 1800
+      },
+      {
+        "cap_mib": 20480,
+        "duration_seconds": 92.2323069999984,
+        "end_monotonic": 170583.292664583,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 69,
+        "minimum_sampled_headroom_bytes": 25860931584,
+        "name": "native-sixteen-real-small-f32-v1",
+        "sampled_peak_group_footprint_bytes": 15293770768,
+        "samples": 179,
+        "start_monotonic": 170491.060357583,
+        "timeout_sec": 900
+      },
+      {
+        "cap_mib": 28672,
+        "duration_seconds": 442.7896741250006,
+        "end_monotonic": 171069.416825958,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 50,
+        "minimum_sampled_headroom_bytes": 13763117056,
+        "name": "real-input-full42-producer-v1",
+        "sampled_peak_group_footprint_bytes": 24662066880,
+        "samples": 853,
+        "start_monotonic": 170626.627151833,
+        "timeout_sec": 900
+      },
+      {
+        "cap_mib": 28672,
+        "duration_seconds": 600.9126816249918,
+        "end_monotonic": 171670.484326541,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 49,
+        "minimum_sampled_headroom_bytes": 7275610112,
+        "name": "real-input-full43-producer-v1",
+        "sampled_peak_group_footprint_bytes": 24658396816,
+        "samples": 1158,
+        "start_monotonic": 171069.571644916,
+        "timeout_sec": 900
+      },
+      {
+        "cap_mib": 26624,
+        "duration_seconds": 99.1180371659866,
+        "end_monotonic": 171781.001447416,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 63,
+        "minimum_sampled_headroom_bytes": 9747234816,
+        "name": "sixteen-reference-real-full42-v1",
+        "sampled_peak_group_footprint_bytes": 20920535200,
+        "samples": 191,
+        "start_monotonic": 171681.88341025,
+        "timeout_sec": 1800
+      },
+      {
+        "cap_mib": 23552,
+        "duration_seconds": 87.84339104098035,
+        "end_monotonic": 172014.426695791,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 61,
+        "minimum_sampled_headroom_bytes": 8943026176,
+        "name": "sixteen-reference-real-full43-v2",
+        "sampled_peak_group_footprint_bytes": 20923336912,
+        "samples": 171,
+        "start_monotonic": 171926.58330475,
+        "timeout_sec": 1800
+      },
+      {
+        "cap_mib": 23552,
+        "duration_seconds": 241.1986591659952,
+        "end_monotonic": 172255.846465541,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 73,
+        "minimum_sampled_headroom_bytes": 16665739264,
+        "name": "native-sixteen-real-full-f32-v1",
+        "sampled_peak_group_footprint_bytes": 19995325520,
+        "samples": 465,
+        "start_monotonic": 172014.647806375,
+        "timeout_sec": 1200
+      },
+      {
+        "cap_mib": 23552,
+        "duration_seconds": 223.3367263340042,
+        "end_monotonic": 172479.356590375,
+        "exit_code": 0,
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_pressure_free_pct": 74,
+        "minimum_sampled_headroom_bytes": 23873126400,
+        "name": "native-sixteen-real-full-f32-v2",
+        "sampled_peak_group_footprint_bytes": 19994850360,
+        "samples": 431,
+        "start_monotonic": 172256.019864041,
+        "timeout_sec": 1200
+      }
+    ],
+    "runtime_floor_pct": 10,
+    "system_swap_growth_stop_bytes": 67108864,
+    "full_sixteen_process_cap_bytes": 24696061952,
+    "lifecycle": "One terminal wait, zero early activation reads and zero named encode allocations for every native request; opaque MPS allocations are outside named counters."
+  },
+  "verification": {
+    "crystal_examples": 38,
+    "python_tests": 55,
+    "receipts": {
+      "build-native16-v3": {
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/build-native16-v3.pre-execution.json",
+          "bytes": 7036,
+          "sha256": "d7baa8c3fa5320f18710dc8d7e2bd339f7eef0ec8877df90e523f10dd155ad53"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/build-native16-v3.completion.json",
+          "bytes": 65,
+          "sha256": "27ad24783140e933dee39df05e2a488d4db01c571a673132d32bdf4848ad92a6"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/build-native16-v3.out",
+          "bytes": 3616,
+          "sha256": "afbcd9cba38d65615d1918bcd24ccca21d0fa9ef52e38644901359ebff1c9aaa"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/build-native16-v3.guard.jsonl",
+          "bytes": 20978,
+          "sha256": "70f6d465e3faee2322de3edb2b593633d694d179111fdcf91528a7d94a604bfb"
+        }
+      },
+      "python-cpu-gate-v3": {
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/python-cpu-gate-v3.pre-execution.json",
+          "bytes": 6862,
+          "sha256": "224f5efde9e458debb4c079a1eea6407948c3049a323cc03095928cc816b11a1"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/python-cpu-gate-v3.completion.json",
+          "bytes": 65,
+          "sha256": "a957e16d56cd41d397da116d7967dd3620227fe58ea5ca69f6a51f2b0f9a534a"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/python-cpu-gate-v3.out",
+          "bytes": 4882,
+          "sha256": "267631a7e8893a76219364f5270fa2c681dd0d764536d3271290a6baf91c23f2"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/python-cpu-gate-v3.guard.jsonl",
+          "bytes": 2588,
+          "sha256": "58b4f4214d5fb2fa49a9d3fd6a88e686d9a7d961dd5be619aa82976dc05196f0"
+        }
+      },
+      "sixteen-final-audit-v4": {
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/sixteen-final-audit-v4.pre-execution.json",
+          "bytes": 6826,
+          "sha256": "ef7dcfd859328e3ff26446901f89c11a5bb7a066dd7c5545a8bbf572b0a319ca"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/sixteen-final-audit-v4.completion.json",
+          "bytes": 65,
+          "sha256": "040cf7a5122da14c7cd27af73501e95bf1c0c417391311d4d3393d318a8d4482"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/sixteen-final-audit-v4.out",
+          "bytes": 276,
+          "sha256": "c8f8a64be6a3785aa631cc1775c319d2086baa23856fbca8d3deade9e5342168"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/logs/sixteen-final-audit-v4.guard.jsonl",
+          "bytes": 58041,
+          "sha256": "35e64de16e7a49f7d72aaacd56c0f29d1ed2400357a06c7184a398b1d6f10f68"
+        }
+      }
+    },
+    "final_artifact_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/sixteen-validation-v5.json",
+      "bytes": 113410,
+      "sha256": "5614304f1557a153434b29727c0a7852eee6e12bcdce3aa5792450011a314e4d"
+    },
+    "final_artifact_audit_summary": {
+      "historical_nonzero_runs_excluded": 3,
+      "maximum_sampled_group_footprint_bytes": 24662066880,
+      "maximum_sampled_swap_growth_bytes": 0,
+      "minimum_sampled_headroom_bytes": 7275610112,
+      "native_comparisons": 1752,
+      "native_requests": 20,
+      "native_runs": 6,
+      "successful_guarded_gpu_runs": 13,
+      "timed_median_seconds": 19.1270502915,
+      "timed_native_requests": 10,
+      "timed_total_seconds": 123.953812296
+    },
+    "audit_aggregate_timing_scope": "Mixed 2/4/8/16 depths and small/full grids; not a sixteen-block latency benchmark. Use native_runs full-grid timed medians.",
+    "audit_script": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/tmp/validate_sixteen_v5.py",
+      "bytes": 134477,
+      "sha256": "d7fcc682961f11799314bcd20ac139998a2a750eb582dc97766fe4aa63a9bdf5"
+    },
+    "scope": "Full streamed payload hashes/record extents, source/binary pins, actualargv/guard caps/deadlines/swap/floor and non-overlapping successful GPU work. See external index for all artifacts.",
+    "corrected_routes": [
+      "Double-digit capture names require numeric-owner prefix length, not fixed seven-character slicing.",
+      "Numeric cache owner set compares sorted expected and actual strings, avoiding10-versus2 lexical ordering assumptions.",
+      "Producer/consumer distinguish raw tensor payload size from complete safetensors subset size.",
+      "Audit v2 rejected a valid multi-chunk record by rechecking its start on each chunk; fixed interval invariant and >4MiB self-test in v3.",
+      "Audit v3 assumed a scalar reference block_count; v4 validates actual schema and adds metadata-first checking.",
+      "Audit v4 expected worktree-relative build objects; v5 binds exact external build object pins and checks their presence/size before payload hashing."
+    ],
+    "retained_nonfinal_attempts": "External failed build/falsifier, earlier audit versions and startup-blocked references are preserved; none support the passing numerical claim.",
+    "metadata_index_is_not_hermetic_or_hardware_attestation": true
+  },
+  "pipeline_planning": {
+    "artifact": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/results/pipeline-budget-v2.json",
+      "bytes": 14873,
+      "sha256": "57716eddd8fa6edf1942799dbf7f37415defb2d83d26c8ba739a9409d8867c80"
+    },
+    "scope": "24 frames at24fps,704x1280,first segment,camera/action/history off; estimates are not end-to-end measurements",
+    "initialization_mode": {
+      "mode": "first-segment text-to-video, plain text only",
+      "explicit_overrides": {
+        "video_size": [
+          704,
+          1280
+        ],
+        "video_length": "frame",
+        "num_frames": 24,
+        "parallelism.sp_size": 1
+      },
+      "preset_defaults_differ": {
+        "video_size": [
+          720,
+          1280
+        ],
+        "video_length": "event",
+        "parallelism.sp_size": 8
+      },
+      "qwen_image_pixels_supplied": false,
+      "preserve_kv_cache": false,
+      "seg_ar_segment_vae_decode": false,
+      "dcae_encoder_required": false,
+      "dcae_diagnostic_input_preparation_is_not_a_t2v_stage": true,
+      "source_evidence": [
+        "hymm/pipeline/base.py:268-295",
+        "hymm/models/text_encoder/encoder.py:421-426",
+        "hymm/inference.py:2199-2240",
+        "hymm/models/vae/pixelumm_decoder/autoencoder.py:201-205",
+        "configs/experiment/inference.yaml:76-88"
+      ]
+    },
+    "inventories": {
+      "qwen_s1280_observed_named": 12738809672,
+      "dit_q4_padded_observed_named": 10895796804,
+      "dit_q4_compact_observed_named": 10060081732,
+      "pixel36_projected_workspace_no_captures": 8525290468,
+      "pixel36_exact_all_decoder_bf16_weight_bytes": 13943586816,
+      "pixel36_projected_named_no_captures_including_global_weights": 22663519204,
+      "pixel36_projected_block_slots_only_no_captures": 22612075492,
+      "pixel36_diagnostic_attention_addition": 6228541440,
+      "one_second_rgb_f32_output": 259522560
+    },
+    "composition": {
+      "all_resident_compact_named_bytes": 45462410608,
+      "all_resident_compact_named_gib": 42.3401692956686,
+      "all_resident_compact_named_plus_floor_gib": 48.7401692956686,
+      "stage_release_named_peak_gib": 21.10704705491662,
+      "ten_percent_physical_floor_gib": 6.4,
+      "all_resident_compact_named_with_upstream_kv_and_masks_bytes": 51266987248,
+      "all_resident_with_upstream_kv_and_masks_gib": 47.746102556586266,
+      "all_resident_with_upstream_kv_and_masks_plus_floor_gib": 54.146102556586264,
+      "stage_release_pixel_phase_with_kv_retained_gib": 26.512980315834284,
+      "stage_release_pixel_phase_with_kv_retained_plus_floor_gib": 32.91298031583428,
+      "stage_release_pixel_phase_with_kv_released_plus_floor_gib": 27.50704705491662
+    },
+    "conditional_upstream_cache": {
+      "scope": "Pinned seg_ar dense BF16 KV allocation at batch1, SP1, one first segment, text_len1280, without compressed KV or CPU offload.",
+      "native_connected_cache_policy_implemented_and_qualified": false,
+      "max_cache_tokens": 13120,
+      "kv_shape_per_block": [
+        1,
+        13120,
+        16,
+        128
+      ],
+      "num_blocks": 54,
+      "kv_bytes": 5803868160,
+      "bool_mask_bytes": 708480,
+      "total_bytes": 5804576640,
+      "source_evidence": [
+        "hymm/pipeline/causal_ar.py:523-621",
+        "hymm/pipeline/causal_ar.py:1816-1830"
+      ],
+      "mask_bytes_do_not_include_later_attention_masks": true,
+      "m64_compute_does_not_automatically_change_upstream_text_len_or_cache_capacity": true,
+      "cache_omission_or_release_requires_a_lifetime_and_consumer_contract": true,
+      "upstream_drops_cache_references_before_vae_decode": "For this non-streaming, non-preserved request: hymm/pipeline/causal_ar.py:3400-3441,3531-3595; allocator backing release in native integration remains unqualified"
+    },
+    "observed_pixel16": [
+      {
+        "name": "native-sixteen-real-full-f32-v1",
+        "timed_request_seconds": [
+          20.753747668,
+          20.657599417,
+          21.690570417
+        ],
+        "median_seconds": 20.753747668,
+        "named_bytes": 14202158052,
+        "sampled_peak_group_footprint_bytes": 19995325520,
+        "minimum_sampled_headroom_bytes": 16665739264,
+        "opaque_and_process_overhead_is_not_linear_in_depth": true
+      },
+      {
+        "name": "native-sixteen-real-full-f32-v2",
+        "timed_request_seconds": [
+          19.138901125,
+          19.115199458000003,
+          19.45738025
+        ],
+        "median_seconds": 19.138901125,
+        "named_bytes": 14202158052,
+        "sampled_peak_group_footprint_bytes": 19994850360,
+        "minimum_sampled_headroom_bytes": 23873126400,
+        "opaque_and_process_overhead_is_not_linear_in_depth": true
+      }
+    ],
+    "projections_not_measurements": {
+      "qualified_dit_text_regime": {
+        "storage_rows": 64,
+        "valid_tokens": 23,
+        "source_rows": 1280,
+        "live_qwen_conditioning_and_other_text_lengths_qualified": false,
+        "target_requires_compaction_enabled_and_matching_text_regime": true
+      },
+      "pixel36_block_sequence_seconds_if_16_block_average_cost_transfers": [
+        46.695932252999995,
+        43.06252753125
+      ],
+      "pixel36_model": "36/16 times each observed 16-block median; omits global stem/head, may change with retained-plan allocator and thermal/queue state",
+      "dit54_compact_epoch_median_seconds": [
+        7.182975791,
+        10.481859083
+      ],
+      "first_second_component_subtotal_epoch_envelope_seconds": [
+        100.52633385925,
+        130.550804917
+      ],
+      "first_second_component_subtotal_formula": "8*T_DiT54 + (36/16)*T_Pixel16; excludes Qwen, global stem/head, scheduler, output and loading; measurement epochs are not matched",
+      "pixel36_two_output_bank_saving_bytes": 5882511360,
+      "pixel36_two_output_bank_projected_named_bytes": 16781007844,
+      "ring_implemented": false,
+      "stage_release_implemented_and_qualified": false,
+      "actual_whole_pipeline_peak_bytes": null,
+      "actual_end_to_end_seconds_per_video_second": null
+    },
+    "actual_whole_pipeline_peak_bytes": null,
+    "actual_end_to_end_seconds_per_video_second": null,
+    "stage_release_and_two_bank_ring_implemented": false
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Bounded16prefix numerical/lifecycle/artifact/guard claims; planning arithmetic only under explicit M64 text and conditional SP1 cache assumptions. Whole-pipeline peak, latency and quality remain unqualified.",
+    "lineage": "Root plus same-lineage native/reference/pipeline reviews; correlated, not independent replication.",
+    "strongest_counterexamples": "Distinct actual noise/stem input with NaN-poisoned shared scratch; full ordered capture coverage including blocks10-15; exact old-depth ceilings; footprint versus named-buffer and partial-latency versus end-to-end distinction.",
+    "planning_corrections": "Review exposed omitted upstream dense KV storage and M64/23-valid-token timing scope; both are now explicit, with configuration/source pins and unqualified native lifetime policy."
+  },
+  "residual_risk": [
+    "Static encoded image input is not a denoised diffusion output or moving-video quality sample.",
+    "Only blocks0-15 are qualified; remaining20blocks, global projections and full pipeline are unqualified.",
+    "Compiled CUDA Flex and full checkpoint hash are unqualified.",
+    "MPS graph types do not prove physical accumulation precision.",
+    "Memory polling cannot bound between-sample peaks; opaque allocations can grow with more retained plans.",
+    "Measured epochs drift; no A/A causal attribution, cold-load benchmark, or generated-video throughput result.",
+    "Proposed stage release/output ring need explicit lifecycle/alias contracts and fresh qualification.",
+    "DiT timing projection is limited to qualified M64/23-valid-token saved conditioning. Native connected cache allocation and physical release are unqualified."
+  ],
+  "next_falsifier": "Admit wider decoder only after refreshing memory; test two-bank lifetimes/alias safety before claiming whole-pipeline residency. Qualify global stem/head and connected stage boundaries before end-to-end latency or video-quality claims.",
+  "rollback": "Omit sixteen-block entry point and --ffn-f32; keep earlier probes and BF16 default. Production arithmetic/sync sources unchanged.",
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-pixelumm-block-frontier.md",
+    "landmarks": "LANDMARKS.md"
+  }
+}

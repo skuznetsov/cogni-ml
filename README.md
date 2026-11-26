@@ -1462,6 +1462,18 @@ puts "dim=#{vec.size}"
 vecs = model.embed_batch(["Hello", "World", "Crystal"])
 ```
 
+## Hy-Nomas Video
+
+Hy-Nomas is an opt-in Apple Silicon Metal experiment. The native generator
+includes the Qwen2.5-VL prompt path, a distilled DiT, continuation state, and
+PixelUMM and DCAE-V probes. Build the generation entry points with
+`make hy_nomas_generate hy_nomas_sequence_generate`. Model weights are supplied
+separately. For a relocated or recovered PixelUMM cache, pass its absolute
+manifest path with `--decoder-cache` and its trusted SHA-256 with
+`--decoder-cache-sha`. See the [generation guide](docs/hy-nomas-generation-frontier.md),
+[block qualification](docs/hy-nomas-native-frontier.md), and
+[source notices](third_party/VIDEO_NOTICES.md).
+
 ## Metal Kernels
 
 | Kernel | Purpose |
@@ -1498,4 +1510,4 @@ NVIDIA/CUDA support is currently an experimental backend-probe track, not a full
 
 ## License
 
-MIT
+The core library is MIT licensed. See the [video source notices](third_party/VIDEO_NOTICES.md) for the terms of the included adaptations.

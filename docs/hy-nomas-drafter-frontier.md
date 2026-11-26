@@ -1,0 +1,2545 @@
+# Hy-Nomas local draft suite
+
+The active multi-object-control investigation and bounded next experiment
+are in [the object control frontier](hy-nomas-object-control-frontier.md).
+It distinguishes source-supported temporal action masks, custom query ROI,
+refiner conditioning transfer and visible actor compliance.
+
+## Two sequential reference actions (2026-11-05)
+
+Status: v2 metadata and two bounded V224 numerical gates are implemented.
+Explicit actor anchors animate the paper glove. A third, scratch-only
+query-ROI probe removes the sampled Alex hand ghost; full acting remains open.
+V1 remains unchanged. The first compact masked prompt still fails its
+acting goal: Alex moves, his hand can smear, and the paper stays still.
+A fresh unmasked historical-conditioning replay does move the paper glove,
+so the model is not categorically unable to animate this character.
+Numerical parity and visible execution of both actions are separate gates.
+
+Add an explicit `cogni_ml.hy_nomas_action_conditioning/v2` profile for exactly
+two chronological, nonoverlapping actions in the final T1 segment of the
+existing reference-T0 + generated-T1 experiment. Action1 belongs to
+`<|Subject1|>` (Alex); Action2 belongs to `<|Subject2|>` (the paper resume).
+Both subjects must be declared in the authenticated T0 caption. Keep v1
+parsing, identity, labels and rejection behavior unchanged.
+
+V2 keeps the authenticated geometry, token contract, pinned source helpers
+and conditioning hashes. It replaces `action` with an ordered `actions`
+array. Each action has the existing action metadata and latent bounds.
+`text_offsets` contains `head_end`, `valid_text_tokens`, three
+`source_offsets_raw`, three `effective_offsets`, and the existing endpoint
+note. Effective offsets strictly partition global head, Action1 and Action2
+text, ending at the authenticated valid-token count. Video windows tile all
+30 latent frames with indices -1 (gap), 0 or 1, each action occurring once.
+Labels use global 0, action labels `[1, 2]`, padding -1 and the existing
+query/key scope. Video and cached-history keys remain globally visible.
+
+Reject overlapping, reversed, missing, duplicated, unknown-subject or
+empty-latent actions, mismatched wrappers/offsets, truncated action text and
+changed hash bindings. Earlier action-history segments, simultaneous actor
+spatial masks and general multi-segment action editing remain unsupported.
+This is CPU metadata preparation; GPU kernels, scratch lifetime and command
+drains must not change. Rollback is selecting the unchanged v1 profile.
+
+Risk: CAUTION (incorrect action-to-text/subject binding). DoD: the focused
+Python and Crystal action/admission specs pass, including unchanged v1 and
+negative v2 controls; native label ranges match the pinned upstream helpers.
+Then compare one bounded five-second native/source BF16 probe with identical
+conditioning, T0 and noise at unchanged `atol=rtol=2e-5`, under the cache-aware
+10% memory floor. Inspect Alex's turn and the paper gesture independently.
+No full advertisement or long generation is admitted by this slice.
+
+The first compact V224 replay matched the pinned full-BF16-autocast MPS
+oracle bit-for-bit across 24 comparisons: 17 sampled boundaries, four Euler
+updates and three timeline checks. The comparator's A/A check passed and a
+single-value perturbation failed the unchanged tolerance. Actual native
+query/key labels also matched every visible pair in the upstream range
+matrix (4,544 queries by 9,127 keys). This qualifies the frozen fixture and
+the explicit MPS attention adapter, not stock CUDA/Magi or arbitrary prompts.
+The replay uses the previously qualified frozen DCAE output; it does not
+requalify the image encoder or PixelUMM.
+
+Despite this numerical result, the decoded take gives Alex a white glove
+and makes him perform the chest tap assigned to the paper Resume. The paper
+stays almost still. Temporal action masks therefore pass their numerical
+gate but fail the intended actor binding. They do not provide spatial actor
+masks. Head text remains visible to every action query; its visibility is
+not the missing feature. The interactive upstream rewriter controls only
+Subject1, whereas the captioning/SFT examples allow multiple subject IDs.
+T1 omits the local subject roster under the pinned global-only-first shaping
+rule, but can attend the two-subject T0 history and its current global head.
+Adding explicit actor appearance and position inside each action body,
+while retaining V224, T0, noise and timestamps, also passes all 24 numeric
+comparisons bit-for-bit. The paper now raises its own glove to its printed
+chest. Alex's human hand still smears. This is a partial visual improvement,
+not a completed acting or hand-quality gate.
+
+The same-latent PixelUMM control now admits the authenticated full
+`[1,32,180,9,16]` bank only when the pinned native receipt reports the
+60-frame GPU prefix gather. It uploads the entire bank to MPS, then
+selects axis 2 and makes the prefix contiguous; taking a flat byte prefix
+would break channel strides. The existing standalone 60-frame path stays
+unchanged. Wrong bank geometry, byte extent or missing/boolean/string gather
+metrics are rejected, and 23 focused CPU tests pass.
+
+On the anchored take, the pinned Torch 2.6 PixelUMM source adapter with all
+36 blocks, 11 overlapping windows and the full head matches every one of
+106,168,320 native display values exactly. All 468 source/cache weight-word
+checks pass. Comparison includes the source BF16 multiply/add/clamp from
+raw `[-1,1]` to display `[0,1]`; it does not compare unlike pixel ranges.
+The cache-aware 10% floor and 64 MiB swap-growth limit remain unchanged;
+the guarded replay completes with zero swap growth. Its only readback is
+the existing terminal comparison/export boundary. The earlier Torch 2.8
+attempt failed the runtime pin before model loading and is not evidence.
+This qualifies this decoder fixture and explicit MPS attention adapter,
+not unmodified CUDA/flex attention or arbitrary generated motion. The hand
+smear is present in both decodes of the same generated latents.
+The saved report's source/selected shape fields identify the 180-to-60
+prefix; its older "terminal 60-latent bank" description is corrected in
+the helper without rerunning or rewriting the numerical evidence.
+
+The scratch-only query-ROI probe restricts Action1 text exposure to Alex's
+video-query rectangle and Action2 to the paper's rectangle on the fixed
+30x9x16 latent grid. It keeps the anchored conditioning, noise, text queries,
+global head and all video/history keys unchanged. The authored half-open
+rectangles are Alex H[0,9)/W[1,8) and Resume H[2,8)/W[10,15); they are not
+detected identities or tracked objects. Actual native labels and the explicit
+source mask match all 4,544 by 9,127 visibility pairs. The change removes
+228,315 action-text pairs and adds none. A/A passes and an altered mask fails.
+
+The matched native/source ROI execution passes all 24 tensor comparisons
+bit-for-bit at unchanged `atol=rtol=2e-5`, including all four Euler states.
+Its A/A passes and the single-value perturbation fails. Both DiT and the
+qualified native decoder record zero tracked encode allocations, readbacks
+and preterminal waits, with one terminal drain each. All successful guarded
+stages preserve the cache-aware 10% floor and show zero swap growth.
+The sampled native DiT peak is 24.94 GiB; decoding peaks at 18.42 GiB.
+These are separate stage samples, not concurrent pipeline requirements.
+
+In the five-second paired take, Alex's extra translucent hand at 2.75 s in
+the temporal-only control is absent with the query ROI. Resume raises its
+own glove to its printed chest in both anchored takes. The gray movement
+near the laptop's right edge belongs to the paper glove, not Alex's hand.
+This supports direct action-text leakage as a contributor on this fixed
+camera. It does not establish a clean discrete tap/return or an unambiguous
+Alex head turn. The same-lineage visual review rates the acting result
+partial. Do not enable a production spatial-mask API from this fixture.
+Shared text-refiner conditioning/self-attention and globally visible video
+keys can still relay action cues between regions. The exported time vector
+is time-only, not pooled text conditioning. This is a custom intervention,
+not stock upstream spatial control or a general character-isolation proof.
+Next: retain this matched control and score the remaining head-turn and
+tap/return endpoints independently before widening character control.
+
+The CPU tokenizer audit rules out a misleading alternative: the 108-token
+crop removes the system prefix and user header from exported hidden-state
+rows, after Qwen has processed the full input. It does not remove the end
+of Action2. The retained spans [49,132) and [132,224) decode to the complete
+two actions, including both closing tags and the paper's tap/return words.
+This establishes retained text, not instruction compliance by DiT.
+
+The user preferred the right-hand query-ROI take; retain it as the visual
+control. A fourth bounded V224 probe changes only Action1's instruction
+from turning toward the paper to looking down and then turning toward it.
+Action2, camera, reference, T0, noise, four Euler steps, timestamps, token
+boundaries and authored query rectangles stay fixed. A CPU comparison
+restores only the Action1 string and requires exact prompt equality; it
+also verifies the conditioning payload hashes, unchanged non-Qwen inputs,
+action layout and ROI. The changed hidden states are derived from the new
+prompt, not an additional independently selected input.
+
+The candidate again matches the pinned full-BF16-autocast MPS adapter in
+all 24 comparisons bit-for-bit. The complete visibility matrix also
+matches, with the same 228,315 removed pairs and no additions. Before
+decoding, the current binding and every bound file are rehashed; all 22
+native intermediate files must match the comparator's before/after
+snapshots. The current latent bank must match both report and receipt.
+Negative copies with stale binding, latent hash or inventory are rejected.
+The same-lineage adversary rates these stale-evidence and scope checks
+ROBUST; this is not an independent attestation against fabricated reports.
+
+The user's playback assessment resolves the inconclusive 8-fps head-frame
+inspection: in the accepted control (left in the head-pose pair), Alex
+slightly turns his head, then Resume moves its hand. In the rewrite
+(right), only Resume's hand moves. The new wording therefore regresses
+the visible Alex beat on this matched take; retain the accepted control.
+The sampled-frame review failed to distinguish that subtle head motion.
+Alex's hands remain on the desk in the inspected full frames, and Resume
+raises its glove toward its chest in both takes; a clean discrete
+tap/return remains open. Reject this rewrite on this fixture, without
+generalizing to all prompts or multi-actor motion. Numerical equality
+remains separate from visual compliance.
+
+An offline local-change diagnostic now distinguishes the motion missed by
+the sampled-frame review. `scripts/video_block_diff.py` streams each clip
+through ffmpeg once, area-pools pixels by four, and measures mean absolute
+RGB differences in 16x16 blocks at lags of one and six frames. It retains
+at most seven pooled frames; per-frame scalar statistics grow with clip
+length. The aligned ROIs are Alex's head `[128,0,112,128]`, his desk hands
+`[96,176,128,48]`, Resume `[336,64,112,192]`, its glove region
+`[336,128,64,96]`, and wall `[256,0,96,48]`, in x/y/width/height pixels.
+
+On all 120 frames of each existing clip, the head-region mean difference
+over 0-2 s is 1.038 versus 0.284 at lag one, and 5.191 versus 1.013 at lag
+six (accepted control versus rewrite, values expressed on the 0-255 RGB
+scale). The glove-region lag-six difference over 2-5 s is 4.305 versus
+4.169. Pairs must have both endpoints inside the stated interval. A
+scale-one control preserves the head contrast, 9.380 versus 1.986, and
+similar glove change, 6.613 versus 6.415. This supports the user's playback
+distinction; it does not identify head pose, natural motion or a clean tap.
+Brightness changes, compression and camera motion also register, while
+pooling can erase fine motion. CPU controls cover pooling-hidden changes,
+brightness-only changes, a known translated patch, edge-area weighting
+and truncated raw frames.
+
+The reports, exact CLI arguments and timeline plot are under
+`/opt/mldata_ssd/cogni-ml/rolewright-block-diff-20261105.wsem3mlz`.
+The scale-four invocation analyzed both five-second clips in 0.77 s wall
+time including subprocess startup and JSON output; this single observation
+is not an inference benchmark. No model ran and no GPU inference path,
+synchronization or numerical gate changed. Refresh the diagnostic on video,
+ROI, pooling, lag or implementation changes; use scale one when pooling
+sensitivity is uncertain. The metric is an inspection aid, not an acting
+quality or tensor-parity gate.
+
+The new native DiT and reused qualified decoder each record zero tracked
+encode allocations, readbacks and preterminal waits, with one terminal
+drain. Their separate sampled peaks are 24.94 and 18.41 GiB; minimum
+cache-aware headroom is 10.90 and 19.87 GiB. All successful guarded stages
+preserve the 10% floor with zero swap growth. The initial native attempt
+exited before model loading because its empty output directory was missing;
+the retry creates it and retains a separate bound command and guard log.
+
+Follow-up evidence:
+`/opt/mldata_ssd/cogni-ml/rolewright-actor-beats-20261105.z3997ccv`.
+`compare/compare-gpu.json` has SHA-256
+`4559d6e5f7f56375a67d14f5c75e4b558ecb2eabfbadf108c6fa43a9a9f8cdc5`;
+`harness/launch-binding.json` binds the retry, native/source commands and
+CPU controls. `decode_candidate.py --validate-only` checks current bytes
+and the three stale-evidence negatives; `decode-preflight.json` records
+the measured control/candidate differences. `head-pose-full-contact.argv.json`
+replays the corrected whole-head crop. Its `candidate/action1-head-pose-full-contact.png`
+supersedes the earlier crop that cut off part of the face.
+`candidate/control-left-head-pose-right-5s.mp4` places the accepted ROI
+control on the left and the changed Action1 on the right (SHA-256
+`d1c32b646144ed8005f7b0d2f04e218a89f4a8c0c4b0b8b9dbd88a1170a074f7`).
+The previously qualified decoder is reused; no new same-latent PixelUMM
+source qualification or full advertisement is claimed. Refresh these
+comparisons on any input, mask, source, binary, runtime or precision change.
+
+The explicit source-BF16 request now rejects unsupported refiner prefix
+lengths before model preparation instead of silently disabling all source
+rounding controls. V224 is admitted alongside the existing V263/V150
+fixtures. This is a token-count admission guard, not a proof for every V224
+prompt. Native v2 admission also rejects subject-ID-only or whitespace-only
+action bodies, matching the Python exporter without changing v1.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/rolewright-sequential-actions-20261105.w7m2k9qa`.
+Replay `compare-v2.argv.json` and require `gate_passed`, zero differing bits
+in the 24 real comparisons and exactly one rejected perturbation.
+`native-range-compare.json` records the exact label/range comparison;
+`contact.png` and `rolewright-alex-and-resume-5s.mp4` retain the failed take.
+`anchor/compare-anchor.argv.json` and `anchor/compare-anchor.json` retain
+the second numeric gate; the corresponding `anchor/contact.png` and clip
+show the paper gesture and remaining hand artifact.
+`anchor/decoded/source-prefix-torch26.argv.json` replays the exact-latent
+PixelUMM control; its report SHA-256 is
+`415a6b81392435b37d1f072867232620fadf4b477274274b840c58137cbecf44`.
+`anchor/native-left-upstream-right-5s.mp4` retains the identical paired
+decode, with the native result on the left and the source adapter on the
+right.
+`roi/compare.json` retains the full CPU mask check, and
+`roi/compare-gpu.json` retains the third numerical gate (SHA-256
+`2bea5367da4dea43783243b6aefa0daa06e29eadf7879160e88eba23cbc51bd2`).
+Replay `roi/native/native-roi-execute.guarded.argv.json`,
+`roi/source/source-v2-roi.guarded.argv.json` and
+`roi-compare-tensors.command.json` with fresh output paths. The frozen
+ROI/script/binary/input identities are bound by `roi/launch-binding.json`.
+`roi/temporal-left-roi-right-5s.mp4` places the anchored temporal-only
+control on the left and the custom ROI take on the right; its SHA-256 is
+`5ecebdeef2f82eea178bdf40f56310fcbd9ecaa66ae9275bdd024ee9492796c0`.
+`roi/roi-pair-2_75s.png` retains the discriminating hand frame;
+`roi/roi-pair-3_5s.png` retains both paper chest-gesture poses.
+`roi/verified-run-files.json` (SHA-256
+`81535edd5617409d5e7e211098c5ee12616189e7666d5a0182ffc9d09066cdbc`)
+hashes the 22 native files consumed by the 24 comparisons and binds their
+source captures, commands and guards. This is an after-comparison snapshot
+for future stale-byte checks, not a contemporaneous attestation or rerun.
+`roi/conditioning-crop-audit.json` (SHA-256
+`25af873dcdd1e913fc5f6daec58a6fdaa3c2c219841ab2d881059b49fa3d7018`)
+retains the token-span audit; `roi/conditioning-crop-audit-artifacts.json`
+indexes byte-identical external-SSD copies of its CPU runner and guard.
+Refresh on prompt, conditioning, weights, source, runtime, precision, binary
+or attention-schedule changes. Numerical parity must never promote the
+failed acting result to a character-control capability.
+
+## Connected T0 block-0 cache writer (2026-11-04)
+
+The diagnostic `--connected-history-output` attaches the qualified refiner
+and patch to the existing BF16 block-0 cache writer. The patch, time vector
+and RoPE stay in their existing Metal buffers. The first 320 refiner rows
+are copied into the block's text input on the same command chain. The probe
+retains 3,000,883,780 named bytes with zero tracked encode allocations,
+readbacks and preterminal waits, and one terminal drain. The 2 GiB cap
+control rejects the run before GPU preparation.
+
+On frozen T0 V263, the effective input comparison is exact, including
+the image patch after the writer's BF16 rounding. Both physical BF16 K/V
+tensors and both F32 reader outputs match the pinned PyTorch MPS BF16
+autocast control exactly at unchanged `atol=rtol=2e-5`. Each tensor has
+9,385,984 values over 4,320 image and 263 valid text rows. The source
+physically writes another 57 text rows and masks them. The native writer
+stores only the active prefix.
+
+With autocast disabled, the source produces different physical K/V on
+the same inputs. Maximum absolute errors are 0.0625 for K and 0.5 for V.
+The paired source trace first differs at LayerNorm output, which is F32
+under BF16 autocast and BF16 without it. Rounding the F32 LayerNorm output
+to BF16 reproduces the no-autocast output exactly in both streams. A single
+BF16 cast after modulation still leaves mismatches at the QKV input.
+SiLU and the modulation projection are exact in both streams.
+The no-autocast comparison fails the existing
+gate, so the result qualifies the autocast control only. The continuation
+adapter's no-autocast behavior remains open.
+
+Guarded checks cover 101 CPU Crystal examples, nine Metal examples, 26
+Python tests, disabled-path preservation across 62 tensors, and an exact
+repeat of the existing standalone history artifact. The connected native
+run peaked at a sampled 2.35 GiB process-group footprint with 27.24 GiB
+minimum cache-aware headroom and zero swap growth under the 10% floor.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-connected-t0-history.json`.
+The run directory retains the guarded `native-v2`,
+`source-{autocast,eager}-final` and `compare-{autocast,eager}-final`
+commands. The autocast comparison exits zero and the eager comparison
+exits one with a numeric report.
+Rollback: omit `--connected-history-output`. Refresh on source, binary,
+runtime, input, weights, layout, precision or evidence changes. Keep the
+experimental reference gate. This diagnostic stops before attention
+math and does not run T1 or video generation.
+
+## Connected FC2 and second residual (2026-11-04)
+
+Status: VERIFIED for the two connected refiner blocks on frozen T0 V263.
+The default-off `--refiner-source-fc2-residual-control` requires source
+MLP SiLU control. It applies BF16 RNE after FC2 bias, after multiplying
+by the MLP gate, and after adding the residual in each block. Both GPU
+operations reuse their existing dispatches and buffers.
+
+The first raw mismatch with the flag disabled is block0 FC2. With the
+flag enabled, all 37 records through block1 output match the pinned
+MPS-adapter trace byte-for-byte, including all 2,621,440 values at the
+block0 output/block1 input alias. The raw GPU gate passes at unchanged
+`atol=rtol=2e-5` for full, valid and padded regions. The earlier GPU
+replay found 27,408 mismatches when rounding only the residual sum.
+
+Guarded build, 33 Crystal examples, 89 Python tests and both GPU
+comparisons passed their scoped checks. Disabled preservation and a
+fresh enabled repeat each match across 62 records. Each capture retains
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one terminal drain. The cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop remained in force.
+Minimum sampled headroom was 18.45 GiB, peak sampled process-group
+footprint was 2.18 GiB, and observed swap growth was zero.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc2-residual.json`.
+Rollback: omit `--refiner-source-fc2-residual-control`. The result covers
+the standalone refiner probe on this input. Next: feed the qualified
+block1 output to the T0 DiT reference K/V writer and compare its output.
+Refresh on source, binary, runtime, input, weights, layout, precision
+or evidence changes.
+
+## Connected SiLU output rounding (2026-11-04)
+
+Status: VERIFIED for connected block0 MLP SiLU on frozen T0 V263.
+The default-off `--refiner-source-mlp-silu-control` requires source FC1
+control. Both blocks apply BF16 RNE at the output of the existing F32
+SiLU graph. Block0 matches the pinned MPS-adapter oracle byte-for-byte
+through SiLU across 10,485,760 values, including padding.
+
+At unchanged `atol=rtol=2e-5`, the first divergence moves from SiLU to
+FC2 in the full, valid and padded regions. FC2 exceeds tolerance on
+527,239 of 538,624 valid values (max .124557). The second residual,
+which supplies block1 input, exceeds tolerance on 528,887 valid values
+(max .398163). Block1 SiLU fails its exact gate on 1,496,652 values.
+
+A separate GPU replay rounds the captured FC2 output to BF16 and
+matches all 2,621,440 source values exactly. With that FC2 output and
+the exact gate and first residual, the second residual also matches
+all 2,621,440 values exactly with RNE after both the multiply and the
+add. Final-only rounding on exact operands leaves 27,408 values over
+tolerance. The connected FC2 and second residual used the F32 path in
+this capture.
+
+The guarded build, 32 Crystal examples, 87 Python tests, disabled and
+fresh-repeat preservation, and GPU comparisons passed their scoped
+checks. Both preservation pairs match across 62 records. The native
+captures retain 944,620,612 named bytes, zero encode allocations, zero
+read APIs, zero preterminal waits and one terminal drain. Guard uses
+the cache-aware 10% floor, 6 GiB process-group cap and 64 MiB swap-growth
+stop. Observed swap growth was zero. Video generation was out of scope.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-silu.json`.
+Rollback: omit `--refiner-source-mlp-silu-control`. Next: reuse the
+existing post-bias epilogue and gated residual for the three FC2/residual
+rounding points, then qualify the connected block1 input. Refresh on
+source, binary, runtime, input, weights, layout, precision or evidence changes.
+
+## Connected post-bias FC1 (2026-11-04)
+
+Status: VERIFIED for connected block0 FC1 on frozen T0 V263. The
+default-off `--refiner-source-fc1-control` requires source norm2 control.
+Both refiner blocks apply BF16 RNE in the existing FC1 post-bias epilogue.
+Block0 now matches the source byte-for-byte through FC1, including
+padding (10,485,760 values).
+
+At unchanged `atol=rtol=2e-5`, the first divergence advances to SiLU
+in the full, valid and padded regions. SiLU exceeds tolerance on
+8,852,457 of 10,485,760 values (max .015625). In a separate GPU replay
+on exact FC1 input, BF16 RNE of the captured F32 SiLU output matches all
+10,485,760 source values at zero tolerance. Eager BF16 SiLU also matches
+the source. Eager F32 SiLU matches the native raw SiLU exactly on this
+input.
+
+Connected FC2 exceeds tolerance on 534,233 of 538,624 valid values
+(max .127552). The second residual exceeds tolerance on 528,856 valid
+values (max .398254) and is also the input to block1. Block1 FC1 fails
+its exact gate on 1,907,855 values. Both complete connected outputs
+still fail, and the downstream mismatches include propagated error.
+
+The guarded build, 31 Crystal examples, 85 Python tests and GPU
+comparisons passed their scoped checks. Disabled mode preserves the
+previous run byte-for-byte across 62 trace records. Two fresh enabled
+processes also match across 62 records. Each native capture reports
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one existing terminal drain. Comparisons and
+replay each export one packed diagnostic vector.
+
+Risk: CAUTION (rounding at the wrong boundary or changing other linear
+outputs). Rollback: omit `--refiner-source-fc1-control`. The cache-aware
+10% floor, 6 GiB process-group cap and 64 MiB swap-growth stop stayed
+active. Across ten guarded stages, sampled peak group footprint was
+2,337,261,896 bytes, minimum headroom was 20,062,388,224 bytes and
+observed swap growth was zero. Scope is one finite input against the
+pinned PyTorch 2.8.0 MPS-adapter capture at Hy-Nomas revision
+`911cea6458a89c2663513ff7099561ec190dd491`. Same-lineage review is
+correlated. No video was generated. Refresh on source, binary, runtime,
+input, weights, layout, precision or evidence changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc1.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9`.
+
+Next falsifier: apply BF16 RNE within the existing connected SiLU graph
+and test FC2 and the second residual on the same frozen trace.
+
+## Connected post-attention norm2 (2026-11-04)
+
+Status: VERIFIED for connected block0 norm2 on frozen T0 V263. The
+default-off `--refiner-source-norm2-control` requires source projection and
+first-residual control. It rounds the affine output of norm2 to BF16 RNE
+in the existing Metal store for both refiner blocks.
+
+Block0 matches upstream byte-for-byte through norm2, including padding
+(2,621,440 values). At unchanged `atol=rtol=2e-5`, the first divergence
+is now `block0.mlp_fc1` in the full, valid and padded regions. Its native
+post-bias output exceeds tolerance on 10,310,052 of 10,485,760 values
+(max .054958). On the identical norm2 input, a separate GPU replay
+rounds that captured FC1 output to BF16 and matches all 10,485,760
+source values at zero tolerance.
+
+The connected block1 input aliases the divergent block0 output. It
+exceeds the mixed tolerance on 528,927 of 538,624 valid values
+(max .398315). Block1 norm2 fails its full exact comparison on
+184,517 values. Block1's local arithmetic still needs an identical-input
+check. Both complete connected block outputs fail the numeric gate.
+
+The guarded build, 30 Crystal examples, 83 Python tests and GPU
+comparisons passed their scoped checks. Disabled mode preserves the
+previous output byte-for-byte across 62 trace records. Two enabled
+processes also match across all 62 records. Each native capture reports
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one existing terminal drain. Comparisons and replay
+each export one packed diagnostic vector.
+
+Risk: CAUTION (precision and unintended changes to downstream
+arithmetic). Rollback: omit `--refiner-source-norm2-control`. The
+cache-aware 10% memory floor, 6 GiB process-group cap and 64 MiB swap-growth
+stop stayed active. Across ten guarded stages, sampled peak group
+footprint was 2,319,616,328 bytes, minimum headroom was 21,468,872,704
+bytes and observed swap growth was zero. The oracle is the pinned
+PyTorch 2.8.0 MPS-adapter capture at Hy-Nomas revision
+`911cea6458a89c2663513ff7099561ec190dd491` on one finite frozen input.
+Same-lineage review is correlated. No video was generated. Refresh on
+source, binary, runtime, input, weights, layout, precision or evidence
+changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-norm2.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok`.
+
+Next falsifier: apply BF16 RNE in the existing FC1 post-bias epilogue and
+compare SiLU, FC2, the second residual and block1 input at the same
+tolerance.
+
+## Connected projection and first residual (2026-11-04)
+
+The opt-in `--refiner-source-projection-residual-control` requires source
+attention. Both text-refiner blocks round their attention projection in the
+existing post-bias epilogue. Their first residual rounds the gated product
+and the sum separately in one uncontracted Metal dispatch. The FFN residual
+retains its original F32 arithmetic.
+
+Status: VERIFIED for block0 projection and first residual on frozen T0
+V263. The native block0 context, projection and first residual
+each match all 2,621,440 source values byte-for-byte. The first divergence
+advances to `block0.norm2` in the full, valid and padded regions. Block1
+already receives a different input. Its projection and first residual
+fail the exact checks on 357,902 and 188,667 values respectively. Both
+complete block outputs fail the numeric gate.
+
+At unchanged `atol=rtol=2e-5`, the native norm2 has 514,781 mismatches
+among 538,624 valid values (max .015609). A separate GPU replay checks the
+identical input residual and rounds the captured native norm2 output to
+BF16 RNE. All 2,621,440 results then match numerically at zero tolerance,
+including 2,082,816 padding values.
+
+DoD observed: guarded build, 29 CPU Crystal examples, one Metal residual
+example, 81 Python tests and GPU comparisons with sensitivity controls.
+The disabled path matches the previous run across all 62 trace records and
+their payloads. Fresh enabled processes also match byte-for-byte. Each
+native capture reports 944,620,612 named bytes, zero encode allocations,
+read APIs or preterminal waits, and one existing terminal drain. The
+GPU comparisons and replay each export one packed diagnostic vector.
+
+Risk: CAUTION (precision and unintended FFN rounding). Rollback: omit
+`--refiner-source-projection-residual-control`. The file-cache-aware floor is
+10%, with a 6 GiB process-group cap and 64 MiB swap-growth stop. Across
+eleven guarded stages, sampled peak group footprint was 2,344,044,848
+bytes, minimum headroom was 21,470,609,408 bytes, and observed swap growth
+was zero. The oracle is the inherited PyTorch 2.8.0 MPS-adapter capture at
+Hy-Nomas revision `911cea6458a89c2663513ff7099561ec190dd491`. The claim
+covers one finite input on this adapter. Same-lineage review is correlated.
+No video was generated. Refresh on source, binary, runtime, input, weights,
+layout, precision or evidence changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-projection-residual.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3`.
+
+Next falsifier: enable BF16 RNE in the existing native norm2 store, then test
+the FFN boundaries and the connected block1 input on the same frozen trace.
+
+## Connected text-refiner attention qualification (2026-11-03)
+
+Status: VERIFIED for native block0 attention on the frozen T0 V263 input.
+The default-off `--refiner-source-attention-control` uses the general BF16
+graph for the valid prefix, then overwrites rows 256–262 with native vector
+attention on the same command chain and in the same context buffer before
+projection. Admission requires B1, padded V263/H16/D128 and the qualified
+BF16 QKV control. The oracle is the inherited PyTorch 2.8.0 MPS-adapter
+capture at Hy-Nomas revision `911cea6458a89c2663513ff7099561ec190dd491`.
+
+| Valid output on the same frozen input | Values above `atol=rtol=2e-5` (of 538,624) | Max absolute error |
+| --- | ---: | ---: |
+| Block0 attention, flag off | 397,504 | .291865 |
+| Block0 attention, flag on | 0 | 0 |
+| Block0 projection, flag on | 528,996 | .062489 |
+| Block0 first residual, flag on | 527,065 | .475311 |
+| Block0 output, flag on | 533,703 | .615128 |
+| Block1 attention, flag on | 351,722 | .843750 |
+| Block1 output, flag on | 535,325 | 1.199829 |
+
+Block0 Q/K/V and the complete context are byte-exact. Both native attention
+outputs have exact zero padding (2,082,816 values per block). Block1 already
+receives a different input. The first divergence moves from attention to
+projection for the full and valid tensors and remains at residual1 for padding.
+Both complete blocks still fail the numeric gate.
+
+A separate GPU replay makes the native projection byte-exact after BF16
+rounding. BF16 rounding after both gate multiplication and residual addition
+then matches all 2,621,440 source residual values exactly. Rounding only the
+final sum still fails on 6,196 valid values (max .5) even with exact projection.
+These replay results isolate the rounding boundaries for this input. The
+native projection and residual are unchanged by this control.
+
+DoD observed: guarded build, 28 Crystal examples, 79 Python tests and GPU
+comparisons with sensitivity controls. Fresh disabled mode matches the
+retained pre-change QKV control byte-for-byte, and two enabled processes
+match across all 62 preblock, prelude and block records. Each native capture
+reports 944,620,612 named bytes, zero encode allocations, read APIs and
+preterminal waits, and one existing terminal drain. Comparator and replay
+each export one packed diagnostic vector. The file-cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop stayed active. Across ten
+qualification stages the sampled peak group footprint was 2,341,882,232 bytes,
+minimum headroom was 21,314,895,872 bytes, and observed swap growth was zero.
+
+Risk: CAUTION (same-buffer write ordering and BF16 boundary drift).
+Rollback: omit `--refiner-source-attention-control`. Evidence:
+`.landmark/evidence/2026-11-03-hy-nomas-connected-refiner-attention.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe`.
+Same-lineage mini-Quad review is correlated. The guard is sampled and the
+allocation counters cover named resources. Scope is the pinned MPS-adapter
+oracle and frozen input. No video was generated. Refresh on changes to source,
+binary, runtime, input, weights, layout, precision or evidence.
+
+Next falsifier: add post-bias BF16 RNE to the native projection and separately
+round the native gate product and residual sum, then find the next mismatch
+through norm2, the FFN and block1 at the same tolerance.
+
+## Actual vector-tail attention qualification (2026-11-03)
+
+Status: VERIFIED for the default-off native one-pass vector probe on the
+frozen block0 T0 V263 input, Q rows 256–262, all 263 K/V rows, H16/D128.
+The 14,336 tail context values match actual upstream exactly. A GPU comparison
+assembly of the previously qualified main256 and the native tail also matches
+all 538,624 source context values exactly. That assembly is diagnostic only:
+it is not a connected native 256 + 7 attention plan or refiner integration.
+
+The source PyTorch 2.8.0 MPS wrapper selects a different algorithm for this
+seven-query tail. It scales Q in F32 before the dot product, uses online F32
+softmax/PV and rounds only the final context to BF16. The general graph uses
+BF16 scaled logits and probability boundaries. Its old tail still differs on
+7,499/14,336 values, max .4375 at unchanged `atol=rtol=2e-5`. That failed
+control remains explicit; it is not substituted for the actual-tail gate.
+The vector operator's second return is uninitialized and is never consumed.
+
+`HyNomasVectorAttentionPlan` reads the existing F32 expansions of BF16 Q/K/V
+in BQHD order and writes a compact 57,344-byte output. The adapted source
+kernel retains the four-products-per-lane dot, 32-way online reduction and
+partial-context merge. It does not allocate an unpacked input or probability
+buffer. Source pins and redistribution notices are in `third_party/VIDEO_NOTICES.md`.
+
+| Native comparison | Values | Mismatches | Max error |
+| --- | ---: | ---: | ---: |
+| Vector tail vs actual source, exact | 14,336 | 0 | 0 |
+| Diagnostic main256 + vector tail vs actual source, exact | 538,624 | 0 | 0 |
+| Old general tail vs actual source, mixed tolerance | 14,336 | 7,499 | .4375 |
+
+DoD observed: native build, 34 Crystal examples, 75 Python tests, all five
+prior exact main/general/P/context checks, exact actual-tail and diagnostic
+assembly gates, unchanged F32/localization and perturbation controls. A fresh
+native process produces all 14 records and the complete payload byte-exact.
+All prior 13 records are unchanged when the vector control is added; all ten
+original F32/input records remain unchanged with both controls off or on.
+The combined probe prepares 113,505,024 named bytes (57,344 above the BF16-only
+control) and records [0 encode allocations, 0 read APIs, 0 preterminal waits,
+1 terminal wait]. Opaque backend resources and terminal diagnostic export are
+outside those counters. Each comparison exports one packed metric vector.
+
+All eleven successful stages retain the file-cache-aware 10% floor, 6 GiB
+process-group cap and 64 MiB swap-growth stop. Sampled peak group footprint:
+796,493,312 bytes; minimum sampled headroom: 23,789,223,936 bytes; observed swap
+growth: zero. Short captures can fall between samples, so this is not an exact
+memory peak. No full refiner, generation or Studio was run.
+
+Risk: CAUTION (reduction/rounding and GPU resource lifetime). Rollback: omit
+`--vector-tail-control`, which is false by default and requires the BF16
+control. Evidence: `.landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu`.
+The inherited replay is caller-pinned, not recreated here; its oracle is the
+pinned PyTorch 2.8.0 MPS adapter, not stock CUDA/Magi. Selected source pins
+and the native binary are hashed; this is not an exhaustive toolchain closure.
+Same-lineage mini-Quad reviews are correlated. No speed, motion, full-block,
+other-input/shape or quality claim follows from this bounded parity result.
+Refresh on source/binary/runtime/input/weight/mask/layout/precision changes
+or evidence loss/mutation.
+
+Next falsifier: assemble the source-compatible main256 and vector-tail
+contexts inside a default-off native GPU plan, then qualify projection,
+residual and connected refiner boundaries on the same frozen input.
+
+## Connected BF16 attention boundary qualification (2026-11-03)
+
+Status: VERIFIED for the default-off, connected `HyNomasAttentionMPSPlan`
+control on the frozen source-exact block0 T0 V263 input. It is not wired into
+the text refiner or generation. The existing F32 mode and ABI remain the
+control. Risk: CAUTION (MPSGraph fusion, diagnostic target visibility, retained
+buffer lifetimes). Rollback: leave `bf16_boundaries_control` false, its default.
+
+The native graph uses F32 QK plus epsilon and scale, BF16 scaled logits,
+BF16-typed softmax/PV, then explicit GPU integer RNE expansion of the context. A
+plain BF16 context cast followed by F32 expansion was insufficient: P was
+exact, but the context was identical to unrounded F32 PV and differed on
+458,766/524,288 actual main256 values, max .030776023864746094. Rounding that
+captured context on GPU reproduced the source exactly. The explicit UInt32
+RNE path preserves this observable boundary inside the connected graph,
+without an external intermediate buffer, readback or wait. This does not
+establish a physical BF16 store or an internal backend dispatch count.
+
+| Connected native comparison | Values | Mismatches | Max error |
+| --- | ---: | ---: | ---: |
+| Context vs actual source main256, exact | 524,288 | 0 | 0 |
+| Instrumented P vs actual source main256, exact | 1,077,248 | 0 | 0 |
+| Context vs source general-263 control, exact | 538,624 | 0 | 0 |
+| Instrumented P vs source general-263 control, exact | 1,106,704 | 0 | 0 |
+| Instrumented context vs context-only graph, exact | 538,624 | 0 | 0 |
+| Native general tail vs actual source vector tail, unchanged mixed tolerance | 14,336 | 7,499 | .4375 |
+
+The last row remains a failed, separately reported comparison at
+`atol=rtol=2e-5`; it is outside the five passed connected qualification checks.
+No tail probabilities are consumed: the source vector operator's second
+return is uninitialized. The native graph has 263 query rows; agreement of
+its first 256 rows is not a native implementation of source query chunks
+256 + 7. Keep this control off until the actual vector tail and connected
+refiner boundaries are independently qualified. Hidden softmax accumulation
+dtype, complete-refiner parity, motion, quality and speed remain unclaimed.
+
+DoD observed: guarded fresh native build, 32 Crystal admission/regression
+examples and 71 Python regression tests; source replay comparison with five
+exact connected gates, the retained F32 localization and perturbation checks;
+and a fresh-process native repeat with all 13 tensor records and the entire
+payload byte-identical. All ten original F32/input records remain identical
+to the prior qualified capture with the control both off and on. The combined
+probe prepares 113,447,680 named bytes (83,049,088 with the control off),
+reuses them while encoding and records [0 named allocations, 0 read APIs,
+0 preterminal waits, 1 terminal wait]. Opaque MPS resources and terminal
+diagnostic serialization are outside these counters; metrics use one packed
+terminal export per comparison.
+
+All successful final-source stages retained the file-cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop. The sampled peak group
+footprint was 797,280,080 bytes, minimum sampled headroom 25,078,005,760 bytes,
+and observed swap growth zero. Short native captures may fall between samples;
+the sampled value is not an exact peak. No complete refiner or generation ran.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80`.
+The retained failed cast-only capture and context-round diagnostic distinguish
+the cause from a tolerance change. Final qualification uses `native-bf16-02`,
+`compare-bf16-02`, default-off controls and a byte-identical repeat. Each guarded
+stage verifies 390 selected source pins before and after execution; snapshots
+retain both source versions. The final binary is hashed. These are selected
+pins, not an exhaustive toolchain/dependency closure. The caller-pinned source
+replay is inherited from the preceding stage, not regenerated here; its oracle
+is the pinned PyTorch 2.8.0 MPS adapter, not stock CUDA/Magi. Same-lineage
+mini-Quad reviews are correlated. Refresh on source/binary/runtime/input/
+weight/mask/layout/precision changes or evidence loss/mutation.
+
+Next falsifier: match the actual seven-query vector context on identical Q/K/V
+without widening tolerances or using its invalid probability return; then
+qualify a default-off connected refiner path rather than extrapolating this
+bounded attention result to a whole block or generated video.
+
+## Matched block0 QK, softmax and PV localization (2026-11-03)
+
+The bounded native probe localizes the first qualified main256 discrepancy
+to the effective BF16 scaled-logit boundary before softmax. Q/K/V are exact
+source bytes on the T0 V263 input. All six native F32 controls (raw QK,
+scaled QK, softmax, PV, canonical attention and common-source-P PV) reproduce
+their current PyTorch 2.8.0 MPS controls with max error zero. This is an
+attention-stage diagnostic, not a production fix or a passed full-refiner gate.
+
+The source adapter processes 263 valid queries as 256 + 7, with all 263 keys
+and values in each call. Its actual chunked BF16 attention reproduces the
+earlier source capture exactly. The general-263 MPS operator's probabilities
+and context match the real first-256 call exactly. Its last seven rows are a
+counterfactual: the source uses a vector kernel there, whose second return is
+uninitialized rather than probabilities. The probe never consumes that return.
+General versus actual vector-tail context differs on 7,499/14,336 values,
+max .4375, at unchanged `atol=rtol=2e-5`.
+
+| Matched first-256 comparison | Mismatches | Max error |
+| --- | ---: | ---: |
+| Native F32 scaled logits vs qualified BF16 candidate | 1,065,699/1,077,248 | .49736023 |
+| Same logits rounded BF16 vs candidate, exact check | 0 | 0 |
+| Native F32 softmax vs actual source probabilities | 30,670/1,077,248 | .09960055 |
+| Native F32 PV vs actual source attention | 385,672/524,288 | .29186487 |
+| Native PV with actual source P, then BF16 rounding | 0 | 0 |
+
+The qualified candidate is F32 QK, scaling, BF16 logits, softmax with a BF16
+probability boundary, and PV with a BF16 output boundary. It reproduces
+1,106,704 actual general-operator probabilities and 524,288 observed main256
+context values exactly. Rounding raw QK before scaling is rejected:
+32,258/1,077,248 main256 probabilities fail the unchanged mixed tolerance,
+max .1015625. Separately materializing both raw-QK and scaled-logit BF16
+boundaries also fails. A final BF16 probability rounding alone fails too.
+MPSGraph fusion matters; raw QK is a matched reduction control, not a captured
+internal source tensor. These observations do not determine the hidden
+softmax accumulation dtype: BF16 softmax and F32 softmax of rounded logits,
+followed by BF16 probability rounding, both match this finite input.
+
+The new standalone `hy_nomas_refiner_attention_probe` reuses existing MPS
+reduction plans. QK output feeds softmax and then PV through shared Arena
+aliases, with setup-allocated fixed buffers. It encodes six controls on one
+chain with 83,049,088 named bytes and counters [0 named allocations, 0 read
+APIs, 0 preterminal waits, 1 terminal wait]. These counters exclude opaque
+MPS resources and post-terminal capture. Source replay and GPU comparison
+each have one packed terminal diagnostic export. Production sources and
+their synchronization behavior are unchanged.
+
+Validation: fresh native probe/bridge build, five Crystal admission examples,
+66 Python regression tests, GPU A/A and perturbation controls. Canonical
+guarded stages retain the cache-aware 10% floor, 6 GiB process cap and 64 MiB
+swap-growth stop. Sampled peak group footprint is 2,501,036,360 bytes;
+minimum sampled headroom 25,653,641,216 bytes; observed swap growth is zero.
+The short native capture can fall between samples, so this is not its exact
+peak. No complete refiner, DiT, decoder or generation was executed.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e`.
+`source-qualified-final.json`, `native-qualified-final.json`,
+`compare-qualified-final.json` and `qualified-artifacts-final.json` retain
+inputs, exact hashes, source snapshots, commands and scoped results. The
+native manifest embeds ten selected source fingerprints; the guarded stages
+also check 390 source snapshots before and after execution. Neither inventory
+is an exhaustive binary or toolchain dependency closure. The replay generator
+authenticates 18 upstream source files against the pinned checkout; the
+consumer trusts the caller-pinned replay digest rather than independently
+recreating that provenance. The oracle remains the pinned MPS attention adaptation,
+not stock CUDA/Magi. Runtime identity is descriptive, not a pinned PyTorch
+binary build. Same-lineage mini-Quad reviews are correlated.
+
+Next falsifier: implement a default-off native BF16 scaled-logit/probability
+corridor that matches the actual main256 P and PV, then independently match
+the seven-query vector tail. Do not round raw QK before scaling or treat
+general-tail probabilities as source observations. Refresh on source,
+binary/runtime, input, weight, mask, layout or precision change, or artifact
+loss/mutation. No motion, quality or performance improvement is claimed.
+
+## Connected refiner QKV BF16 output boundary (2026-11-03)
+
+The default-off `--refiner-qkv-bf16-control` makes block0 QKV and its split
+Q/K/V byte-identical to the pinned upstream capture on the same source-exact
+norm1 input. The fused QKV checkpoint covers 7,864,320 values, including all
+1,280 stored rows. This qualifies one connected boundary on one finite T0
+V263 input. The complete two-block raw gate still fails at unchanged
+`atol=rtol=2e-5`; this is not a motion, quality or performance qualification.
+
+The flag requires block-boundary control, all five prelude controls, execution
+and linked block/prelude trace outputs. It rounds after bias in the existing
+linear epilogue, before the existing Q/K/V split, for both blocks. It adds no
+explicit dispatch, named activation buffer, readback or wait; opaque MPS
+internal activity is outside that statement. Omit the flag to recover the
+previous arithmetic. The trace records an explicit `qkv_bf16_control` bool;
+the comparator rejects older manifests without it and contradictory native
+versus linked prelude controls. It does not infer or backfill missing modes.
+
+Representation, source equality and the full mixed-tolerance gate remain
+separate. All eight actual QKV/Q/K/V outputs are BF16-representable; four
+are source-exact (block0). All four block1 outputs differ on an already
+different block1 input. The preceding ten controlled boundaries retain ten
+representation passes and nine exact source hashes. Checks require complete,
+ordered coverage; both QKV aggregates are null with QKV control disabled.
+
+| Full checkpoint | Previous block controls | With QKV control |
+| --- | --- | --- |
+| block0 QKV max error | .03124809265 | 0, also direct byte equality |
+| block0 attention max error | .29821321 | .29186487 |
+| block0 output max error | .61703491 | .61695862 |
+| block1 output max error | 1.20420837 | 1.20419312 |
+
+The first raw failure moves from block0 QKV to block0 attention in full/valid
+rows, and to block0 residual1 in padding. Fixing the local boundary barely
+changes final block errors; it does not establish the cause of later errors.
+Next discriminator: replay QK, softmax and PV on the now source-exact block0
+Q/K/V, checking masks and BF16 materialization boundaries separately. F32
+accumulation followed by BF16 rounding is not a general proof of upstream
+reduction equivalence; other inputs may straddle different BF16 midpoints.
+
+Validation: fresh probe/bridge build, 28 Crystal examples, 50 Python tests,
+11 compiled CLI rejection cases, GPU A/A, perturbation and representation
+sensitivity controls. Both previous modes reproduce all 62 tensor records
+and three payloads each. All 16 prelude hashes match source in all three
+modes. Each native capture retains 944,620,612 named bytes and encode counters
+[0 allocations, 0 readbacks, 0 preterminal waits, 1 terminal wait]. All neural
+comparison reductions run on MPS before one terminal diagnostic export.
+
+Nine canonical guarded stages retain the file-cache-aware 10% floor, 6 GiB
+process cap and 64 MiB swap-growth stop. Peak sampled group footprint is
+2,349,074,640 bytes; minimum sampled headroom 27,321,368,576 bytes; observed
+stage swap growth and final live children are zero. Sampling does not bound
+between-poll spikes. The artifact qualification checks 91 current source
+snapshots, 16/14 embedded block/prelude pins, payload and tensor hashes, and
+direct source bytes for the exact block0 boundaries. Initial failing checks
+remain historical, outside the passing canonical stage set.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-qkv-boundary.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231`.
+Reports `compare-{baseline,qkv}.json`, `qualified-artifacts-final.json`,
+`default-preservation.json` and `guard-summary-final.json` retain commands,
+source snapshots and byte identities. The oracle is the earlier pinned
+PyTorch 2.8.0 MPS attention adaptation, not a newly rerun full upstream model.
+Same-lineage mini-Quad review is correlated. Refresh this bounded certificate
+on source, binary/runtime, weight, input, mask, layout or precision changes;
+missing or mutated evidence revokes it. Full generation was not run.
+
+## Connected refiner condition, adaLN and norm1 BF16 boundaries (2026-11-03)
+
+Status: the default-off block-boundary control is qualified on one finite T0
+V263 capture, with 1,280 stored rows. Nine of its ten observed outputs are
+byte-identical to the pinned source trace: condition SiLU, adaLN and both gates
+in both blocks, plus block0 norm1. Block1 norm1 is BF16-representable but still
+differs; its input already differs after block0. The full raw refiner gate
+remains **false** at unchanged `atol=rtol=2e-5`. This is not a motion fix or
+generation/performance qualification. The oracle is the previously captured,
+pinned PyTorch 2.8.0 MPS attention adaptation; its full forward was not rerun here.
+
+The new `--refiner-block-boundaries-bf16-control` requires execution, both linked
+trace outputs and all five prelude controls from the next sections. It reuses
+the existing BF16-typed SiLU plan for each condition, rounds adaLN after bias
+in the existing linear epilogue, and rounds norm1 after its existing affine
+epilogue. Norm2 and QKV remain unchanged. No extra explicit dispatch, named
+buffer, readback or wait is introduced. This statement excludes opaque MPS
+internal activity. The default remains false; omit this new flag to restore
+the previous path with the five prelude controls unchanged.
+
+The same-input adaLN GPU replay falsified output-only rounding. It used the
+actual BF16 global checkpoint weights and the captured block0 condition:
+
+| Replay / captured boundary | Result |
+| --- | --- |
+| Raw condition SiLU vs source | Mixed tolerance passes; max error 2.6703347e-6; bytes differ |
+| BF16-rounded condition SiLU vs source | Exact |
+| F32 linear on raw condition vs captured native adaLN | Exact |
+| Round only the captured adaLN output | 13 unequal values at zero tolerance; three mixed-tolerance failures |
+| BF16-rounded condition, F32 linear/bias, BF16-rounded output | Exact source adaLN |
+| Connected control: condition SiLU, adaLN and both gates, both blocks | Eight exact tensor hashes |
+| Connected control: block0 norm1 | Exact over all 2,621,440 values |
+
+All ten controlled outputs pass zero-tolerance BF16 representation checks.
+Source equality is a separate result: its aggregate is false because block1
+norm1 has 710,895 unequal values at zero tolerance (708,512 at mixed tolerance,
+max .03125). Both check classes require complete, ordered coverage; missing or
+duplicate rows cannot pass vacuously. Their aggregates are null with the new
+control disabled. Representation never implies source equality.
+
+The first failed raw checkpoint now advances to **block0.qkv**, for full,
+valid and padding regions. Its raw max error is .03124809265; its diagnostic
+BF16-rounded view is exact, suggesting the next output-boundary discriminator.
+That view does not change the connected graph or qualify QKV arithmetic.
+Block0 output max .61703491 / RMS .02372259 and block1 output max 1.20420837 /
+RMS .03398030 remain non-parity results; they do not isolate later operations.
+
+Checks: fresh executable/bridge build, 26 Crystal examples, 48 Python tests,
+nine compiled CLI rejection cases, GPU A/A and perturbation controls pass.
+With the new control disabled, all 62 previous tensor records and three
+payloads repeat exactly. All 16 prelude hashes equal source in both new modes.
+Both native captures retain 944,620,612 named bytes and encode counters
+[0 allocations, 0 readbacks, 0 preterminal waits, 1 terminal wait]. The block
+captures embed 16 matching native source pins; prelude captures embed 14.
+Final comparison/replay stages verify 87 file pins before and after execution.
+The two Python comparator/spec files changed after native capture only to
+enforce exact-source coverage; compiled neural sources remained identical.
+
+Across nine canonical guarded stages: file-cache-aware 10% floor, 6 GiB process
+cap, 64 MiB swap-growth stop; peak sampled group footprint 2,332,182,736 bytes,
+minimum sampled headroom 25,513,803,776 bytes, zero observed stage swap growth,
+no live children in final samples. Sampling does not bound between-poll spikes
+or all opaque Metal resources. The initial assertion-text test failures remain
+historical; corrected checks are the qualified stages. Same-lineage mini-Quad
+review returned ROBUST within this one-capture scope; it is correlated, not
+independent replication. The replay harness admits 2.8.x, but this certificate
+covers only the observed 2.8.0 runtime and expires on runtime changes.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-block-boundaries.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv`.
+Canonical reports: `compare-{default,control}-final.json`,
+`adaln-replay-current-final.json`, `qualified-artifacts-final.json`,
+`guard-summary-final.json`. Commands, logs, source snapshots, binaries and
+payload hashes are retained externally. The artifact index authenticates
+coverage and bytes; it does not itself prove neural correctness.
+
+Next discriminator: qualify a connected QKV BF16 output boundary on the now
+identical block0 norm1 input; separate output representation from projection
+reduction if any mismatches survive. This supersedes the previous section's
+next discriminator. Keep the new control opt-in until the full chain passes.
+Refresh after source, executable/runtime, weights, input/noise, caption/mask,
+layout or precision changes; missing or mutated bound artifacts revoke this
+bounded result. DiT K/V, T1, reference-driven motion and generation remain open.
+
+## Two-block refiner trace on corrected BF16 prelude inputs (2026-11-03)
+
+Status: the observational native/source trace and GPU comparison are qualified
+for one authenticated finite T0 V263 capture. The full refiner numerical gate
+fails at the unchanged `atol=rtol=2e-5`. This change adds diagnostics only; it
+does not change neural arithmetic, qualify motion, or claim a speedup.
+The oracle is pinned PyTorch 2.8 with the MPS attention adaptation, not stock
+CUDA/Magi execution.
+
+The opt-in `--refiner-block-trace-output PATH` requires execution, the linked
+prelude trace and all five prelude BF16 controls listed below. The CLI rejects
+missing controls and existing/colliding output paths before creating the
+native arena; trace/comparator admission rejects invalid capture metadata.
+The trace exports 37 named F32 views of existing
+checkpoints over both blocks, including all 1,280 stored rows (263 valid and
+1,017 padding). `block1.input` aliases `block0.output`; the payload stores 36
+unique ranges, 450,977,792 bytes. Optional native reads follow the existing
+terminal drain. No in-chain dispatch, buffer, readback or wait was added.
+Native encode counters remain zero allocations/readbacks/preterminal waits
+and one terminal wait; these counters exclude opaque MPS internal activity.
+
+The complete `block0.input` (2,621,440 values) and `c` (2,048 values) are
+byte-identical to source. In canonical dependency order, the first **failed**
+raw checkpoint is `block0.adaLN`. This is not the first nonzero difference:
+the preceding condition SiLU differs but passes the mixed tolerance. The
+original prediction that condition SiLU would fail first was refuted.
+
+| Checkpoint, full extent | Raw failures / values | Raw maximum absolute error | Failures after diagnostic BF16 rounding |
+| --- | ---: | ---: | ---: |
+| `block0.condition_silu` | 0 / 2,048 | 2.6703347e-6 | 0 |
+| `block0.adaLN` | 1,752 / 4,096 | 1.2011826e-4 | 3 |
+| `block0.norm1` | 2,488,674 / 2,621,440 | 0.015273571 | 0 |
+| `block0.output` | 2,583,092 / 2,621,440 | 0.61708069 | 180,393 |
+| `block1.output` | 2,597,826 / 2,621,440 | 1.2043610 | 674,570 |
+
+`norm1` is a separate branch from the identical block input; its diagnostic
+rounded view is exact on this capture. Neither rounded view repairs a
+connected operation. In particular, adaLN's three remaining failures rule
+out promoting output-only rounding as sufficient. Later block1 differences
+may propagate from block0 and do not isolate a block1 defect. The first
+failed valid/padding rows are `block0.norm1`, since adaLN is vector-valued.
+All 37 source BF16 representation checks pass at zero tolerance. GPU A/A
+and deliberate-perturbation controls pass. Each comparison exports one packed
+terminal metrics buffer; neural metrics are computed on MPS.
+
+The source observer captures the actual two block calls, two attention calls
+and four gate calls without replaying a neural operation. It attaches after
+the loader's final attention-adapter bind, transparently delegates the earlier
+preflight bind and restores wrapped functions on exit. Two rejected collectors
+are retained: the first lost its attention observer to rebinding; the second
+attached too early to preflight. Lifecycle/BOOL metadata regressions were
+rejected by focused tests before the final capture. The repeated source
+prelude and block payloads are byte-identical to the successful earlier run.
+The old prelude payload is also unchanged from the previous qualified step.
+
+Checks: fresh native/bridge build, 25 Crystal examples, 39 focused Python
+tests and eight compiled CLI rejection cases pass. Canonical source capture
+and comparator verify 67 source-file hashes before and after execution;
+16 embedded native source pins and retained executable/object hashes bind
+the native capture. Code snapshots, commands, logs and payload hashes are
+indexed in the evidence packet. The file-cache-aware 10% floor, 6 GiB process
+cap and 64 MiB swap-growth stop remain unchanged. Across seven canonical
+stages, peak sampled group footprint was 4,047,440,680 bytes, minimum sampled
+headroom 25,901,449,216 bytes, and observed stage swap growth zero; all final
+samples had no live children. Guard sampling cannot bound between-poll spikes
+or all opaque Metal allocations. The same-lineage
+mini-Quadrumvirate verdict is ROBUST for this diagnostic result; it is
+correlated review, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-blocks.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818`.
+Canonical captures are `native-*` and `source-qualified*`; comparison is
+`compare-qualified.json`, identity index `qualified-artifacts.json`, and
+guard index `guard-summary.json`. Earlier failed stages remain historical.
+
+Next discriminator: replay adaLN with the exact source BF16-rounded condition
+SiLU operand and identical weights/bias, separating operand precision from
+projection reduction and the bias/output boundary. Then qualify a connected
+`norm1` BF16 boundary. Do not infer DiT K/V, T1 or motion correctness from this
+trace. Roll back by omitting the new trace flag. Refresh after source,
+executable/runtime, weights, input/noise, caption/mask, layout or precision
+changes; missing or mutated bound artifacts revoke this result.
+
+## Connected second-linear and conditioning-add BF16 boundaries (2026-11-03)
+
+Status: all 16 captured native prelude tensors are byte-identical to the
+pinned source BF16 trace on the authenticated finite T0 V263 input. This
+qualifies the captured prelude on this input; the two refiner blocks, DiT K/V,
+T1 and reference-driven motion remain open. No generation or speedup is claimed.
+The oracle remains adapted pinned PyTorch 2.8 MPS, not stock CUDA/Magi.
+
+The added controls are default-false and cumulative:
+
+```text
+--refiner-input-bf16-control
+--refiner-linear-bf16-control
+--refiner-silu-bf16-control
+--refiner-second-linear-bf16-control
+--refiner-add-bf16-control
+```
+
+The three second projections (`refiner_timestep`, `context_embed` and
+`time_in.mlp2`, captured as `vec`) round after bias inside the existing
+projection dispatch. The conditioning add substitutes one add-and-BF16-RNE
+dispatch for the existing add, reading the already rounded operands and
+writing the existing `c` buffer. There are no additional explicit dispatches,
+named buffers, readbacks or waits. Opaque MPS activity is not covered by that
+statement. Without these flags, the old path is retained.
+
+The pre-edit GPU replay separated the two missing boundaries:
+
+| Conditioning sum variant | Failures / 2,048 | Maximum absolute error |
+| --- | ---: | ---: |
+| Previous raw sum | 2,039 | 0.24324799 |
+| Round only the sum | 524 | 0.25 |
+| Round only both operands | 2,026 | 0.125 |
+| Round operands and sum | 0 | 0 |
+
+The connected native ablation reproduces this distinction: second-linear
+control leaves only `c` failing (2,026 values, maximum 0.125); adding the sum
+boundary gives zero error in all 16 raw rows at unchanged `atol=rtol=2e-5`.
+Fourteen selected consumed boundaries also pass zero-tolerance BF16-expanded
+representation checks. Separate authenticated tensor hashes establish source
+byte identity; a representation check alone does not establish that identity.
+NaN payload semantics and general operation equivalence are unqualified.
+
+The comparator requires all five explicit Boolean control fields and rejects
+a missing or promoted full-parity claim. Trace metadata continues to set
+`full_bf16_prelude_parity=false`: a single-input capture is not general parity.
+The default has zero selected BF16 boundaries and reports `null`, not a
+vacuous pass. Default, input-only, first-linear and SiLU modes preserve all
+previous nine preblock and 16 refiner tensor hashes and complete payload bytes.
+All 16 default raw rows still pass the source F32 control.
+
+Fresh final build, 44 Python tests, 18 Crystal examples and eight CLI rejection
+cases pass. GPU A/A, deliberate perturbation and non-BF16 sensitivity controls
+pass. All six native modes retain 944,620,612 named bytes, zero tracked encode
+allocations/readbacks/preterminal waits and one existing terminal wait.
+Optional trace reads follow that wait. The file-cache-aware 10% floor, 6 GiB
+process cap and 64 MiB swap-growth stop remain in force; sampled metrics and
+their limitations are retained in the evidence packet.
+The same-lineage mini-Quadrumvirate review returned ROBUST within this finite
+captured-prelude scope; it is correlated review, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-second-add.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-second-20261103.vjm1xm6u`.
+Canonical captures are `native-final-*`, comparisons `compare-qualified-*`,
+identity/build records `qualified-artifacts-final.json`, and guard records
+`guard-summary-final.json`. Earlier captures remain historical, including
+pre-format source/binary identities; they are not final qualification inputs.
+
+Next: compare the two refiner blocks on these exact corrected inputs before
+interpreting DiT K/V or retesting motion. Keep controls opt-in. Omit the new
+flags to restore prior behavior. Refresh after source, executable/runtime,
+weights, reference/noise, caption/mask, layout or precision changes; missing
+or mutated retained artifacts revoke this bounded result.
+
+## Connected first-linear and SiLU BF16 boundaries (2026-11-02)
+
+Status: the opt-in native control now reproduces four first-linear outputs and
+three SiLU outputs byte-for-byte against the pinned source BF16 trace on the
+authenticated current T0. These are the buffers consumed by the next GPU
+operation. The complete BF16 prelude, refiner, cache and motion remain open.
+This step runs no DiT block or video generation and makes no speedup claim.
+
+The input is unchanged from the experiment below: 4,320 video rows, 263 valid
+Qwen rows, 1,280 stored rows and writer timestep 206.897. Source remains the
+adapted pinned PyTorch 2.8 MPS oracle, rather than stock CUDA/Magi execution.
+New flags require the earlier boundary controls and a trace-enabled execution:
+
+```text
+--refiner-input-bf16-control
+--refiner-linear-bf16-control
+--refiner-silu-bf16-control
+```
+
+First-linear rounding is fused into the existing post-bias dispatch. Only
+`refiner_timestep_mlp1`, `context_linear1`, `input_embed` and `time_in.mlp1`
+select it. The SiLU graphs declare BF16 negative, exp, add and divide nodes,
+check those declared types, then enforce a BF16 round-to-nearest-even output
+expansion through UInt32 operations inside the same graph. Their F32 external
+buffers and the existing chain are reused. Backend internal rounding,
+accumulation, dispatches and resource allocation remain opaque.
+
+| Consumed boundary | Failures before its correction | Failures after correction | Final maximum error |
+| --- | ---: | ---: | ---: |
+| Refiner timestep first linear | 1,799 / 2,048 | 0 / 2,048 | 0 |
+| First context linear | 2,023 / 2,048 | 0 / 2,048 | 0 |
+| Input embedding linear | 532,894 / 538,624 | 0 / 538,624 | 0 |
+| First time-vector linear | 1,248 / 2,048 | 0 / 2,048 | 0 |
+| Refiner timestep SiLU | 1,641 / 2,048 | 0 / 2,048 | 0 |
+| Context SiLU | 162 / 2,048 | 0 / 2,048 | 0 |
+| Time-vector SiLU | 855 / 2,048 | 0 / 2,048 | 0 |
+
+The first four before-counts use the input-only control; the last three use
+the linear control. Hashes confirm byte equality for all ten cumulative
+controlled boundaries, including the previous mean and two sinusoids. This
+is a result for one authenticated input, not a general equivalence proof.
+
+The first SiLU candidate, using only graph BF16 casts, produced the same F32
+payload as the linear-only run. A new zero-tolerance check rejected its raw
+outputs as non-BF16-expanded even though post-rounded diagnostic views were
+exact. Declared graph types alone therefore do not qualify a consumed value.
+The final explicit integer rounding passes that check. Why the cast-only
+graph produced wider values remains unverified; no compiler-elision claim
+follows. Both candidate source snapshots and reports are retained.
+
+The full 16-tensor BF16 gate correctly remains false at unchanged
+`atol=rtol=2e-5`. The first remaining mismatch is the second timestep linear:
+1,809 / 2,048 failures, maximum 0.0019197464. Context's second linear, the
+context sum and the final time vector also differ. Post-rounded views remain
+diagnostic and do not repair those connected operations.
+
+Fresh default replay preserves all nine preblock and 16 refiner hashes and
+passes all 16 raw comparisons against source F32. Input-only and linear-only
+ablations also preserve their prior hashes. Compiled source pins now include
+the actual linear kernel, activation bridge and supporting loaded sources;
+the comparator rejects stale or inconsistent pins. The activation bridge was
+compiled and linked in a fresh isolated build. Exact object and executable
+hashes are retained.
+
+Checks: 42 focused Python tests, 17 Crystal examples, four CLI rejection cases,
+GPU A/A, deliberate perturbation and non-BF16 sensitivity controls pass.
+All four final native runs report zero tracked allocations, readbacks and
+preterminal waits during the measured encode interval, one existing terminal
+wait, and 944,620,612 named buffer bytes. Optional diagnostic reads occur after
+that wait. These counters do not measure opaque MPS internal activity.
+Thirty guarded stages, including the expected failing admission probe,
+retain the file-cache-aware 10% floor, 6 GiB process cap and 64 MiB swap-growth
+stop. Maximum sampled group footprint is 0.964 GiB, minimum headroom 27.528
+GiB, and observed stage swap growth is zero. All final samples have no live
+children; sampling does not bound between-poll spikes or all Metal residency.
+
+Same-lineage mini-Quad verdict: ROBUST for these ten consumed boundaries on
+this input. The zero-tolerance representation check establishes BF16-expanded
+values; the separate bound source/native tensor hashes establish byte identity.
+
+Evidence: `.landmark/evidence/2026-11-02-hy-nomas-refiner-linear-silu.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-linear-20261102.8mxo6zrk`.
+Keep both new controls default-false. Next: qualify the three second-linear
+outputs and context addition on the exact corrected inputs, then the refiner
+blocks, before interpreting block-0 K/V or retesting motion. Omit the flags
+to restore normal behavior. Refresh after source, binary/runtime, weights,
+reference/noise, caption/mask, layout or precision changes; missing or mutated
+retained artifacts revoke the bounded result.
+
+## Reference refiner input precision boundaries (2026-11-02)
+
+Status: an opt-in native input control makes the current T0 masked mean and
+both consumed sinusoidal inputs byte-identical to source BF16. Default F32
+behavior is unchanged. The complete BF16 refiner gate still fails; this is
+not a fix for static acting, full T0/T1, or block/cache parity.
+
+The authenticated reference and caption are the same as in the preblock
+experiment below: 4,320 video rows, 263 valid Qwen rows, 1,280 stored rows,
+and writer timestep 206.897. A separate native trace exports 16 existing
+refiner checkpoints after the existing terminal wait. The nine-tensor cache
+fixture schema is unchanged. Compiled-in source snapshots bind a capture to
+the executable's source rather than mutable files on disk. The comparator
+rejects stale native source pins, changed Qwen bytes, or a source mask that
+is not the authenticated valid prefix.
+
+Source hooks observe actual module inputs and outputs, including the masked
+mean consumed by the context embedder, the real BOOL mask, and sinusoids
+before and after their BF16 casts. They run the complete source text refiner
+but stop before DiT block 0. All source trace tensors use one terminal packed
+export. Hooks and the scoped timestep-function wrapper are restored even
+after registration failure. The default source's original nine tensor hashes
+remain equal to the prior BF16 capture; this is an adapted pinned MPS source
+oracle, not an unmodified CUDA/Magi execution.
+
+Two missing input boundaries are now isolated on identical Qwen bytes:
+
+- The source sums the mask in BF16. Its 263 ones produce a BF16 count of
+  264. The source also rounds the numerator and quotient. Replaying that
+  expression on MPS matches all 3,584 actual mean values exactly. Keeping
+  the BF16 numerator but dividing by F32 count 263 fails 2,298 values, with
+  maximum error 0.25. The count alone is not the complete correction.
+- The raw F32 sinusoids match native exactly. The source then casts them to
+  BF16 before each first linear. This cast was absent from native.
+
+`--refiner-input-bf16-control` selects the bounded correction in the existing
+mean and sinusoid kernels. It requires `--refiner-trace-output` and
+`--execute`; the plan constructor also exposes the default-false option.
+It changes no linear or activation boundary. It adds no dispatch or device
+buffer. The fresh native GPU result is:
+
+| Consumed boundary | Default failures | Input-control failures | Input-control maximum error |
+| --- | ---: | ---: | ---: |
+| Masked mean | 3,537 / 3,584 | 0 / 3,584 | 0 |
+| Each sinusoidal input | 242 / 256 | 0 / 256 | 0 |
+| Refiner timestep MLP first linear | — | 1,799 / 2,048 | 0.0019437671 |
+
+The repaired mean and sinusoidal tensor hashes equal source. The first
+remaining raw mismatch is now `refiner_timestep_mlp1`; its BF16-rounded view
+is exact. After the repaired inputs, rounded first context, input-embedding,
+and `time_in` projections also match source exactly. These post-rounded views
+identify the next boundary; they do not repair later SiLU, second linear,
+context sum, text-refiner output, or time vector. The complete 16-row raw gate
+correctly stays false at unchanged `atol=rtol=2e-5`.
+
+Fresh default replay preserves all nine preblock and 16 refiner tensor hashes.
+Against the F32 source precision control, all 16 raw refiner comparisons pass.
+GPU metric A/A and deliberate-perturbation controls pass. The native counters
+cover cache/patch/refiner encode after `prepared.encode`: zero tracked
+allocations, readbacks, or preterminal waits, one existing terminal wait, and
+944,620,612 named buffer bytes. The optional trace performs expected buffer
+reads after that wait. Opaque MPS allocations are outside these counters.
+
+Checks: 39 focused Python tests, 13 Crystal examples, formatting, and a fresh
+native build pass. The 12 selected guarded stages retain a file-cache-aware
+10% floor, 6 GiB process cap and 64 MiB swap-growth stop. Maximum sampled group
+footprint is 1.347 GiB, minimum headroom 32.832 GiB, observed stage swap growth
+zero; every final sample has no live children. Samples do not bound all Metal
+residency or between-poll spikes. No timing or generation-quality claim follows.
+Same-lineage mini-Quad review is ROBUST for these input boundaries only.
+
+Evidence and immutable captures, commands, code snapshots, final reports, and
+guard logs: `.landmark/evidence/2026-11-02-hy-nomas-refiner-input-precision.json`
+and `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-boundaries-20261102.1mldjq7x`.
+The `*-final.json` comparisons supersede earlier reports' overly broad replay
+wording; the early numeric measurements remain historical.
+
+Next: implement and test first-linear/SiLU BF16 boundaries inside the existing
+operations, then qualify later prelude and block-0 K/V separately. A shared
+native nine-tensor fixture can isolate block behavior with F32 controls on
+both sides; the existing block-0 comparison helper uses CPU numerical metrics
+and needs an explicit GPU path before that experiment. No block probe ran in
+this step. Keep the input control opt-in. Refresh after source, binary/runtime,
+weights, reference/noise, caption/mask, layout, or precision changes; missing
+or mutated retained artifacts revoke the result. Omitting the control flag
+restores default behavior; remove optional trace helpers to remove diagnostics.
+
+## Reference T0 preblock precision control (2026-11-02)
+
+Status: the standalone native T0 preblock fixture matches the source F32
+precision-control trace at unchanged `atol=rtol=2e-5`. All nine tensors pass;
+eight are byte-exact. This does not qualify the complete native T0/app path,
+any DiT block, cache K/V, T1, or the cause of the static acting.
+
+The probe uses the current reference's exact BF16 T0 latent
+`[1,32,30,9,16]`, 4,320 video rows, 263 valid caption rows and the writer
+timestep `206.897`. The extracted safetensors artifact SHA-256 is
+`9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60`;
+its latent tensor SHA-256 is
+`ef627350d3d605825b1884c49a4de5a89dc7ac027ecda64f74a6db5bc909d8e9`.
+The old standalone fixture contains a different reference and is excluded.
+
+`spec/support/hy_nomas_reference_preblock_control.py` reuses the admitted
+structured continuation's actual T0 preprocessing and stops at the first
+block call. A sentinel substitutes for block 0; no DiT block weight tensors
+are loaded, no block body runs and no cache K/V is written. CPU admission
+still authenticates the pinned block-index identities. The default capture
+preserves source BF16, and its final payload is byte-identical to the initial
+BF16 capture after the diagnostic code changes.
+
+The default source BF16 comparison fails before block 0:
+
+| Boundary | Maximum absolute error | Failed values |
+| --- | ---: | ---: |
+| Patch image embedding | 0.0037722588 | 7,368,339 / 8,847,360 |
+| Valid text-refiner output | 1.2783203125 | 535,706 / 538,624 |
+| Time vector, each of `vec` and `vec_txt` | 0.00043955445 | 1,280 / 2,048 |
+
+Clean latent, BF16-rounded noisy writer latent, both RoPE tensors and timestep
+are byte-exact. Rounding only the exported native patch embedding to BF16
+also gives an exact match. That diagnostic output rounding does not repair
+text or time vectors: 237,292 text values and 444 values in each vector still
+fail. It does not emulate intermediate BF16 boundaries.
+
+The opt-in `--precision-control-f32` capture loads the same pinned BF16
+checkpoint values into F32 global modules, widens the actual BF16 writer
+latent and loaded Qwen input at the live module prehooks, and selects the F32
+refiner-attention adapter before it is bound. The clean/noisy BF16 blend,
+timestep, caption, mask and first-block stopping boundary remain the same.
+Against this trace, all nine raw native exports pass: valid text has maximum
+error `7.62939453125e-6`, RMS `2.0452695537e-7` and zero failures; the other
+eight tensors are byte-exact. The control changes multiple precision choices
+together, so it does not isolate one causal BF16 operation or establish that
+precision alone explains the full T1 or motion difference.
+
+`spec/support/hy_nomas_reference_preblock_compare.py` authenticates the source
+and native manifests/payloads, joins the timeline identity, valid prefix,
+writer contract and exact clean-reference bytes, and computes all raw and
+diagnostic metrics on MPS. Source-only Qwen/action/cache/global identities are
+pinned by the source manifest; the native fixture schema has no matching
+fields. The raw mixed absolute/relative gate alone determines numerical
+success. A/A passes and a deliberate perturbation fails through the same GPU
+metric path. One terminal aggregate readback exports the comparison scalars;
+the source capture likewise exports its packed tensors once at the end.
+
+The existing native probe records zero instrumented encode allocations,
+readbacks and preterminal waits, with one terminal drain and 944,620,612 bytes
+of named buffers. The five final native/source/comparison stages pass the
+file-cache-aware 10% guard, 6 GiB process cap and 64 MiB swap-growth stop.
+Minimum sampled headroom is 40.196 GiB, with zero observed swap growth and no
+live children at each final sample. Sampled process footprint is not a bound
+on Metal residency or between-poll peaks. These small diagnostic stage times
+are not a matched performance benchmark; no full generation was run.
+
+Checks: the preblock-control, preblock-comparison and structured-reference
+Python suites pass 21 tests. Same-lineage mini-Quad review is ROBUST for the
+standalone preblock/F32-control claim only. Commands, exact source snapshots,
+guard logs, captures and comparisons are retained in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a` and indexed by
+`.landmark/evidence/2026-11-02-hy-nomas-preblock-precision.json`.
+
+Next discriminator: compare the source BF16 masked mean, timestep/context
+embeddings and input projection at their actual rounding boundaries, then
+compare the block-0 K/V write on matched inputs. The current native refiner's
+BF16 attention control rounds Q/K/V and attended output only; it is not a
+full BF16 prelude mode. Keep production behavior unchanged until the missing
+boundaries have their own falsifier. Refresh this certificate after changes
+to source/runtime, native binary, weights, reference/noise, caption/mask,
+geometry or precision controls. Missing or mutated retained artifacts revoke
+their use. Rollback removes the optional capture/comparison helpers and tests;
+production inference is unchanged.
+
+## Static reference regression diagnosis (2026-11-02)
+
+Status: the original structured RoleWright take is effectively static. A
+stronger action now produces a visible head turn in masked and unmasked
+source BF16 controls and a masked native take; a reliable hold and complete acting
+remain unfulfilled. The prior comparison changed
+both the mask and the action text: the old whole-scene instruction requested
+a Resume hand-to-chest gesture, whereas the new Alex-only action removed that
+gesture and held his torso, shoulders and hands fixed. It cannot attribute the
+lost gesture to the mask alone.
+
+Three bounded source BF16 MPS controls retain the reference latent, weights,
+initial noise and decoder noise/weights. With the new caption/action, removing
+the mask does not restore a substantial head turn. With the old whole-scene
+T1 action and its original D576 padding, swapping only T0 to the new caption
+retains a small late Resume gesture; Alex remains fixed. This rejects the new
+reference caption as the sole cause of losing the old gesture. It does not
+isolate T1 wording from the D320/D576 geometry difference. Finally, increasing
+the masked source run from
+four to the app's eight image-reference denoising steps still produces no
+appreciable head turn in 25 ordered generated-T1 frames. T0 remains byte-exact;
+T1 changes, so identical output buffers are not the explanation. Nonzero
+latent or pixel differences do not establish acting.
+
+An additional matched, unmasked source BF16 control changes only the T1
+wording bundle: Alex turns his head and shoulders away from the laptop and
+Resume toward the camera, raises his chin to a frontal pose, and is asked to
+hold. D320, four steps, T0, weights, both noise sources, schedule, cache writer
+and decoder remain fixed. T1 valid text changes from 152 to 150 rows. The
+ordered 25-frame sheet shows a clear head/upper-body turn, followed by a return
+to the laptop; Resume remains still. The turn is observed, but the requested
+hold is not. This rejects a blanket inability to animate this reference in the
+adapted source path. It does not isolate the effect of direction, amplitude
+or released body constraints from one another, or qualify native DiT parity.
+The inherited unmasked receipt's `diagnostic.change` string is
+stale for this new wording control; a separately authenticated pairing note
+corrects it without rewriting the original result.
+
+The same stronger instruction also produces a visible turn in the masked
+source BF16 and native T1: Alex turns toward the camera and returns toward
+the laptop near the end; Resume remains still and the requested hold is absent. The clip
+contains only generated T1 frames `[120,240)`, excluding the technical T0.
+The native chain records zero instrumented encode allocations, readbacks and
+preterminal waits in each phase, with the existing one terminal drain per
+encoder/DiT/decoder chain. The matched masked source latent comparison keeps
+`atol=rtol=2e-5`: T0 is byte-exact, but T1 fails with maximum error
+`3.20703125`, RMS `0.1434121877` and 126,770/138,240 mismatches. All values are
+finite. Native K/V/intermediate precision remains F32 versus source BF16;
+this result is not full DiT parity. The end-to-end native request takes
+658.21 s (reference encoder 377.29 s, DiT 43.25 s, decoder 175.14 s, excluding
+their setup times), with sampled peak footprint 25.367 GiB, minimum
+cache-aware headroom 16.222 GiB and zero swap growth. These are diagnostic
+timings, not a matched performance benchmark or a speedup claim.
+
+The diagnostic action text is
+`<Action1><|Subject1|> turns his head and shoulders clearly away from the laptop and the living Resume toward the camera, lifting his chin until his face is frontal; then holds the new pose</Action1>.`
+It remains one bounded Action1/Subject1 control, not the requested complete
+advertisement or a reliably timed multi-character script. The paired T1-only
+comparison is `strong-masked-native-left-source-right-5s.mp4` in the local run
+directory: native left, source BF16 DiT with the common native decoder right.
+
+The first pretty-printed JSON attempt is rejected before model construction:
+upstream computes action offsets with default one-line `json.dumps`, which
+does not match an indented prompt. Re-serializing the same intended action in
+the baseline's default format yields nonempty source offsets `[57,258]`,
+effective `[57,150]`, and unchanged temporal windows. The rejected attempt is
+retained; no admission gate or tolerance is relaxed. A read-only audit finds
+no production builder that injects the fixed-body wording: it was authored
+in the test prompt. The bounded head-turn profile validator still applies.
+
+A pinned source audit also finds no default reference-history mismatch:
+`prev_seg_last_frame_only=false`, sliding-window attention disabled, all 4,320
+T0 video rows plus valid caption rows retained. The explicit low-memory
+preset instead samples 18/30 past frames; selection of that preset in a live
+historical request is not established. The a31 app's fixed-image branch
+skips T0 denoising and uses writer sigma `0.206897`, timestep `206.897`, 120
+repeated RGB frames / 30 latents and default CFG 1, matching the adapted
+control's settings. The older 911 model checkout predates this app branch;
+matching these settings is not proof of identical end-to-end callgraphs.
+
+These controls use a common native PixelUMM. A dedicated same-latent oracle
+now admits exactly the full 60-latent bank, global decoder-noise time prefix
+`[0,240)`, all 11 overlapping windows and all 36 decoder blocks. Its valid
+comparison is display-range planar pixels before MP4 export at unchanged
+`atol=rtol=2e-5`, with BF16 source weight-word checks and one explicit terminal
+MPS drain. The previous
+30-latent decoder certificate does not qualify this input. The decoder oracle
+is pinned to Torch 2.6.0; the DiT controls use Torch 2.8.0. An attempted launch
+in the latter environment was rejected before model construction and retained;
+the version gate is not relaxed. CPU admission/boundary checks initially pass
+41/41 in the pinned 2.6.0 environment. After the representation correction,
+the final five related CPU suites pass 57/57. The corrected oracle uses schema
+`cogni_ml.hy_nomas_decoder_continuation_control/v2`; the retained invalid
+raw-comparison scratch result remains v1 and is explicitly invalidated.
+
+The first full-source decoder run completes all 468 source/cache weight-word
+checks but its pixel comparison is invalid: it compares upstream pre-display
+`[-1,1]` output against the native CLI's already finalized `[0,1]` file. The
+receipt's F32 dtype alone does not identify this range. The original script,
+result and explicit invalidation note are retained. This mismatch is not
+evidence of a model or decoder defect, and the native pre-display raw output
+cannot be reconstructed from the rounded/clamped display file.
+
+A separate bounded GPU recovery authenticates the saved source raw pixels and
+native receipt, checks that the F32 raw file is an exact BF16 expansion,
+applies the pinned BF16 multiply/add/clamp, and compares the resulting display
+pixels at the original tolerance. All 106,168,320 values match byte-for-byte:
+maximum and mean error zero; both display-file SHA-256 digests are
+`41c96e5806f244d042cd0ebba0ace6ca230c1352e7d980281fc0607c2631092c`.
+Thus there is no native decoder-specific pixel difference for this source
+output. The corrected repository comparison helper also reproduces the exact
+display match on the complete saved tensor, and its final plan-only admission
+passes with the pinned executable and postprocess identities. This qualifies
+the same-input display boundary, not native raw parity,
+DiT parity, stock CUDA/Magi parity, or the requested acting. A duplicate MP4
+export would encode identical pixels and provides no new motion evidence.
+
+The source run takes 384.67 s with sampled peak footprint 6.453 GiB and minimum
+cache-aware headroom 18.294 GiB. The recovery takes 3.17 s, peak 3.014 GiB,
+minimum headroom 40.725 GiB. Both have zero swap growth and remain above the
+10% floor; the recovered comparison has one explicit terminal MPS drain and
+does not rerun DiT or any decoder block. Sampling does not bound between-poll
+peaks or opaque MPS resources. A first recovery helper lacked one geometry
+field and exited before its terminal comparison; its fresh corrected stage
+is retained separately.
+
+Local evidence and immutable stage commands:
+`/opt/mldata_ssd/cogni-ml/rolewright-static-diagnosis-20261102.grp_w5zj`.
+No production inference path, synchronization contract or tolerance is changed
+by these diagnostics. Full native DiT BF16 parity, reliable action timing and
+multi-character acting remain open. The common decoder is excluded as a
+native-only explanation for this case. Do not attribute the result to an inherent model limitation while the
+source attention adaptation and effective app checkpoint remain unqualified.
+
+## Structured reference actions (2026-11-02)
+
+Status: the opt-in native structured-action mask is implemented and passes the
+scoped source-range attention oracle. The requested Alex head turn is not
+observed in either five-second take through the common native PixelUMM.
+Full source BF16 parity still fails;
+mask correctness, visible acting and full-model equivalence remain separate.
+
+The admitted layout is one caption-only reference T0 with a single
+`<|Subject1|>` Alex roster entry, followed by one generated T1 with
+`<Action1><|Subject1|>... </Action1>.` in `contained_actions`. The exporter runs
+the pinned `a31c0fe0` prompt shaper, tokenizer offset methods and video-window
+builder, binds their source digests to saved Qwen conditioning, and normalizes
+global follow-up times to segment-local action times. These wrappers are
+literal text, not newly invented special-token IDs. The tested T1 action spans
+0.5-4.5 s: latent windows `[0,3)` and `[27,30)` are global gaps; `[3,27)` sees
+Action1 text. Raw text offsets `[57,260]` become `[57,152]` through the pinned
+caller's `min(offset, valid)` rule. Do not silently subtract the Qwen crop or
+reinterpret these source semantics.
+
+The prepared continuation keeps compact K/V in
+`[visible history | current video | valid current text]` order. All video keys
+remain globally visible; timed video queries and action-text queries see
+global keys plus their own action-text keys. Global queries cannot see action
+tails. Padded queries produce exact zeros. Text-refiner self-attention and its
+pooled conditioning retain the source's ordinary valid-text visibility: the
+mask is not proof of hard temporal or spatial isolation of an action.
+Historical action tails, multiple subjects/actions in this reference runner,
+longer timelines, checkpoint edits and the complete advertisement remain
+outside this slice and are rejected before Metal setup.
+
+Immutable I32 labels, one reusable F32 query-tile mask and graph bindings are
+prepared before encoding. Metal generates each mask tile on GPU, masks scores
+before the existing softmax and restores padded outputs. Activations, cached
+K/V and the shared scratch stay on GPU. The unlabelled path is retained as the
+rollback control: omit `--reference-action-mask` and its SHA argument for the
+previous separately conditioned untimed path. The mask flags require paired
+path/SHA arguments and separately authenticated action conditioning.
+
+Checks: `make spec_hy_nomas_reference_handoff` passes 101 CPU Crystal examples;
+the action-profile, structured-source-control and attention-oracle Python
+suites pass 15 tests. Three compiled CLI negative checks reject incomplete
+mask arguments or a mask without separate action conditioning before Metal.
+The tiny native GPU probe covers two action labels,
+global gaps, cached history, hidden padding and a 259-row query crossing the
+256-row tile boundary. Masked and legacy branches both pass the pinned source
+F32 oracle at maximum absolute error `7.62939453125e-6`, with zero failures
+under an absolute-only `2e-5` gate. Masked-versus-unmasked output differs by
+25.323884, so the fixture distinguishes an ignored mask. Release guards pass;
+tracked encode allocations/readbacks and preterminal waits are zero, with one
+terminal drain for the chain. These are small synthetic Q/K/V checks, not a
+full-model numerical certificate. Native builds and final plan-only admission
+pass; the final mask probe also passes after formatting.
+
+The guarded native reference take completed in 533.26 s: encoder 293.43 s,
+DiT 34.68 s and decoder 155.68 s. Sampled peak footprint was 25.362 GiB,
+minimum cache-aware headroom 15.273 GiB and swap growth zero, under the
+25.5 GiB process cap, 10% floor and 64 MiB swap-growth stop. Each phase reports
+zero tracked encode allocations/readbacks/preterminal waits and one terminal
+drain. The output contains technical T0 plus generated T1; the review clip
+selects only frames `[120,240)`. Root inspection of 25 ordered generated
+frames does not show a substantial head turn. No acting fix or speedup is
+claimed. Sampling does not bound between-poll peaks or opaque MPS storage.
+
+The same-input pinned source BF16 MPS control completes five forwards, with
+54 unmasked T0 and 216 source-range-masked T1 attention calls. It uses the exact
+source range builder once and preserves caption history, current action text,
+RoPE, initial noise and cache epsilon. Terminal T0 is byte-exact; T1 fails the
+unchanged `atol=rtol=2e-5` gate: 121,206 / 138,240 mismatches, maximum error
+0.51953125 and RMS 0.0224052633. Native full DiT intermediates/history remain
+F32; this control uses BF16. This comparison does not locate the first error
+or qualify stock CUDA/Magi/Flash execution. Two failed diagnostic admissions
+are retained: an inconsistent endpoint-note literal and recursive factory
+rebinding; both are corrected, with a captured-factory regression check.
+
+The source latent bank is decoded by the same native PixelUMM class with the
+same decoder weights, global noise frames `[0,240)`, RoPE and window starts.
+Executed pairing assertions bind caption/action conditioning and profile,
+DiT weights, imported latent, decoder executable and noise/geometry. Root
+inspection of 25 ordered source T1 frames also shows no substantial head
+turn. The source decode completes with zero tracked encode allocations,
+readbacks or preterminal waits and one terminal drain. A first decode attempt
+was rejected before execution because the required empty output directory
+did not exist; the retained retry uses an explicit new directory.
+
+The paired result rejects the claim that this action-mask change is sufficient
+to produce the requested movement. It does not exclude the common decoder,
+source MPS adaptation, reference-history initialization or prompt/model behavior
+as contributors. Next falsifier: compare T0 cache writer/history and the first
+T1 forward on identical inputs at source BF16 boundaries to locate the first
+numerical divergence, then isolate the common decoder if the action remains
+absent under exact source inputs. Do not infer motion from nonzero pixel deltas.
+
+Risk remains CAUTION for text/cache/attention semantics. The strongest failure
+mode is a successful run with wrong token/time visibility. The executed DoD
+is the source oracle, admission negatives, native build/plan, bounded reference
+take and ordered visual review; global BF16 equivalence and visible acting
+remain open. Correlated mini-Quad review is ROBUST for the bounded mask and
+admission contract; the tested head-turn outcome is BROKEN. Evidence index:
+`.landmark/evidence/2026-11-02-hy-nomas-action-masks.json`. Local artifacts:
+`/opt/mldata_ssd/cogni-ml/rolewright-action-masks-20261102.2hpyx7c6`.
+Refresh on source, binary, input, mask, tokenizer, weights, geometry, precision,
+cache, backend, compiler, runtime or device change, or local artifact loss.
+
+## Reference continuation correction (2026-11-02)
+
+Status: partial motion after the caption/action correction; the requested
+acting script is not fulfilled. The first reference-conditioned RoleWright
+take is effectively a still illustration according to user playback and a
+25-frame contact sheet. Nonzero frame or latent differences do not establish
+visible acting. Its export selects the generated T1 frames correctly; no
+literal T0-buffer alias was found. The output does not qualify the requested
+image-to-video capability.
+
+The audited upstream `a31c0fe0` UI initializes T0 with the image caption, then
+submits the continuation instruction as a separate text turn. The native take
+used one shared action-bearing prompt at T0 and T1, with text K/V cached only
+at T0. This is a demonstrated conditioning-contract mismatch, not proof that
+it alone caused the static result. Upstream anchors are
+[`WorldStudio.tsx:1567-1583`](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/frontend/src/components/WorldStudio.tsx#L1567-L1583)
+and [`seg_ar_gateway.py:1836-1917`](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/seg_ar_gateway.py#L1836-L1917).
+
+Design-sealed correction: exactly two segments, a technical reference T0 with
+caption conditioning, and a generated T1 with separately authenticated action
+conditioning. Preserve the reference image, encoder, action Qwen state, initial
+noise, cache epsilon, RoPE, decoder noise, steps and tolerances. T0 text history
+survives and T1 uses fresh text. Prepare the second text refiner and all copies
+before encoding; include their buffers and both text extents in admission.
+No in-chain allocation, activation readback or additional wait is admitted.
+Arbitrary prompt edits, reference checkpoint restore/capture, Cinematic,
+legacy per-chunk text and longer reference-action timelines remain rejected.
+The old shared-text reference path remains an explicitly experimental control.
+
+Risk: CAUTION, conditioning/history behavior. Rollback is omission of the new
+reference-action arguments. DoD: focused CPU contract/negative tests, native
+build and plan-only admission, then one 10%-floor guarded short run and visual
+review of the generated T1. A same-input upstream reference control must retain
+the distinct T0/T1 text and cached history; a no-history or one-block test is
+insufficient. Stop on budget/floor breach, fallback, extra readback/wait or
+nonfinite output. Visible animation and full all-layer upstream parity remain
+separate results until actually measured.
+
+The paired corrected take preserves all seven non-Qwen input tensors and the
+T1 action Qwen state byte-for-byte; its clean T0 also remains byte-identical.
+Root review of 25 ordered generated-T1 frames shows a late hand-to-self gesture
+and facial changes from Resume. Alex remains almost stationary. This rejects
+the claim that the requested two-character acting is fixed, while showing a
+partial improvement over the static control. It does not establish that this
+contract mismatch was the only cause.
+
+The guarded native request completed in 517.88 s (encoder 289.33 s, DiT
+31.41 s, decoder 155.54 s). Sampled peak process footprint was 25.463 GiB,
+minimum cache-aware headroom 20.625 GiB and swap growth zero under the 25.5 GiB
+process cap and 10% floor. Each phase reported zero tracked encode allocations,
+readbacks and preterminal waits, with one terminal drain. Opaque MPS resources
+are outside named accounting; samples do not bound between-poll peaks. These
+figures do not establish a speedup.
+
+Checks: 87 focused CPU Crystal examples, 22 edit/checkpoint regressions, six
+Python control admission tests and four compiled CLI negative checks pass;
+native build, plan-only accounting and the guarded short run pass. The full
+reference continuation still uses F32 native DiT intermediates/history. The
+BF16 source control is a separate, pinned MPS adaptation, not Flash3/CUDA or
+stock upstream video parity. Evidence is retained locally under
+`/opt/mldata_ssd/cogni-ml/rolewright-reference-action-20261102.pruxm9c2`.
+
+The source continuation control completed five forwards / 270 block calls on
+Torch 2.8.0 MPS with BF16 weights, activations and history. It uses the supplied
+clean T0, one caption-conditioned cache writer and four fresh-action T1 steps.
+The terminal T0 is byte-exact. T1 fails the unchanged `atol=rtol=2e-5` gate:
+121,423 / 138,240 values differ, maximum error 1.31640625, RMS 0.03925890.
+This terminal comparison does not localize the first error or establish its
+visual effect. Prior block-0 captures on another Torch build cannot qualify
+this full runtime.
+
+The source T0+T1 was then decoded through the same native PixelUMM, using the
+same decoder weights, global noise prefix `[0,240)`, RoPE and overlapping
+windows. Both videos select generated frames `[120,240)`, excluding technical
+T0. Root inspection of 25 ordered source frames shows the same broad failure:
+a late hand-to-self gesture from Resume, almost no acting from Alex. This
+rejects the hypothesis that this native DiT difference alone explains all
+missing acting in this paired probe. It does not qualify the source MPS
+adaptation as stock upstream or exclude the common decoder, conditioning,
+precision and prompt/model behavior as contributors.
+
+The decode-only diagnostic now requires an explicit authenticated continuation
+bundle for non-Echo long inputs. It binds the base manifest and both decoder
+RoPE records before Metal allocation, selects latent/noise prefixes on GPU,
+and reports their identities and offsets. Source decode completed in 173.02 s
+(decoder 155.06 s), with zero tracked encode allocations/readbacks/preterminal
+waits and one terminal drain. See the paired provenance and visual review in
+`paired-decode-review.json` under the local evidence directory above.
+
+Next falsifier: compare T0 writer outputs/history and the first T1 forward at
+identical inputs and BF16 boundaries, localizing the earliest divergent layer
+before changing quality settings. Keep the reference continuation experimental;
+neither full numerical parity nor the requested acting script has passed.
+
+## Reference-image frontier (2026-11-02)
+
+Status: the native DCAE-V encoder is numerically qualified at the fixed
+512x288x120 reference geometry. The saved clean latent also decodes exactly
+against the adapted source MPS control described below. Image-conditioned
+continuation is implemented behind an explicit experimental opt-in; BF16 DiT
+cache parity and character/style quality are not yet qualified. It is not
+enabled by default.
+The opt-in standalone block-0 pre-attention path now reproduces all 22
+captured BF16 boundaries exactly on identical exported inputs. Its separate
+first-T0 history probe also matches physical BF16 K/V storage and F32 reads
+exactly against the pinned upstream cache function. Its attention consumer
+now matches an isolated invocation of the pinned Torch branch on the same
+4,849 active rows exactly. Padded Torch/Flash3, remaining block operations
+and all-layer history remain separate gates.
+The rejected text-only RoleWright take does not qualify character or style
+preservation. Do not generate another text-only take as a substitute for this
+capability.
+
+Current upstream added reference-image initialization in
+[`a31c0fe0`](https://github.com/Tencent-Hunyuan/Hy-Nomas/commit/a31c0fe0bcc493be188fd37ddba4ce2f674becb4).
+The existing DiT/PixelUMM numerical reference uses the older October 24
+snapshot. The DCAE-V encoder oracle is pinned to `a31c0fe0`; the older demo's
+lack of image input must not be attributed to current upstream. The new
+[demo contract](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/README.md#start-with-a-reference-image)
+and [encoder entry point](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/hymm/pipeline/reference_image.py)
+were inspected at that immutable revision. This is source evidence, not a
+locally executed image-conditioned generation or a quality qualification.
+
+### Admitted upstream representation
+
+The image initializes a new persistent session as a fixed five-second segment.
+Fit the image to the target frame with preserved aspect ratio and centered
+black padding, normalize pixels to [-1,1], repeat it in pixel space for 120
+frames at 24 fps, and encode that complete segment through DCAE-V. Preserve
+the encoder's temporal feature-cache semantics; encoding one frame and
+duplicating its latent is not equivalent. Use `latent_dist.mode()` with no
+extra latent scaling. The result has shape `[1,32,30,H/32,W/32]`; at the native
+512x288 geometry it is `[1,32,30,9,16]`.
+
+Skip denoising of the fixed reference segment. A single DiT cache-writer
+forward uses `(1-sigma)*z + sigma*noise`, with sigma 0.206897 and timestep
+206.897, to fill image/text K/V history. Decode the clean reference latent
+through PixelUMM and preserve the streaming timeline for the next generated
+segment. Upstream retains the full reference segment in history while its UI
+shows only the last 12 decoded frames as T0. The subsequent instruction drives
+T1. These are separate clean-latent, noisy-cache and display contracts.
+
+This route uses the released DiT without additional training. It admits one
+complete scene image at session initialization, not arbitrary mid-session
+replacement, independent character/style reference lists, or guaranteed
+identity preservation. The demo caption contract selects one primary subject;
+the quality of a two-character RoleWright scene remains an open probe.
+
+### Native gap and first implementation slice
+
+The experimental native generator now accepts an authenticated fitted RGB
+bundle and a separately authenticated DCAE-V encoder checkpoint. The encoder
+implements the checkpoint topology, chunk-causal convolutions, temporal cache,
+normalization, downsampling and pixel-unshuffle semantics with prepared
+MPSGraph operations and native Metal copies/arithmetic. Its tested boundaries
+are listed below. Wan VAE latents are incompatible; PixelUMM is a decoder,
+and Qwen-VL image recognition is not this DiT conditioning path.
+
+The implementation reuses cache-noise arithmetic and compatible timeline/history
+buffers. A distinct reference-initialization transition skips denoising and
+admits exactly one writer to seed T0 history. Generated-segment guards still
+apply to T1 onward. The input manifest and runtime receipt bind the image digest,
+fit geometry, encoder checkpoint, caption, noise and cache policy. An existing
+noise bank or restored text-only checkpoint is not an image reference.
+
+Plan encoder weights and scratch as a separate residency phase before DiT;
+retain the encoded latent and release encoder resources at the safe phase
+handoff. Use reusable GPU buffers and GPU tensor computation, without new
+readbacks or waits inside command chains. Establish a cache-aware memory plan
+before any model run, retaining the 10% floor, process/swap guards and one
+model-owning process. Source inspection alone does not establish the encoder
+peak, supported memory limit, or runtime.
+
+The acceptance order is: (1) compare native DCAE outputs on identical pixels
+against upstream encoder revision `a31c0fe0`; (2) compare clean-latent
+PixelUMM reconstruction; (3) compare noisy-cache inputs and per-layer K/V;
+(4) compare a short image-conditioned continuation on the same caption and
+noise. Keep existing 2e-5 absolute/relative tolerances; localize a mismatch
+rather than widening them. Diagnostic captures belong outside the measured
+path. Numeric parity and visual character/style preservation are separate
+gates; neither substitutes for the other. The current implementation slice
+admits bounded encoder and initialization probes, not a full video generation.
+
+For RoleWright, first prepare an approved single scene containing Alex and the
+living resume in the supplied style. Character turnarounds and expression
+sheets are preparation references, not frames of the generated world. Test
+one simple action before the complete ad. Reference conditioning does not
+itself implement timed actions, eye-line control or exact interface text.
+
+Rollback is the unchanged text-only runtime. Refresh this design after an
+upstream/checkpoint, geometry, temporal-cache or timeline-contract change;
+require new runtime evidence before admitting native image-input support.
+
+### Implementation admission and rollback
+
+The missing original checkpoint is pinned to `tencent/Hy-Nomas` revision
+`bb6a8ca451bfe84947f0ea1c6d51957f983ffffe`, path
+`VAE/DCAE-V/dc-ae-v-1.0-f32t4c32-bf16.pt`, 4,277,389,995 bytes,
+SHA-256 `ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b`.
+The checkpoint has been downloaded and authenticated. Its encoder-only
+safetensors derivative preserves all 169 encoder tensors and 1,833,310,016
+BF16 payload bytes (1,833,331,160 file bytes), SHA-256
+`c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50`.
+Conversion uses the restricted weights-only
+loader and verifies the derivative against the source; it is setup work,
+not part of native inference.
+
+CAUTION: a reference must seed clean T0 pixels/latents and exactly one noisy
+cache writer, without denoising T0, replacing the fixed noise bank, or admitting
+text-only checkpoint restore as a reference session. Keep the original path as
+the default rollback. The first opt-in rejects unsupported combinations rather
+than silently changing checkpoint, prompt-edit, Cinematic or cache semantics.
+
+DoD: ingestion and schedule negative tests; a fresh guarded native build;
+encoder memory planning before allocation; identical BF16 input pixels and
+intermediate/final encoder parity against the original checkpoint on MPS;
+and zero instrumented encode allocations, readbacks or preterminal waits.
+Probe one small clip first, then a two-tile temporal-cache boundary before
+the full reference. Use the existing terminal drain at the encoder-to-DiT
+weight-phase handoff and keep its output GPU allocation resident. Stage
+captures and artifact exports are diagnostic work after the terminal drain.
+Numerical qualification does not establish RoleWright visual quality; that
+requires a subsequent short controlled image-conditioned continuation.
+
+### Observed encoder qualification (2026-11-01)
+
+The guarded native encoder and the pinned original PyTorch 2.8 MPS encoder
+consumed the same fitted RoleWright RGB pixels and original BF16 weights.
+The native measurement path contains no PyTorch. All captured BF16 payloads
+match byte-for-byte, with unchanged `atol=rtol=2e-5`:
+
+| Probe | Captures | Result |
+| --- | --- | --- |
+| 32x32x4 | normalized input, post-stage-5, latent | zero value error |
+| 32x32x80 | input, post-stage-5 tiles 0/1, latent | zero value error |
+| 512x288x120 | input, post-stage-5 tiles 0/1/2, latent | byte-identical |
+
+The full native encode took 306.621 s wall / 306.584 s GPU, with zero
+instrumented MetalBuffer allocations, readbacks or preterminal waits and one
+terminal drain. This is reference initialization cost, not generated-video
+throughput or a paired performance claim. Its named diagnostic residency was
+4,663,709,504 bytes; the production Session plan is 4,654,862,144 bytes without
+the three stage captures. The sampled process-tree peak was 8.828 GiB under
+a 12 GiB cap; minimum file-cache-aware headroom was 32.772 GiB, swap growth
+zero, and the 10% floor remained active. Opaque MPSGraph resources are not
+included in named-buffer counters; sampling cannot rule out between-poll spikes.
+
+The full-J reference timeline arithmetic probe also passed, including clean T0
+scatter/gather, cache noise and RoPE/time preparation, with no tracked
+allocations/readbacks/preterminal waits. It is not an actual per-layer DiT
+cache comparison. Focused checks passed: 52 CPU-only Crystal examples,
+29 Metal-linked checkpoint/cache examples, 14 Python tests and fresh native
+builds. Mini-Quadrumvirate review found and fixed missing conv1/downsample
+bias and MPS executable feed reordering; the current integrated schedule and
+ownership paths have a scoped correlated Adversary verdict of ROBUST.
+
+Evidence and exact artifact/source identities:
+`.landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json`.
+Local weights, fixtures, build products and logs remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo`.
+The annotated supplied image is a numerical fixture, not an approved final
+RoleWright scene. No full video was generated in this slice.
+
+The clean-reference PixelUMM gate is now qualified within the adapted source
+MPS scope below. Remaining gates are noisy-cache inputs plus layer-specific
+K/V against upstream, then a short controlled continuation from a single
+scene. Partial final tiles after a full
+tile and other production geometries are not qualified. Refresh encoder
+evidence on source, binary, weights, input, geometry, cache policy, backend,
+compiler/runtime or device change; local hashes cannot recover lost artifacts.
+
+### Reference handoff qualification slice
+
+This diagnostic slice reuses the authenticated, byte-identical saved encoder
+latent for diagnostics. It must not synthesize a denoising receipt or represent
+that saved fixture as an independently executed live encoder-to-DiT handoff.
+First decode the clean `[1,32,30,9,16]` BF16 tensor through the native PixelUMM
+and the source MPS control on identical decoder noise. Then inspect the noisy
+T0 writer at the actual DiT projection/RoPE/cache boundaries before admitting
+a two-segment run (fixed T0 plus five generated seconds in T1).
+
+CAUTION: the existing native history stores F32 K/V, whereas the upstream
+cache boundary is BF16. A native F32 continuation cannot establish upstream
+cache parity merely because the encoder is exact. Any cache precision change
+must be opt-in for reference initialization and must preserve the default
+text-only/checkpoint path. The strongest failure is a numerically plausible
+T0 reconstruction followed by a different T1 because of cache rounding or
+incorrect writer scheduling. The guard is a same-input per-layer comparison,
+plus negative schedule tests and unchanged 2e-5 absolute/relative tolerances.
+
+Diagnostic DoD: authenticated saved-latent admission and rejection tests; a clean-latent
+native/source-MPS decoder comparison including raw and display outputs;
+same-input T0 cache-writer input and block-0 boundary captures that report
+numerical failure without treating the F32 control as BF16 parity; zero instrumented
+allocations/readbacks/preterminal waits inside the admitted native chains;
+guard logs meeting the file-cache-aware 10% floor, process cap and swap-growth
+limit. This diagnostic DoD is distinct from the continuation acceptance gate.
+Only after the BF16 numerical gates pass may a short controlled scene probe
+test motion and style. Numeric parity does not establish character identity,
+script adherence or the quality of the complete RoleWright advertisement.
+Rollback remains omission of the experimental reference flags. All diagnostic
+artifacts and builds stay on the external scratch volume.
+
+Observed clean-latent result: native and pinned source-MPS raw pixels and
+display pixels are byte-identical, with zero error over 53,084,160 values in
+each `[1,3,120,288,512]` output. The first 20 frames before overlap blending
+are exact as well. This control uses the existing gathered-spatial-tile
+QK/softmax/PV adapter with F32 accumulation; it does not qualify unmodified
+eager flex-attention. No DiT, solver, or fresh DCAE encode ran in this decoder
+comparison. Native time was 63.515 s wall / 63.466 s GPU, with zero tracked
+encode allocations/readbacks/preterminal waits and one terminal drain.
+Sampled process-tree peaks were 17.029 GiB native and 5.678 GiB source; minimum
+file-cache-aware headroom was 24.260 / 23.024 GiB and swap growth was zero.
+
+The native T0 input exporter preserves the actual 529-token valid prefix in
+the 1280-row text-storage geometry. It captured timeline/noise/patch/refiner
+outputs after one terminal drain with zero tracked encode allocations,
+readbacks or preterminal waits. On the exact exported BF16 latent and epsilon,
+the upstream cache-noise formula also produced byte-identical widened F32
+values for all 138,240 latent elements. This isolates noise arithmetic; it
+does not establish stock RNG-stream parity or patch/refiner parity. A separate
+source block-0 probe retains BF16 parameters and autocast boundaries and stops
+at K/V append, before attention. A widened F32 source run is a localization
+control, not a substitute for the BF16 gate.
+
+On identical exported preblock inputs, all 14 native projection/QK-normalization/
+RoPE/prospective-cache captures and all eight pre-QKV captures match the widened
+F32 source control exactly. For the F32 cache diagnostic, comparison is against
+the unrounded source constituents before its BF16 store. The native probe
+captures prospective joint K/V; it does not execute a history append. This
+does not qualify the complete upstream T0 patch/refiner path or actual cache
+storage.
+
+The original BF16 source comparison fails at unchanged `atol=rtol=2e-5`.
+All 14 main boundaries and all eight pre-QKV boundaries fail. The first captured
+difference is image modulation SiLU: 777 of 2,048 values exceed tolerance,
+maximum absolute error 0.0003126636. Source modulation SiLU/linear outputs are
+BF16, but its LayerNorm and modulated QKV inputs are F32 under MPS autocast.
+The native `BF16BoundaryControl` only rounds selected later boundaries and
+does not reproduce this mixed precision path. The largest main-capture error
+is 0.5 at prospective V; that is a failed gate, not an accepted tolerance.
+
+A separate small MPS probe isolates the earliest difference on the same
+2,048-element vector. F32 SiLU matches native exactly. Rounding only its output
+to BF16 still leaves 410 values outside tolerance. Rounding both the input
+and output to BF16 matches the source BF16 SiLU exactly. Thus the first
+discrepancy is explained by the missing dtype boundaries on this fixture,
+not by a different SiLU formula. This is localization, not a production fix
+or proof of the remaining modulation/projection/reduction boundaries.
+
+The next falsifier from that diagnostic was an opt-in native reference control reproducing those
+input/output SiLU boundaries, followed by modulation linear, LayerNorm input,
+QKV, QK RMS and RoPE on identical inputs. Its admitted scope ends at prospective
+joint K/V, before attention, residuals and FFN. It must reject the ordinary
+full-block entry point, serial reuse and history-provider attachment rather
+than accidentally execute those unqualified stages. The BF16 cache store is
+a subsequent gate, not part of a prospective-K/V pass. Do not blanket cast
+the block to BF16: the observed source path is mixed. Keep the text-only
+default unchanged and retain the experimental reference gate until the
+BF16 comparison passes. No generated T1 or full video ran in this slice.
+
+This CAUTION change reuses fixed-buffer BF16 linear plans and adds setup-owned
+rounding buffers. Its rollback is omission of the reference-preattention flag.
+The principal failure is an incorrect BF16 boundary silently reaching a full
+forward; explicit entry-point rejection and unchanged same-input F32/BF16
+comparisons guard it. DoD is the reference handoff CPU suite plus all 22
+pre-attention captures against the pinned source at `atol=rtol=2e-5`, with zero
+instrumented encode allocations/readbacks/preterminal waits and one terminal
+drain under the 10% file-cache-aware guard. If a later boundary fails, retain
+the first mismatch and narrow the claim; do not admit continuation. BF16 graph
+and explicit F32 accumulation variants are candidate linear formulations, not
+assumed source equivalence.
+
+Focused CPU checks passed: `make spec_hy_nomas_reference_handoff` (53 Crystal
+examples) and `python3 -B -m unittest spec.hy_nomas_reference_decode_test
+spec.hy_nomas_reference_cache_test spec.hy_nomas_reference_block0_compare_test`
+(43 Python tests). The comparison tools reject wrong parent artifacts, source
+or dtype dependency maps, mismatched shape/dtype/accounting, symlink leaves
+and a companion artifact differing from the explicit CLI argument. Correlated
+mini-Quadrumvirate review is ROBUST for that bounded diagnostic scope; it is
+not independent execution evidence or BF16 continuation qualification.
+
+Canonical evidence: `.landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json`.
+Commands, guarded logs, binaries, captures and the SiLU discriminator remain
+under `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1`.
+The native receipt's reference/implementation revision fields describe the
+upstream semantic contract; the evidence packet separately binds the actual
+local parent revision, source fingerprints and executed binaries. Refresh on
+source, input, checkpoint, geometry, precision/backend/runtime/device changes
+or artifact loss. Digests do not restore lost files.
+
+### BF16 pre-attention qualification
+
+The opt-in `reference-bf16-preattention` probe now implements the observed
+mixed-precision boundaries with fixed GPU buffers: BF16-rounded SiLU inputs
+and outputs, BF16 projection operands/results, F32 LayerNorm/modulation,
+BF16 rounding of `1 + scale`, source-ordered QK RMS casts and BF16 RoPE
+outputs. It uses the prepared `bf16-graph` linear variant. The separate
+`f32-accum` candidate is not qualified by this result.
+
+On the same authenticated preblock inputs, original BF16 weights and pinned
+source captures above, all eight pre-QKV and 14 main tensors match exactly:
+zero maximum/RMS error and zero mismatches, with unchanged `atol=rtol=2e-5`.
+The image stream has 4,320 tokens and the valid text prefix has 529 tokens
+in 1,280 rows of storage. The ordinary F32 control also matches all 22
+captured tensors exactly. The previous native BF16 control still fails all
+22 comparisons under the current comparator; the gate was not relaxed.
+These are same-input block-0 results, not complete upstream T0 preprocessing
+or RNG parity.
+
+Both final native probes report zero tracked GPU-buffer allocations,
+readbacks or preterminal waits, and one terminal drain. The BF16 path adds
+114,753,536 named bytes for rounding/linear outputs, making its diagnostic
+named-buffer total 2,282,853,888 bytes; unused ordinary block plans remain
+prepared. Opaque MPSGraph resources are excluded. Serialized guarded runs
+retain the file-cache-aware 10% floor, 6 GiB process-tree cap and 64 MiB
+swap-growth limit. This is numerical qualification, not a speed benchmark.
+
+The workspace rejects the ordinary full-block entry point, serial blocks,
+history attachment, attention and residual execution. Source-BF16 RMS
+rejects padded reduction rows before allocating its scratch, because those
+rows would read unwritten squared inputs. An observed subclass lifetime-root
+test failure was fixed by explicitly sharing the base-class registry. Roots
+hold the complete dynamic workspace until terminal-drained release. A
+failure injected after RMS pauses the encoder confirms that `ensure`
+restores encoding without an extra allocation or wait; premature release
+remains rejected.
+
+Focused checks pass: 61 CPU Crystal examples, 44 Python tests, and nine
+Metal-linked workspace/default serial/prefix/modulation examples. The last
+group exercises constructor cleanup, exact extra-buffer accounting, shared
+root counts, scope rejection and terminal-drained release. Source review
+plus the executed comparisons and failure-path tests give a correlated
+mini-Quadrumvirate verdict of ROBUST within this fixture-only scope.
+
+Evidence: `.landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json`.
+Builds, commands, captures and guard logs remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-bf16-20261101.3450pdjh`.
+Rollback is omission of the reference-preattention flag; the text-only
+arithmetic is unchanged. Refresh on source, binary, input, weights,
+geometry, precision, cache policy, backend, compiler/runtime/device changes
+or local artifact loss.
+
+The next falsifier is an actual reference-history K/V store/read comparison
+on the same tensors, followed by the remaining attention/residual/FFN and
+layer-specific cache boundaries. Only then admit a controlled clean-scene
+T0/T1 continuation. Keep `--allow-unqualified-reference`: no actual history
+append, generated T1, full video, or RoleWright character/style quality was
+qualified by the standalone pre-attention result.
+
+### BF16 history store/read — qualified block-0 fixture
+
+The separate opt-in `--precision reference-bf16-history` probe now stores
+the active joint K/V prefix in physical BF16 buffers and loads that pair
+into prepared F32 reader buffers on the same command chain. Its 4,849 rows
+contain 4,320 image tokens followed by 529 valid text tokens; the remaining
+751 text-storage rows are excluded. Only `bf16-graph` is admitted here.
+
+Both physical BF16 tensors are byte-identical to upstream. Both F32 reads
+are also exact (9,930,752 values each, maximum/RMS error and mismatch count
+zero) at unchanged `atol=rtol=2e-5`. Fresh regressions retain all 22 exact
+BF16 pre-attention captures and all 22 exact F32 controls. A negative control
+with repaired receipt hashes rejects changed BF16 bytes; a separate F32
+mutation produces exactly one mismatch and a failed comparison.
+
+The source probe executes the pinned `causal_attention_with_cache_mp`
+function twice, intercepting only its attention consumer. After T0 store,
+it zeros the same current Q/K/V in place and invokes the read-only branch:
+the saved prefix remains unchanged and the current suffix is zero. Its
+input Q/K/V comes from the preceding source capture, treated explicitly as
+a trusted fixture. Hashes bind those bytes but do not independently attest
+how that earlier capture was produced. No attention math is qualified by
+this interception.
+
+The strongest false positive was reading prospective K/V instead of the
+cache. Metal tests overwrite the original source after store, then read;
+another changes the physical stored values and observes them in the reader.
+Geometry, aliasing, single-write, read-before-write, cross-chain and drained
+release guards pass. A failure during pre-attention consumes the history
+attempt before any retry; history-prepared workspaces reject the standalone
+pre-attention entry point. Cache-owned buffers remain rooted until their
+latest read chain drains, including a read on a later chain.
+
+The cache pair costs 39,723,008 bytes and its two diagnostic F32 read stages
+79,446,016 bytes: 119,169,024 extra named bytes, bringing this standalone
+diagnostic to 2,402,022,912 bytes. Opaque MPSGraph resources are excluded.
+The native history probe records zero tracked encode allocations/readbacks/
+preterminal waits and one terminal drain. Its sampled peak is 1.559 GiB,
+minimum cache-aware headroom 38.876 GiB, with zero swap growth under a 6 GiB
+process cap, 10% floor and 64 MiB swap-growth stop. Sampling does not bound
+between-poll peaks; these are diagnostic measurements, not a speed claim.
+
+DoD passed: 71 CPU Crystal examples, 43 Python tests, eight Metal-linked
+cache/workspace examples, fresh native/source captures and strict numerical
+comparisons. Correlated source reviews plus root execution returned ROBUST
+within this fixture-only scope. Evidence:
+`.landmark/evidence/2026-11-01-hy-nomas-reference-history.json`; local run:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs`.
+
+Rollback is omission of the explicit diagnostic mode. The existing F32
+continuation provider remains separate. Next falsifier: compare the
+attention consumer on identical Q and stored K/V, then residual/FFN and
+layer-specific histories before T0/T1 continuation. Keep
+`--allow-unqualified-reference`: no full block, multi-segment append,
+all-layer cache, generated T1 or RoleWright identity/style quality is yet
+qualified. Refresh on source, binary, inputs, weights, geometry, precision,
+cache policy, backend, compiler/runtime/device change or artifact loss.
+
+### BF16 stored-history attention — qualified active-prefix fixture
+
+The opt-in `reference-bf16-attention` block-0 diagnostic consumes physical
+first-T0 BF16 K/V through a prepared native MPSGraph plan. All 9,930,752
+BF16 output values are byte-identical to an isolated invocation of the
+pinned upstream `attn_mode == 'torch'` branch body on MPS, with byte-identical
+Q and stored K/V. Maximum/RMS error and mismatch count are zero at unchanged
+`atol=rtol=2e-5`. The fixture has 4,320 image + 529 valid text rows, 16 heads
+and head dimension 128. It does not establish parity with the padded
+5,600-row Torch path, Flash3, or the full upstream T0 handoff. The earlier
+source Q/K/V capture remains an explicitly trusted fixture, not an
+independently attested full-model execution.
+
+The initial fused MPSGraph SDPA node failed 997,904 output values, with
+maximum error 0.5 despite exact Q/K/V. The installed source control is Torch
+2.6.0 (`2236df1770800ffea5697b11b0bb0d910b2e59e1`); its
+[MPS implementation](https://github.com/pytorch/pytorch/blob/2236df1770800ffea5697b11b0bb0d910b2e59e1/aten/src/ATen/native/mps/operations/Attention.mm)
+uses BF16 QK, F32 scaling, a BF16 scaled-logit boundary, BF16 softmax and
+BF16 PV. Reproducing that explicit graph eliminated the mismatch. This
+rejects the fused node for this fixture; it does not characterize its
+unobserved internal arithmetic or establish parity with another Torch version.
+
+The plan binds physical cache storage, compiles and allocates before
+encoding, and widens its BF16 context into the existing F32 destination on
+GPU. A Metal discriminator poisons prospective sources after store, assigns
+distinct per-token/head/channel values to physical V, and checks exact
+means with zero Q/K. Tail canaries, alias/extent checks and latest-chain
+release leases pass. Hash-repaired output corruption produces one numerical
+mismatch; hash-repaired Q corruption is rejected before comparison.
+
+The new Q/output buffers add 39,723,008 named bytes, for 2,441,745,920
+diagnostic bytes including the previous history/read stages; opaque MPSGraph
+resources are excluded. Native counters remain zero tracked encode
+allocations/readbacks/preterminal waits and one terminal drain. Guarded
+source/native runs retain the file-cache-aware 10% floor, 6 GiB process cap
+and 64 MiB swap-growth stop, with zero sampled swap growth. Sampling does
+not bound between-poll peaks; this is not a speed or production-memory claim.
+
+DoD passed: 73 CPU Crystal, 49 Python and nine Metal examples; fresh final
+attention/history captures; strict comparisons; all 22 BF16 and 22 F32
+pre-attention regression tensors remain exact. Evidence:
+`.landmark/evidence/2026-11-02-hy-nomas-reference-attention.json`; local run:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm`.
+Rollback is omission of this diagnostic mode. Next falsifier: output
+projection/residual and FFN on identical context and modulation inputs,
+then a complete block and layer-specific history. Keep
+`--allow-unqualified-reference`: no cache append, all-layer parity,
+generated T1, full video or RoleWright identity/style quality is qualified.
+Refresh on source/binary/input/weights/geometry/precision/cache/backend/
+compiler/runtime/device changes or local artifact loss.
+
+### Preparing and admitting an image
+
+Prepare one complete scene image with
+`examples/support/hy_nomas_reference_image.py --image /absolute/scene.png
+--output-dir /opt/mldata_ssd/cogni-ml/reference-scene --encoder-sha
+c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50`.
+The output directory must be fresh. The helper decodes and fits the image once
+and prints the manifest path and SHA-256. It writes RGB8 pixels, not latents;
+normalization, temporal repetition and all encoder tensor operations run on GPU.
+
+The sequence generator accepts the following four flags together, in addition
+to its existing authenticated timeline inputs, segment count and named budget:
+
+```text
+--reference-image-inputs /absolute/reference-scene/manifest.json
+--reference-image-inputs-sha <manifest SHA-256 printed by preparation>
+--reference-encoder /absolute/encoder.safetensors
+--reference-encoder-sha c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50
+```
+
+Run `--plan-only` first; it authenticates image/weight payloads without creating
+a Metal model. Execution additionally requires `--allow-unqualified-reference`
+and the external file-cache-aware memory guard. The first slice rejects
+Cinematic, legacy per-chunk text caching and checkpoint restore/edit/capture
+combinations. Omitting the quartet retains the text-only path.
+
+`--segments 2` means a technical five-second T0 reference plus five seconds of
+generated T1, not ten generated seconds. The raw pixel output currently includes
+all of T0. Upstream's display-only trim to T0's last 12 frames is not applied;
+the receipt labels reference and generated durations separately.
+
+## Design-sealed Cinematic comparison (2026-11-01)
+
+The Cinematic comparison adds an explicit BF16 opt-in to the two-segment
+drafter and compares the retained six scenes with their original first takes.
+Keep the exact frozen suite, authenticated conditioning/timeline manifests,
+noise banks, four steps, geometry, decoder and history policy. Reuse validated
+baseline input bundles instead of re-encoding prompts or generating new noise.
+Base remains the default. The existing offline merged cache must pass its
+lineage/index admission; no online LoRA merge or new GPU operation is admitted.
+
+This is CAUTION for model selection and artifact provenance. The strongest
+failure is a visually plausible comparison made with a different input or a
+mislabelled weight index. Bind the requested variant and cache identity through
+preflight, loader and final receipt, and reject a mismatched selected pair
+before rendering that scene. Keep the existing 10% file-cache-aware floor,
+30 GiB process cap, swap-growth stop and one model-owning process at a time.
+The sequence checkpoint/resume path remains base-only unless its contracts
+are separately extended; a Cinematic instance must not emit base-labelled
+checkpoints. Roll back by omitting the new flags; retained base media are
+read-only and must never be overwritten.
+
+DoD: failing-before-fix variant/input identity checks, focused Python and
+Crystal admission tests, a fresh guarded native build, CPU-only memory plans,
+and six completed Cinematic clips paired with authenticated base clips.
+Require unchanged input/noise digests, variant-specific index/lineage digests,
+240 frames at 24 fps, zero instrumented encode allocations/readbacks or
+preterminal waits, and one existing terminal drain per GPU phase. Refresh the
+selected upstream merge check and authenticate the prior intermediate evidence
+without widening 2e-5 absolute or relative tolerances. Inspect paired media and
+report quality observations separately from numerical parity; full upstream
+video parity is not admitted.
+
+VACE is an explanatory branch only: no new VACE weights, renderer, training or
+model launch is included in this implementation.
+
+### Opt-in usage and controls
+
+`examples/hy_nomas_draft.py` accepts `--cinematic-cache` (the existing offline
+BF16 cache's `cinematic-lineage.json`) together with `--cinematic-cache-sha`.
+The native sequence CLI accepts the same pair. Omit both to use original BF16
+weights. The selected variant, index digest and lineage are bound to the CPU
+memory plan and final native receipt; the gallery displays the effective
+variant instead of relabelling Cinematic as original.
+
+For controlled comparisons, pass `--reuse-inputs-from /absolute/results.json`
+with the exact original suite bytes. Admission requires a completed run with
+the same ordered scenes, prompts, Qwen conditioning and fixed noise. It checks
+the original raw pixels, MP4s and payloads, then reuses those input paths.
+Scene metadata and selected payloads are checked again before native preflight;
+native preflight and execution independently authenticate the payloads.
+Neither Qwen encoding nor RNG/input production is rerun. Reuse does not turn
+archived runtime measurements into a fresh paired speed benchmark.
+Admission initially authenticates all scene payloads; subsequent selected-scene
+checks reject a changed payload before that scene's preflight or execution.
+This is an incremental suite, not an atomic transaction over concurrently
+mutable future inputs. A later failure preserves earlier completed scenes and
+leaves the overall report incomplete.
+
+For example, use a new output directory and a separately trusted lineage
+digest rather than deriving that trust from an unverified cache at launch:
+
+```sh
+python3 -B examples/hy_nomas_draft.py \
+  --suite /absolute/frozen-suite.json \
+  --generator /absolute/build/hy_nomas_sequence_generate \
+  --run-dir /absolute/new-cinematic-run \
+  --reuse-inputs-from /absolute/base-run/results.json \
+  --cinematic-cache /absolute/cinematic-cache/cinematic-lineage.json \
+  --cinematic-cache-sha "$CINEMATIC_LINEAGE_SHA"
+```
+
+### Observed six-scene comparison (2026-11-01)
+
+All six Cinematic first takes completed with the exact retained native prompts,
+conditioning manifests/tensors and three noise banks. Each clip contains two
+five-second segments, four steps per segment, 240 frames at 512x288/24 fps,
+original-precision BF16 merged weights and the existing F32 live history. No
+conditioning producer or RNG was rerun. Base remains the default.
+
+| Scene | Total scene seconds | Sampled process-group peak GiB |
+| --- | ---: | ---: |
+| portrait | 283.053 | 24.221 |
+| pouring-water | 308.829 | 24.305 |
+| running-dog | 307.578 | 24.221 |
+| balloon-car | 278.368 | 24.321 |
+| coast-flight | 266.863 | 24.217 |
+| desert-donut | 266.600 | 24.320 |
+
+The median observed total was 28.071 seconds per output video second, excluding
+the already-retained conditioning preparation. This is descriptive timing,
+not a fresh paired speed benchmark: five of the six base clips are historical.
+A fresh original portrait on the new binary reproduced the retained raw pixels
+and latent bank byte-for-byte. The historical receipts lack explicit variant
+identity; the fresh control anchors that unchanged base path for one scene.
+
+All 18 guarded stages finished successfully and left no live child process in
+their sampled groups. Maximum sampled peak was 24.3214 GiB, minimum estimated
+cache-aware headroom was 22.7736 GiB, and observed stage swap growth was zero.
+The 10% floor, 30 GiB native cap and 64 MiB swap-growth stop were unchanged.
+Both inference phases in every receipt report zero tracked encode allocations,
+readbacks and preterminal waits, with one existing terminal drain per phase.
+These counters exclude opaque MPS resources; sampling cannot bound short spikes.
+
+Focused verification passed: 60 Python tests, 11 CPU-only Crystal examples,
+Crystal formatting and a fresh guarded Metal build. The fresh upstream merge
+check compared 302,113,792 BF16 values in blocks 0 and 1 with zero mismatches.
+The prior authenticated all-block merge and same-latent PixelUMM evidence is
+indexed by `.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json`.
+No new complete Cinematic DiT trajectory or ten-second intermediate-output
+gate was executed. The source-MPS oracle is not unmodified CUDA/FlexAttention.
+The existing 2e-5 absolute and relative tolerances were not widened.
+
+Retained artifacts are under
+`/opt/mldata_ssd/cogni-ml/cinematic-drafter-20261101.CSoblFK7/`:
+`experiment-summary.json` binds the source, executable, input, model and guard
+identities; `pairs/comparison.json` binds the six authenticated comparisons;
+`pairs/reel-60s.mp4` and `pairs/index.html` provide playback. Each pair has the
+base on the left and Cinematic on the right. The pair builder rejected an
+incomplete suite, passed eight hostile geometry/publication checks, and then
+published the completed directory atomically. The final reel decodes to 1,440
+frames at 1024x320/24 fps; each pair decodes to 240 frames.
+
+Inspection of paired stills at 0, 3, 6 and 9 seconds found stronger surface
+texture and contrast with Cinematic, changed composition, and one visible
+walker rather than multiple walkers in the doughnut scene. Balloon count still
+changes, and both dog variants face left despite the requested left-to-right
+motion. These are sampled visual observations, not full-motion, physics or
+general quality qualifications. Preserve all first takes for user review.
+
+The curated evidence packet is
+`.landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json`. Requalify after
+producer/validator source, binary, model/cache, inputs/noise, geometry/history
+or runtime changes; repeat timing after host/device-state changes. Missing or
+changed local artifacts invalidate their use as evidence. Cinematic sequence
+checkpoint/capture/restore remains explicitly unsupported.
+
+### VACE integration boundary
+
+The official [VACE README](https://github.com/ali-vilab/VACE/blob/main/README.md)
+supports text, source video, masks and reference images; its Wan renderer
+loads a separate VACE model/control path. A practical CineStudio branch is
+Hy-Nomas draft pixels → prepared depth/pose/layout or editing masks → Wan VACE
+render. An editable 3D draft could provide corrected motion/depth directly.
+This is a proposed separate renderer, not an implemented Hy-Nomas feature.
+
+VACE cannot be attached as this Cinematic LoRA: direct Hy-Nomas conditioning
+would require a compatible trained control branch and representation. Pixel
+input is the existing interchange boundary; native continuation latent bundles
+are not interchangeable. VACE is not a physics solver, and transferring a bad
+draft trajectory can preserve its error. The official
+[user guide](https://github.com/ali-vilab/VACE/blob/main/UserGuide.md) recommends
+roughly five-second clips and sequential extension for long work; seams and
+temporal preservation would need separate testing on our ten-second scenes.
+
+## Design-sealed first-take frontier (2026-11-01)
+
+The requested output is six independent photorealistic ten-second clips, with
+their prompts, actual generation times and an offline gallery. Reuse the
+existing native sequence generator at two five-second segments, 512x288,
+24 fps and four Euler steps. Original BF16 weights, F32 live history and
+once-per-scene text caching remain the control. No model kernels, rounding
+boundaries, arithmetic tolerances or command-chain synchronization change.
+
+New prompts require authenticated Qwen state-26 conditioning. The current
+sequence CLI consumes saved conditioning; preparation and provenance must be
+reported separately from native DiT/PixelUMM execution. Each scene receives
+its own input bundle and fresh process. The input format fixes seed-42 noise
+banks, so this is a controlled prompt variation, not six independent random
+samples. Preserve the first take of every scene, including visible defects.
+
+This is CAUTION for process orchestration and provenance. The strongest
+failure mode is a successful-looking gallery that relabels stale conditioning,
+truncated video, a failed guard or output from another scene. Bind the intended
+prompt and exact input manifest digest to the native receipt, raw-pixel digest
+and exported MP4. Do not launch the next scene after a failed stage. Store
+artifacts under a fresh directory on `/opt/mldata_ssd`; reject occupied outputs.
+
+Only one model-owning process may run at a time. Preserve a 10% file-cache-aware
+memory floor, a sampled process-group footprint cap, 64 MiB maximum swap growth
+and bounded deadlines. Preflight each input's named-memory plan before model
+setup. Sampling does not reserve memory or bound opaque MPS spikes. A guard
+rejection is an incomplete run, not permission to weaken these limits.
+
+DoD: hostile unit checks reject prompt/input identity mismatches, incorrect
+geometry, missing drains, extra encode allocations/readbacks/waits, stale or
+truncated outputs and incorrect MP4 frame/timing metadata. Each completed clip
+must contain 60 clean latent frames and 240 decoded pixel frames at 24 fps,
+512x288, exactly ten seconds, with eleven PixelUMM windows. Require zero
+instrumented encode allocations/readbacks/preterminal waits, one terminal
+drain per existing GPU phase and successful guard cleanup. Export and media
+inspection occur after the GPU phases drain. Run the focused Python tests and
+the guarded six-scene suite, then inspect representative frames and deliver
+the actual videos. Numerical upstream parity and visual quality remain
+separate from artifact integrity; full upstream video parity is not claimed.
+
+No audio generation, weight quantization, scene selection, Studio server,
+cross-scene history or full editor are admitted in this slice. Roll back by
+removing the new drafter files; the native sequence generator and existing
+artifacts remain unchanged. Evidence expires when the scene manifest,
+authenticated inputs, native executable, producer sources, weights or exported
+media change.
+
+## Authorized prompt-planning extension (2026-11-01)
+
+The user separately authorized GPT-6 Luna through the API key already in the
+environment, and asked for an empirical evaluation of its prompts. A separate
+planner may call the fixed OpenAI Responses endpoint with `gpt-6-luna`,
+`reasoning.effort=medium`, a bounded output and a strict JSON schema. Medium is
+a starting choice, not a measured quality/cost optimum. Official model and
+Structured Outputs documentation establish the request surface:
+https://developers.openai.com/api/docs/models/gpt-6-luna and
+https://developers.openai.com/api/docs/guides/structured-outputs.
+
+Planning produces an editable frozen suite with provenance; it does not
+produce Qwen embeddings or launch a renderer. The default is a network-free
+request preview; `--execute` performs one bounded call, with no silent retry,
+model fallback or automatic render. Preserve the six scene IDs/order, native
+geometry and guard settings. Reject refusals, incomplete/malformed results,
+duplicate IDs, extra scenes and unsupported action-tail scheduling. Never
+print or persist the credential, authorization headers or a raw environment.
+
+DoD: mocked transport/negative parser tests, one authorized real six-scene
+planning call with its usage/model/effort receipt, a manual intent and
+feasibility review before rendering, then the same first-take media gates.
+The rendering process does not receive the planner credential. Assess intent
+retention and motion/camera clarity separately from syntax; a model-generated
+plan does not establish better video quality or isolate planner causality.
+
+An initial real call was rejected by an overly literal local keyword check
+before its body was saved. That discarded response cannot support a semantic
+quality judgment. The planner now saves a bounded response-body artifact,
+including on post-response validation failures, without request headers. Style
+is validated as a typed field; shot continuity and intent are reviewed from
+the actual content rather than inferred from two English keywords.
+
+## Local use
+
+Planning and rendering are separate steps. Set `OPENAI_API_KEY` in the shell
+environment; do not put it in a command argument, suite file or browser code.
+First preview the bounded request without a network call:
+
+```sh
+python3 -B examples/hy_nomas_plan.py \
+  --suite examples/data/hy_nomas_photorealistic_drafts.json \
+  --output /opt/mldata_ssd/cogni-ml/my-luna-suite.json
+```
+
+Add `--execute` to send one authorized API request. Medium effort is the
+default. Inspect the resulting suite and adjacent receipt/response artifact
+before rendering. They use fresh paths and are never silently overwritten.
+The response artifact is preserved on local post-response rejection so the
+same paid result can be inspected. There is no automatic paid retry.
+
+Build the native producer with a scratch build directory, then give the
+drafter a fresh run directory:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/draft-build hy_nomas_sequence_generate
+python3 -B examples/hy_nomas_draft.py \
+  --suite /opt/mldata_ssd/cogni-ml/my-luna-suite.json \
+  --generator /opt/mldata_ssd/cogni-ml/draft-build/hy_nomas_sequence_generate \
+  --run-dir /opt/mldata_ssd/cogni-ml/my-draft-run
+```
+
+`--reference-python`, `--upstream` and `--checkpoint` can override the local
+prepared asset paths. The runner uses existing local weights and does not
+download them. Its `index.html` and `results.json` expose completed clips and
+failures as the suite progresses. Rendering never calls the cloud planner.
+Each MP4 is a silent ten-second diagnostic draft; sound and UI integration
+are separate work.
+
+Focused checks:
+
+```sh
+python3 -B -m unittest spec/hy_nomas_plan_test.py \
+  spec/hy_nomas_draft_test.py spec/hy_nomas_draft_results_test.py
+```
+
+## Retained experiment (2026-11-01)
+
+Artifacts are under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-drafts-20261101.hj3x23ur`.
+The retained plan is `luna2-suite.json`, with SHA-256
+`43a1e368dbe9c8046ea8da24f99cf0f7a57d176a2fce203288c913587172c838`.
+Its response/usage receipt records `gpt-6-luna`, medium effort, 1,334 input
+tokens and 1,250 output tokens. This usage covers the retained response only;
+the earlier discarded response is not included.
+
+Manual text review found the core actions retained in five scenes. Luna
+removed the water scene's stop-pouring and set-down actions. That scene was
+retained as a reduced pouring-only diagnostic, rather than counted as full
+intent preservation. The editable planning stage is useful, but these six
+examples do not establish that medium effort is optimal or that Luna improves
+video quality over the original prompts: no planner A/B experiment was run.
+
+The completed run is `suite-run3/results.json`; `suite-run3/index.html` is its
+offline gallery. `suite-run3/preview-reel.mp4` concatenates the six ten-second
+exports without re-encoding. The successful native executable was freshly
+built, with its command and hash retained. Selected producer source snapshots
+are in `selected-source-snapshot/`; automatic correspondence between all build
+inputs and the executable is not proven. Post-run gallery/report corrections
+do not relabel those producer snapshots or change the videos.
+
+| Scene | Total seconds | Sampled process peak, GiB | Sampled visual finding |
+| --- | ---: | ---: | --- |
+| Portrait | 294.46 | 24.23 | Consistent face/framing; blink and full head turn are not established by the samples. |
+| Pouring water | 315.55 | 24.31 | Stream and filling glass are visible; the reduced prompt keeps pouring through the end. |
+| Running dog | 301.74 | 24.22 | Dog faces left despite the left-to-right request; trajectory and continuous gait remain unverified. |
+| Balloon car | 295.59 | 24.32 | No yellow balloon is visible; the finish looks overly smooth and the requested camera angle is uncertain. |
+| Coast flight | 295.66 | 24.22 | Photographic-looking coastal samples; continuous flight smoothness remains unverified. |
+| Desert donut | 300.90 | 24.32 | Clear failure: one requested walker becomes several people with inconsistent clothing. |
+
+Total scene time was 1,803.91 seconds for sixty seconds of video; the median
+was 29.83 seconds per video second. These times include each scene's
+conditioning, loading, native execution and export. They exclude the build,
+API planning, post-run inspection and earlier memory-limited attempts. No
+output from those interrupted attempts was promoted. The largest sampled
+process-group footprint was 24.32 GiB, and minimum sampled file-cache-aware
+headroom was 20.34 GiB. All 36 guarded stages exited zero with empty process
+groups at their final samples; the 10% floor and 30 GiB native cap were retained.
+These sampled observations do not bound between-sample MPS spikes.
+
+Each exported clip contains 240 frames, 512x288 at 24 fps for ten seconds.
+Raw-pixel and MP4 digests bind the exports to their receipts. All six native
+receipts report zero instrumented encode allocations, readbacks and
+preterminal waits, with one terminal drain per GPU phase. The metric excludes
+opaque MPS resources and terminal exports. Conditioning uses authenticated
+saved upstream Qwen state-26; live native text encoding and full upstream
+video parity remain outside this result. No arithmetic or tolerance changed.
+
+`visual-review.json` records inspection of twelve frames per scene, including
+frames 119/120/121 around the five-second boundary. This supports sampled
+composition and visible prompt-fidelity findings, not full-motion quality or
+temporal continuity. The same-lineage adversary review is correlated evidence.
+`experiment-summary.json` indexes the measured times and guard cleanup checks.
+The focused suite passes 36 tests. The actual final gallery CLI also exits
+zero for all six videos, validating raw-pixel hashes and MP4 hashes/metadata.
+That CLI check exposed a non-serializable `Path` in the public report; the
+report now explicitly emits string paths, with a regression that reproduced
+the failure before the fix. `postrun-review.json` binds those post-run report
+changes and checks to the retained producer snapshots without changing their
+source identity.
+
+Recheck all media and regenerate the gallery with the current report code:
+
+```sh
+python3 -B examples/support/hy_nomas_draft_results.py \
+  --suite /opt/mldata_ssd/cogni-ml/hy-nomas-drafts-20261101.hj3x23ur/luna2-suite.json \
+  --results /opt/mldata_ssd/cogni-ml/hy-nomas-drafts-20261101.hj3x23ur/suite-run3/results.json \
+  --output /opt/mldata_ssd/cogni-ml/hy-nomas-drafts-20261101.hj3x23ur/suite-run3/index.html \
+  --validate-final
+```

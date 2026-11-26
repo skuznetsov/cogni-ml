@@ -1,0 +1,335 @@
+{
+  "schema": "cogni_ml.hy_nomas_upstream_activation_recording_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "54d4d24ca47fb8a7fe34d863e3ad9797150bb7c3",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Lossless named-boundary recording of one pinned upstream BF16/MPS A1_high DiT continuation; exact four-Euler replay and exact-latent upstream PixelUMM video decode. No semantic actor-control, native full-pipeline parity or speedup claim.",
+    "adversary": "ROBUST within the bounded actual-artifact claim: final BF16 extent, exact F32 expansion, receipt bindings, all three decoded output hashes, 23 current/saved decoder source bindings and sampled guard limits were rechecked. Full trace and 468 streamed weight-range integrity rely on their successful pinned execution, not a second independent corpus scan. Same-lineage review is correlated, not independent replication.",
+    "refresh_on": [
+      "source/runtime or imported helper changes",
+      "weights/noise/reference/conditioning/bias/mask changes",
+      "geometry/precision/schedule changes",
+      "missing or mutated bound artifact"
+    ],
+    "rollback": "Omit the opt-in recorder/observer/decoder; original three-arm helper defaults and native generation remain unchanged."
+  },
+  "boundaries": {
+    "risk": "CAUTION: bounded diagnostic capture with GPU clones, CPU/SSD exports and staged weights.",
+    "production_defaults_changed": false,
+    "native_runtime_changed": false,
+    "oracle": "Tencent revision 911cea6458a89c2663513ff7099561ec190dd491 through pinned PyTorch 2.8.0 MPS attention adapters, not stock CUDA/Magi/FlexAttention.",
+    "arm": "A1_high includes the existing custom soft action-logit prior; it is not a vanilla zero-bias upstream run.",
+    "requested_actions": "Alex head turn, followed by Resume glove/chest gesture. These are requested actions, not labeled ground-truth trajectories.",
+    "runtime_scope": "Model tensor computation on MPS with fallback disabled; diagnostic activation exports and disk integrity/analysis run on CPU.",
+    "exports_add_diagnostic_waits": true,
+    "elapsed_is_inference_benchmark": false
+  },
+  "recipe": {
+    "width": 512,
+    "height": 288,
+    "output_frames": 120,
+    "fps": 24,
+    "seconds": 5,
+    "latent_shape": [
+      1,
+      32,
+      30,
+      9,
+      16
+    ],
+    "euler_steps": 4,
+    "dit_blocks": 54,
+    "block_calls": 432,
+    "t0_writer_calls": 216,
+    "t1_selected_calls": 216,
+    "named_boundaries_per_block_call": 53,
+    "trace_records": 23040,
+    "shards": 440,
+    "payload_bytes": 296265981952,
+    "original_storage_dtypes_preserved": true,
+    "quantized_activations": false,
+    "included": [
+      "block image/text inputs and outputs",
+      "modulation, normalization and projection inputs/outputs",
+      "pre/post-RoPE Q/K; actual attention Q/K/V and outputs",
+      "both residuals; FFN hidden and activated outputs",
+      "post-dispatch cache K/V; exact time vector and RoPE phases",
+      "prelude/refiner/head floating leaf outputs; prediction and all Euler latents"
+    ],
+    "excluded": [
+      "opaque MPS scratch",
+      "implicit full QK scores and softmax probability matrices",
+      "Qwen internals",
+      "PixelUMM internals"
+    ],
+    "full_score_and_probability_materialization_bytes": 1727363460096,
+    "storage_caps": {
+      "total_payload_bytes": 322122547200,
+      "batch_bytes": 1073741824,
+      "free_disk_reserve_bytes": 34359738368
+    }
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "tolerances_widened": false,
+    "pilot": {
+      "traced_untraced_t0_t1_outputs_bitwise_equal": true,
+      "replayed_t0_cache_and_mask_equal_actual_t1_incoming": true,
+      "independent_serialization_word_checks": 12,
+      "records": 136,
+      "block_calls": 2
+    },
+    "full": {
+      "all_four_euler_latents_bitwise_equal_archived_control": true,
+      "max_abs_error_each": 0.0,
+      "full_shard_and_record_hash_validation": true
+    },
+    "decode": {
+      "exact_trace_final_bf16_expansion_equals_consumed_f32_latent": true,
+      "final_trace_record": "step4.A1_high.head.after_euler",
+      "decoder_noise_and_source_and_weight_pins_checked": true,
+      "streamed_bf16_weight_tensor_hashes": 468,
+      "resident_pixelumm_blocks": 1,
+      "decoder_windows": [
+        0,
+        5,
+        10,
+        15,
+        20
+      ],
+      "cache_global_sha_is_declared_not_recomputed": true,
+      "full_activation_trace_revalidated_before_decode": true,
+      "raw_rgb_mp4_hashes_revalidated_after_decode": true,
+      "ffprobe_frames": 120,
+      "ffprobe_fps": "24/1",
+      "ffprobe_duration_sec": 5.0
+    },
+    "dod_command": "python3 -B -m unittest spec.hy_nomas_upstream_trace_decode_test spec.hy_nomas_activation_trace_analysis_test spec.hy_nomas_activation_trace_test spec.hy_nomas_upstream_activation_recording_test spec.hy_nomas_soft_route_render_reference_test spec.hy_nomas_soft_route_render_qualify_test spec.hy_nomas_soft_route_test",
+    "dod_signal": "72 CPU tests pass; eight new Python files pass Ruff; guarded pilot, full trace and upstream exact-latent decode exit zero; valid 120-frame MP4; selected frames inspected.",
+    "cpu_tests": 72,
+    "ruff_new_python_files": 8,
+    "actual_schema_preflight": {
+      "python": "3.12.2",
+      "torch": "2.8.0",
+      "exit_code": 0,
+      "geometry": [
+        4096,
+        12288,
+        32,
+        8,
+        128
+      ],
+      "estimated_process_bytes": 8977721856,
+      "cpu_only": true,
+      "full_trace_or_cache_payload_hash_scan": false
+    },
+    "source_snapshots": {
+      "decode_local_import_closure": 23,
+      "capture_primary": 3,
+      "current_and_saved_hashes_match_after_decode": true,
+      "supplemental_route_runtime_observed_after_start": true,
+      "supplemental_scope_note": "Its snapshot/current hash match was observed after recording started; no claim that this extra snapshot preceded import."
+    },
+    "read_only_artifact_review": {
+      "verdict": "ROBUST within the declared capture-to-video scope",
+      "final_bf16_extent_bytes_rehashed": 276480,
+      "exact_f32_expansion_bytes": 552960,
+      "decoded_output_files_rehashed": 3,
+      "current_and_saved_decoder_source_bindings_rechecked": 23,
+      "full_activation_or_weight_corpus_independently_rescanned": false,
+      "exclusions": "No native decoder parity, vanilla CUDA/FlexAttention parity, semantic actor control or full-playback quality certification."
+    }
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "swap_growth_stop_bytes": 67108864,
+    "capture_process_cap_bytes": 17179869184,
+    "decode_process_cap_bytes": 10737418240,
+    "successful_guards": {
+      "pilot-v4": {
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 17179869184,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1046861.127429458,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 600
+        },
+        "samples": 87,
+        "sampled_peak_group_bytes": 3664415048,
+        "minimum_cache_aware_headroom_bytes": 24234672128,
+        "minimum_pressure_free_pct": 83,
+        "observed_swap_growth_bytes": 0,
+        "final_live_children": 0,
+        "elapsed_sec": 44.45758237503469,
+        "exit_code": 0
+      },
+      "full-v1": {
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 17179869184,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1047006.571219125,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 3600
+        },
+        "samples": 4997,
+        "sampled_peak_group_bytes": 3715975760,
+        "minimum_cache_aware_headroom_bytes": 15005532160,
+        "minimum_pressure_free_pct": 79,
+        "observed_swap_growth_bytes": 0,
+        "final_live_children": 0,
+        "elapsed_sec": 2606.2289475410944,
+        "exit_code": 0
+      },
+      "decode-v2": {
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 10737418240,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 1051014.127667458,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 1800
+        },
+        "samples": 921,
+        "sampled_peak_group_bytes": 5060760976,
+        "minimum_cache_aware_headroom_bytes": 24935120896,
+        "minimum_pressure_free_pct": 79,
+        "observed_swap_growth_bytes": 0,
+        "final_live_children": 0,
+        "elapsed_sec": 477.26098858285695,
+        "exit_code": 0
+      }
+    },
+    "scope": "File-backed bytes estimate reclaimability; sampled process/host values do not bound between-poll peaks or prove opaque resource accounting."
+  },
+  "analysis": {
+    "validation_scope": "selected_only",
+    "selected_records": 64,
+    "layers": [
+      0,
+      13,
+      26,
+      39,
+      53
+    ],
+    "steps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "finding": "Both fixed coarse actor ROIs have nonzero attention and FFN residual RMS at sampled calls. This excludes only zero updates in those tensor ranges.",
+    "not_established": [
+      "action-text branch survival",
+      "semantic identity or actual actor displacement",
+      "cause of weak articulation",
+      "causal effectiveness of attention affinity"
+    ],
+    "next_falsifier": "Reconstruct selected-query attention with the exact compact K order, valid lengths, masks and soft prior; compare history/current-video/global-text/action-text mass and same-input interventions. Preserve the MPS mathematical-versus-bitwise distinction."
+  },
+  "visual": {
+    "review_scope": "Six selected frames at 0, .75, 1.5, 2.5, 3.5 and 4.5 seconds, enlarged head/glove/hand crops and whole-clip 8x8-pooled pixel changes; no literal full-playback quality certification.",
+    "findings": [
+      "Resume glove rises toward its chest in selected frames after about 3 seconds; its paper body, head and legs remain mostly fixed.",
+      "A substantial requested Alex head turn is not visible in the selected frames.",
+      "The first frame is visibly softer than later selected frames; this trace does not localize a decoder-internal cause."
+    ],
+    "requested_acting_established": false,
+    "full_playback_verified": false,
+    "pixel_changes_are_motion_ground_truth": false
+  },
+  "retained_refutations": [
+    {
+      "route": "Use the previous identically named A1_high MP4 as video for the accepted DiT latent",
+      "falsifier": "The old decoder latent bank last 30 frames do not equal the saved A1_high step4 latent.",
+      "decision": "Prior video retained only as a separate visual observation; new decode consumes the trace final latent directly.",
+      "correction": ".landmark/evidence/2026-11-06-hy-nomas-soft-route-render.json"
+    },
+    {
+      "route": "First decoder admission based on synthetic schema fixtures",
+      "falsifier": "decode-v1 exits 2 before MPS on literal upstream path comparison; actual-schema preflight also exposes a decoder-only source inventory expectation and nonlexical cache ordering.",
+      "decision": "Canonicalize the pinned trusted root, verify decoder-only sources separately, read exact lexical cache order, then rerun real-file CPU preflight and guarded decode-v2."
+    },
+    {
+      "route": "Use pooled ROI update size as proof of action control",
+      "falsifier": "Nonzero updates coexist with weak requested acting in the exact-linked upstream video.",
+      "decision": "Keep ROI RMS descriptive and require selected-query reconstruction plus intervention before a causal claim."
+    }
+  ],
+  "residuals": [
+    "No vanilla CUDA/Magi/Flex attention or native full-pipeline comparison was executed here.",
+    "The generic cache structural helper accepts numerically equal float/bool offsets; current CLI pins the exact integer-valued manifest SHA before this helper. Robustness claim is restricted to that authenticated manifest.",
+    "Full QK/softmax matrices, decoder/Qwen internals and opaque GPU scratch are not in this trace.",
+    "No model training, actor-local controller, quality fix or speed benchmark is established."
+  ],
+  "artifacts": {
+    "external_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz",
+    "qualified_index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/qualified-artifacts-v2.json",
+      "bytes": 22333,
+      "sha256": "d203d8148171acd919ba790923917209d7acec0d7481ac9c9e933b51bba3d656"
+    },
+    "trace_index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/full-v1/activations/index.json",
+      "bytes": 10169552,
+      "sha256": "8ac3d13e23defce8183722b4b0769dbe6a4755149da80192702699bce3467e93"
+    },
+    "replay": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/full-v1/replay.json",
+      "bytes": 2952,
+      "sha256": "d4f9ad1212814a7f1105b697b17e19c043437b20368000257bd6426988f3a062"
+    },
+    "final_latent": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/full-v1/final-latent.f32le",
+      "bytes": 552960,
+      "sha256": "12e8c8349ab840bce85ffd8710edf13eac9bb76f1a83bacdc2e570d255f7623b"
+    },
+    "decode_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/decode-v2/receipt.json",
+      "bytes": 5052,
+      "sha256": "3ba69966690b20d822fd2f28f29509004a403fd315669087dc52b864f72d16a0"
+    },
+    "video": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/decode-v2/display.mp4",
+      "bytes": 293499,
+      "sha256": "e1098a431119c6d4f93559673ce757429b9c88959591f48cb33f787b345ba131"
+    },
+    "selected_analysis": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/analysis-v1.json",
+      "bytes": 46044,
+      "sha256": "79814fdd2d8611675eea6a04d6e4519ab6245c3fa83d948645417160acc316a5"
+    },
+    "analysis_plot": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/activation-updates-v2.png",
+      "bytes": 260300,
+      "sha256": "955438a129970ba09901a37e71a423229e59b4a2bc94fdc7ddb9561d00b8075d"
+    },
+    "inspection": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/inspection-v3/pixel-change.json",
+      "bytes": 35522,
+      "sha256": "fb6641b77967b6d42064942be06e64d1cac6323ce0258b086ac39d0bf62977e9"
+    }
+  },
+  "evidence_validation": "Repository packet template/graph validator is unavailable in this checkout and installed skill path. JSON parse, actual-file hashes, source snapshots, guards and focused behavioral checks are used; no missing validator run is claimed."
+}

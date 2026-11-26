@@ -1,0 +1,88 @@
+{
+  "schema": "cogni_ml.hy_nomas_connected_reference_history_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "41e688234636555abbc9a40948ff0561d2693d24",
+  "source_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "run": "/opt/mldata_ssd/cogni-ml/hy-nomas-connected-t0-20261104.sydTYCdC",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Frozen T0 block-0 physical K/V cache and F32 reader against the pinned PyTorch 2.8.0 MPS BF16 autocast control.",
+    "adversary": "ROBUST in scope. Both stores were executed. The native reader matches its physical cache exactly. No-autocast and perturbed-value controls fail the numerical gate. The disabled and prior standalone paths preserve bytes.",
+    "unresolved": "The source no-autocast continuation adapter fails the unchanged K/V gate. Attention, later blocks, T1 and video quality remain unqualified.",
+    "rollback": "Omit --connected-history-output.",
+    "refresh": "Rerun after source, binary, runtime, device, input, weights, layout or precision changes or local artifact loss."
+  },
+  "fixture": {
+    "timeline_sha256": "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43",
+    "clean_t0_sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+    "block0_weights_sha256": "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b",
+    "refiner_output_sha256": "0b5d33684def3f9e36a21e7ba715ebf2a2f908b80135575c8c3fdde7808915c1",
+    "image_rows": 4320,
+    "dit_text_rows": 320,
+    "valid_text_rows": 263,
+    "active_rows": 4583,
+    "source_physical_rows": 4640,
+    "source_masked_tail_rows": 57
+  },
+  "tolerances": {"atol": 0.00002, "rtol": 0.00002},
+  "effective_inputs": {
+    "max_abs": 0.0,
+    "raw_image_patch_f32_max_abs": 0.003772258758544922
+  },
+  "autocast": {
+    "physical_k_sha256": "33d5b2bad5eb751168b14d611dbc8c6af1ed036169f756917a8c6471a8bf2145",
+    "physical_v_sha256": "e165e16c5997b2945616c8663227a91a3880bfe7cb864ddd324905ec83ce6598",
+    "elements_per_tensor": 9385984,
+    "physical_exact": true,
+    "reader_max_abs": 0.0
+  },
+  "no_autocast": {
+    "first_difference": "image and text LayerNorm output, F32 with autocast versus BF16 without it",
+    "layernorm_after_bf16_cast_mismatches": {"image": 0, "text": 0},
+    "modulated_qkv_input_after_bf16_cast_mismatches": {"image": 3046202, "text": 225852},
+    "metric_fields": ["elements", "mismatches", "max_abs"],
+    "k_image": [8847360, 3097076, 0.0625],
+    "k_text": [538624, 152937, 0.046875],
+    "v_image": [8847360, 3765372, 0.03125],
+    "v_text": [538624, 118608, 0.5]
+  },
+  "native_execution": {
+    "full_generation_executed": false,
+    "actual_named_bytes": 3000883780,
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "preterminal_waits": 0,
+    "terminal_waits": 1
+  },
+  "guard": {
+    "cache_aware_floor_pct": 10,
+    "process_group_cap_gib": 6,
+    "swap_growth_stop_mib": 64,
+    "connected_native_sampled_peak_gib": 2.3468646705150604,
+    "connected_native_sampled_minimum_headroom_gib": 27.235855102539062,
+    "connected_native_sampled_swap_growth_bytes": 0
+  },
+  "checks": {
+    "cpu_crystal_examples": 101,
+    "metal_examples": 9,
+    "python_tests": 26,
+    "disabled_path_equal_records": 62,
+    "negative_2_gib_cap_exit": 1,
+    "standalone_history_artifact_sha256": "0950accff76f75810fc13928cc7ea388e31f7c03a3a34e3e2ce680a1a55b10a2"
+  },
+  "artifact_sha256": {
+    "build/hy_nomas_reference_cache_probe": "fcab895a6a33a36a7df008b71f153f73565ff8d027773ce7b81758c1bdc615c7",
+    "native-history.json": "69bd83206454f97cd25e81e5b607e0da00d34f49c3feaebe0562dd4b65bbc48c",
+    "native-history.safetensors": "27e8a85070ffc91e57b6fe6804961b9d739c2edf31cb62e43a2660b4de14894a",
+    "effective-preblock.json": "44e447f5cfcc5a08b8370a473a4bfb6f3ac675680b7813068301ae18fd14fdeb",
+    "upstream-autocast-final.json": "53bedd14259b9e4aa3bf10b9427a110a3f9f2f8506e6f554436c4293ff645147",
+    "upstream-autocast-final.safetensors": "19ccc337734f520a27629a56ef1060966cb3e063d2c1300c5fcd7e151cd62a79",
+    "upstream-eager-final.json": "010f7fd107a37d80250f7ab1db4bf0be8d4f4df16d366479b30f82d7a7dbb507",
+    "upstream-eager-final.safetensors": "d5f47fcaa443974e6bce309af6274cff38c9b3af39193d7df10e0643f7aa55a3",
+    "comparison-autocast-final.json": "d77dabec53a15483bf97e5658a16978412ec2ed5f849f2359609ba69a66f839e",
+    "comparison-eager-final.json": "bbcf99285b96cd02fcdc5a352c4c14cf4a98090dabd1b14458620174fcbdf8a8",
+    "source-dtype-boundaries.json": "ba2d0197c1b06d37a412c51f5ed38ae7ebdd0b7b5e19fcef8a8b9b269689eccd",
+    "source-dtype-rounding.json": "7d2296cb321ac3ba57c14ee27fbbb9f285b38afc242cf3cc7c2a3a87b2516c52",
+    "source-dtype-rounding-replay.py": "1438181dd6da7cf49c4929ceb5315de9e69d47eff7ba8d00ec26f6f79eb0bfb2"
+  }
+}

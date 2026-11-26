@@ -1,0 +1,272 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "artifacts": [
+    {
+      "bytes": 96444,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/qualification-summary.json",
+      "sha256": "686ccdac3d9fb88e7cd165c436e78d8aa6c186849ca5f19bad839e4ce7dec4d7"
+    },
+    {
+      "bytes": 48453,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/real/matrix-report.json",
+      "sha256": "79dd6e70cb60f7fb99f54ded8347a6cd4d9c3dff0ebe54866292e255d60253cc"
+    },
+    {
+      "bytes": 2823,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/real/matrix-index.json",
+      "sha256": "8cccee49fcc98ce72972e1ab6c3ea59f178ddb989e4be877641600609f572b69"
+    },
+    {
+      "bytes": 2170,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/source-pins.json",
+      "sha256": "1f6ef64a760be911e99888ef533b41dde86913e94b51f3b9a309244c0eb210bb"
+    },
+    {
+      "bytes": 8041,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/collect_qualification.py",
+      "sha256": "8eac6ec035cdb7035892c41640bf8e843c3985a1395d540fb2c653bb376fa460"
+    },
+    {
+      "bytes": 10100,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/upstream/cache-contract-20261101/reference.json",
+      "sha256": "5a9e4813fde1f6ca7b4f4e2040efe53e9393020d973a037c1661a58cc16c60c5"
+    },
+    {
+      "bytes": 1059,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/collect-qualification-command.json",
+      "sha256": "9a48bf5e02f37a9aece93b599c9646d045d4a6a2a54dce72f1ddf4f0c1c5b3c9"
+    },
+    {
+      "bytes": 1391,
+      "note": "",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/final-crystal-format-command.json",
+      "sha256": "eadeaf1860c4bdeaa37f2a137bdfe715298b36cf90550fb273f0d3173e183263"
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-generation-frontier.md",
+      "examples/hy_nomas_cache_qbit_checkpoint_probe.cr",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/support/hy_nomas_cache_qbit_checkpoint.cr",
+      "examples/support/hy_nomas_cache_qbit.cr",
+      "examples/support/hy_nomas_cache_qbit.metal",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_resume_bundle.cr",
+      "spec/hy_nomas_cache_qbit_checkpoint_spec.cr",
+      "spec/hy_nomas_compact_resume_reference_test.py",
+      "spec/support/hy_nomas_compact_resume_reference.py",
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-resume.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-generation-frontier.md",
+      "examples/hy_nomas_cache_qbit_checkpoint_probe.cr",
+      "examples/hy_nomas_compact_sequence_probe.cr",
+      "examples/support/hy_nomas_cache_qbit_checkpoint.cr",
+      "examples/support/hy_nomas_cache_qbit.cr",
+      "examples/support/hy_nomas_cache_qbit.metal",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_resume_bundle.cr",
+      "spec/hy_nomas_cache_qbit_checkpoint_spec.cr",
+      "spec/hy_nomas_compact_resume_reference_test.py",
+      "spec/support/hy_nomas_compact_resume_reference.py",
+      ".landmark/evidence/2026-11-01-hy-nomas-compact-resume.json"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "External model states, binaries, arrays and logs are not committed or backed up by this packet; hashes detect changes, not guarantee recovery.",
+        "ref": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo"
+      }
+    ]
+  },
+  "canonical_status": "canonical_summary",
+  "claim": {
+    "decay_trigger": "Source/binary/codec/input/noise/weights/geometry/backend/device changes or loss/modification of referenced external artifacts require fresh qualification.",
+    "level": "VERIFIED",
+    "scope": "Three five-second native BF16 DiT segments, four Euler steps each, one unchanged Apple M2 Max executable and authenticated input/weight identities. File-size reduction and bounded restart integrity only.",
+    "text": "Opt-in compact GPU QBit checkpoints reproduce the existing QBit roundtrip control through two fresh-process restarts; exact restart remains bitwise equal to its exact control."
+  },
+  "created_at": "2026-11-01T13:08:09.783759+00:00",
+  "evidence": [
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/real/matrix-report.json",
+      "result": "passed",
+      "signal": "All 12 latent updates and full timeline bitwise equal for exact continuous/restart and QBit continuous/compact restart; loss versus exact reported separately."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/specs-compact-resume.out",
+      "result": "passed",
+      "signal": "37 Crystal examples, 0 failures/errors."
+    },
+    {
+      "kind": "executed_tests",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/specs-compact-comparator-final.out",
+      "result": "passed",
+      "signal": "17 Python comparator tests pass, including corruption, stale treatment, lineage and invariant falsifiers."
+    },
+    {
+      "kind": "executed_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/small-checkpoint-restore.out",
+      "result": "passed",
+      "signal": "Fresh-process GPU decode matches old in-memory roundtrip bitwise across all 768 cache values and exact timeline; all precision tiers exercised."
+    },
+    {
+      "kind": "upstream_reference",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/upstream/cache-contract-20261101/reference.json",
+      "result": "passed",
+      "signal": "Pinned synthetic F32/MPS source-body cache-attention adapter matches 9072 outputs, 1080 K and 1080 V values with maximum error zero; atol=rtol=2e-5."
+    },
+    {
+      "kind": "release_build",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/logs/build-legacy-sequence.out",
+      "result": "passed",
+      "signal": "Existing sequence resume and generation callers build after API extension."
+    }
+  ],
+  "id": "lep-20261101-hy-nomas-compact-resume",
+  "limitations": [
+    "Native GPU model/codec math; CPU setup and terminal shared-buffer serialization/authentication and offline comparisons are explicit.",
+    "Lossy QBit does not satisfy exact F32 tolerance; no new decoded video or perceptual quality claim.",
+    "Disk checkpoint reduction only; live attention K/V remain F32.",
+    "No speedup claim; timings are descriptive fresh-process observations.",
+    "Instrumented MetalBuffer counters exclude opaque MPS allocations; sampled guards cannot bound between-sample spikes.",
+    "Same-host/frozen-executable qualification; cross-build migration, crash/power-loss recovery and Studio integration remain open.",
+    "Only the 14 pinned repository native/checker/build sources are verified unchanged. External runner digests are recorded at finalization, not at original execution; actual outcomes are cross-checked through per-arm sidecars/receipts, authenticated arrays and state lineage."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-generation-frontier.md",
+    "landmark": "LANDMARKS.md#lm-hy-nomas-compact-resume-2026-11-01-compact-gpu-qbit-checkpoints-reproduce-the-roundtrip-control-through-two-restarts",
+    "related_packets": [
+      ".landmark/evidence/2026-10-31-hy-nomas-cache-qbit.json",
+      ".landmark/evidence/2026-10-31-hy-nomas-segment-restart.json"
+    ]
+  },
+  "orchestration_finalization_pins": [
+    {
+      "bytes": 2434,
+      "note": "Finalization-time inspection only; no separate original-execution attestation.",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/run_real_matrix.py",
+      "sha256": "c32498833e3274a115b893d55e0a0eb099171831b7fef3bf8863bed1e9bc0f90"
+    },
+    {
+      "bytes": 2177,
+      "note": "Finalization-time inspection only; no separate original-execution attestation.",
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/run_job.py",
+      "sha256": "5d3258f1a2ca58517b0041e4e79e12f4733847688ab5598e94247822f0c31ebe"
+    }
+  ],
+  "parent_revision": "56b2f7f7dc1e737095771046b80c3f7837ea69bc",
+  "reason": "Persist the previously tested adaptive row representation without a second packed GPU bank, then distinguish serialization errors from accumulated lossy continuation errors.",
+  "refresh": "Use fresh external paths; rebuild/pin native and checker sources, refresh the pinned upstream cache oracle, execute the small GPU codec gate and guarded eight-process A/B/C matrix, then rerun strict authentication/bitwise comparison and lossy-error accounting.",
+  "results": {
+    "atol": 2e-05,
+    "checkpoint_accounting_by_boundary": {
+      "1": {
+        "exact_checkpoint_file_bytes": 4319223820,
+        "exact_state_sha256": "c410df2a29b6df7f53295334455b4afd07ac3962d940abf2d96302d2861fd93d",
+        "logical_checkpoint_payload_bytes": 4318175232,
+        "packed_and_file_bytes_are_distinct_fields": true,
+        "qbit_checkpoint_file_bytes": 2005497939,
+        "qbit_file_bytes_less_than_exact": true,
+        "qbit_logical_packed_kv_bytes": 2001104400,
+        "qbit_state_sha256": "9f06883c7905df1acd117749e79a76396d3da70fe8bdf0c2aacaa0f449d6938c",
+        "resident_f32_kv_bytes": 8136916992
+      },
+      "2": {
+        "exact_checkpoint_file_bytes": 8141283340,
+        "exact_state_sha256": "c21ae95d683adc06e7e1bde918f805b120c01700b22a6a3f9927e02956da878f",
+        "logical_checkpoint_payload_bytes": 8140234752,
+        "packed_and_file_bytes_are_distinct_fields": true,
+        "qbit_checkpoint_file_bytes": 3755273865,
+        "qbit_file_bytes_less_than_exact": true,
+        "qbit_logical_packed_kv_bytes": 3750880016,
+        "qbit_state_sha256": "8155a5ecc83d56ef4d64e6d08abb75a368a94a373905bf7ee7012fb191fa19e8",
+        "resident_f32_kv_bytes": 8136916992
+      }
+    },
+    "compact_restart_matches_qbit_roundtrip_bitwise": true,
+    "crystal_examples": 37,
+    "crystal_format": "passed",
+    "euler_steps_per_segment": 4,
+    "exact_restart_bitwise": true,
+    "final_latent_loss_vs_exact": {
+      "0": {
+        "max_absolute_error": 0.0,
+        "relative_l2": 0.0,
+        "rmse": 0.0
+      },
+      "1": {
+        "max_absolute_error": 2.251953125,
+        "relative_l2": 0.07588765363299979,
+        "rmse": 0.0885056979326184
+      },
+      "2": {
+        "max_absolute_error": 3.2216796875,
+        "relative_l2": 0.18802071331083606,
+        "rmse": 0.23010752453655425
+      }
+    },
+    "legacy_callers_release_build": "passed",
+    "lossy_within_unchanged_exact_tolerance": false,
+    "native_encode_allocations": 0,
+    "native_encode_readbacks": 0,
+    "native_model_processes": 8,
+    "native_preterminal_waits": 0,
+    "previous_user_visual_observation": "On 2026-11-01 the user reported no visible difference in the earlier matched 10-second F32/QBit pair; this observation does not qualify C or repeated compression.",
+    "python_tests": 17,
+    "rtol": 2e-05,
+    "sampled_guard": {
+      "maximum_swap_growth_bytes": 0,
+      "minimum_cache_aware_headroom_bytes": 15621046272,
+      "minimum_pressure_free_pct": 61,
+      "sampled_peak_footprint_bytes": 31747339032
+    },
+    "segments": 3,
+    "terminal_waits_per_process": 1
+  },
+  "risk": "CAUTION: persistent binary format, in-place GPU representation change and lossy numerical treatment.",
+  "rollback": "Keep --state-format exact --cache-roundtrip exact (unchanged defaults), or revert this atomic opt-in feature. No Studio or production default promotion.",
+  "schema_version": 1,
+  "source": {
+    "bounded_context": "cogni-ml Hy-Nomas native Metal DiT",
+    "producer": "codex",
+    "task": "Compact adaptive QBit checkpoints with repeated native continuation"
+  },
+  "verification": {
+    "adversary_scope": "Same-lineage correlated review of current source and real artifacts; rehashed 56 F32 artifacts, all source pins and binary/receipt/guard links. Large state payloads freshly streamed/authenticated by executed comparator, not independently reread by reviewer.",
+    "adversary_verdict": "ROBUST",
+    "dod_commands": [
+      "make BUILD_DIR=\"$ROOT/build\" spec_hy_nomas_compact_resume",
+      "python3 -B spec/hy_nomas_compact_resume_reference_test.py",
+      "python3 -B \"$ROOT/run_real_matrix.py\"",
+      "python3 -B spec/support/hy_nomas_compact_resume_reference.py --index \"$ROOT/real/matrix-index.json\" --output \"$ROOT/real/matrix-report.json\"",
+      "python3 -B \"$ROOT/collect_qualification.py\"",
+      "make BUILD_DIR=\"$ROOT/build\" hy_nomas_sequence_resume_probe hy_nomas_sequence_generate",
+      "crystal tool format --check <the eight changed Crystal files>",
+      "git diff --check"
+    ],
+    "dod_signal": "Focused CPU/GPU gates and bitwise comparisons pass; all eight sampled guards retain the 10% reserve and one terminal drain. Commands use external TMPDIR/CRYSTAL_CACHE_DIR and recorded guard argv; logs/output paths must be fresh.",
+    "structural_validation": "Repository-local scripts/validate-landmark-graph.sh and packet template are absent. Validate JSON and dereferenced small-artifact/source hashes directly. External template numeric trust thresholds are not treated as evidence or adopted as a hidden scalar.",
+    "trust": {
+      "F": "Executable bitwise, integrity, corruption/lifecycle and sampled-budget checks; not a formal proof.",
+      "G": "Same-host/frozen-executable three-segment fixture; no cross-build or general quality claim.",
+      "R": "Native four-arm matrix plus small codec/upstream contract controls and same-lineage artifact review; orchestration provenance limit below."
+    }
+  }
+}

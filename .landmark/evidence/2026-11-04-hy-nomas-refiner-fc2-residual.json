@@ -1,0 +1,211 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_fc2_residual_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "032653bf1b53cec55d3d1fefa5e0251040347fc7",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected two-block refiner through block1.output on one finite frozen T0 input, B1/V263/processed1280/H16/D128.",
+    "oracle": "Inherited caller-pinned Hy-Nomas 911cea6458a89c2663513ff7099561ec190dd491 on the PyTorch 2.8.0 MPS adapter.",
+    "adversary": "ROBUST within scope. Direct full-payload byte comparison, disabled preservation, fresh repeat and GPU sensitivity controls. Same-lineage review is correlated.",
+    "next_boundary": "The connected consumer of block1.output in the T0 DiT reference K/V path. This trace qualifies the refiner only.",
+    "refresh": "Rerun on source, binary, runtime, input, weights, layout, precision or evidence changes.",
+    "rollback": "Omit --refiner-source-fc2-residual-control, which defaults false."
+  },
+  "run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G",
+  "execution": {
+    "mixed_atol": 2e-05,
+    "mixed_rtol": 2e-05,
+    "exact_tolerance": 0,
+    "full_generation_executed": false,
+    "diagnostic_terminal_exports_per_gpu_compare_or_replay": 1,
+    "crystal_examples": 33,
+    "python_tests": 89,
+    "named_bytes": 944620612,
+    "native_instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    }
+  },
+  "first_divergence": {
+    "control": {
+      "full": "block0.mlp_fc2",
+      "valid": "block0.mlp_fc2",
+      "padding": "block0.mlp_fc2"
+    },
+    "enabled": {
+      "full": null,
+      "valid": null,
+      "padding": null
+    }
+  },
+  "metric_fields": [
+    "count",
+    "mismatch_count",
+    "max_abs"
+  ],
+  "fc2_residual_full_exact": {
+    "block0.mlp_fc2": [
+      2621440,
+      0,
+      0.0
+    ],
+    "block0.output": [
+      2621440,
+      0,
+      0.0
+    ],
+    "block1.input": [
+      2621440,
+      0,
+      0.0
+    ],
+    "block1.mlp_fc2": [
+      2621440,
+      0,
+      0.0
+    ],
+    "block1.output": [
+      2621440,
+      0,
+      0.0
+    ]
+  },
+  "valid_raw": {
+    "control": {
+      "block0.mlp_fc1": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        527239,
+        0.1245574951171875
+      ],
+      "block0.output": [
+        538624,
+        528887,
+        0.398162841796875
+      ],
+      "block1.input": [
+        538624,
+        528887,
+        0.398162841796875
+      ],
+      "block1.output": [
+        538624,
+        531565,
+        1.2977142333984375
+      ]
+    },
+    "enabled": {
+      "block0.mlp_fc1": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        0,
+        0.0
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        0,
+        0.0
+      ],
+      "block0.output": [
+        538624,
+        0,
+        0.0
+      ],
+      "block1.input": [
+        538624,
+        0,
+        0.0
+      ],
+      "block1.output": [
+        538624,
+        0,
+        0.0
+      ]
+    }
+  },
+  "source_enabled_bytewise": {
+    "records": 37,
+    "bytes": 450977792
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "control",
+      "enabled",
+      "enabled-repeat",
+      "preservation",
+      "python",
+      "control-compare",
+      "enabled-compare"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 19810435072,
+    "peak_sampled_process_group_bytes": 2340030672,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/build/hy_nomas_reference_cache_probe",
+      "bytes": 2403456,
+      "sha256": "48e8c93a6a1fd371155aa6f0d5cc873eb453dd61bbebae1edb83051a7edfe4de"
+    },
+    "native_enabled_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/enabled-blocks.json",
+      "bytes": 15519,
+      "sha256": "266dc0c778b67d4d8d26376e3a11e6f2e2d0554b961800b6fbef987f651fa1bc"
+    },
+    "native_enabled_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/enabled-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/control-compare.json",
+      "bytes": 64873,
+      "sha256": "f852480cda19365a9c2c80cefda148ea8ecaad3b6ffb7697826da2e4f2c6dfc9"
+    },
+    "enabled_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/enabled-compare.json",
+      "bytes": 61433,
+      "sha256": "e5ed1fe52ea89c5e3c841245aea02979fa4e2c57a6bb821690284fff8b4c44ff"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/logs/preservation.out",
+      "bytes": 1087,
+      "sha256": "24109df3ef81fcd41e84ddc6eeb527dd13624e24bf9e02fc5519c4f2b97f156c"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc2-20261104.TuNts05G/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

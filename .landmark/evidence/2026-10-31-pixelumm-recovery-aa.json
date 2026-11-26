@@ -1,0 +1,648 @@
+{
+  "adversary": {
+    "correlation": "Same-lineage mini-Quad review; root independently reran hash analyzer, CPU falsifiers and live observer stop qualification.",
+    "scope": "Matched inputs, source/guard integrity, full display parity, descriptive timing and observer cleanup.",
+    "verdict": "ROBUST for the bounded descriptive result; VULNERABLE if promoted to causal thermal attribution, broad CPU-starvation exclusion or an explanation of the earlier twofold drift."
+  },
+  "checks": {
+    "commands": [
+      "make BUILD_DIR=<external-build> pixelumm_recovery_probe",
+      "make BUILD_DIR=<external-build> spec_hy_nomas_decoder_replay",
+      "crystal spec spec/pixelumm_recovery_timing_spec.cr",
+      "python3 -B -m unittest discover -s spec/support -p test_pixelumm_recovery_matrix.py -v",
+      "python3 -B spec/support/test_pixelumm_power_observer.py",
+      "python3 -B examples/support/pixelumm_recovery_matrix.py --binary <release-binary> --output-root <fresh-external-root>",
+      "python3 -B examples/support/pixelumm_recovery_matrix.py --analyze-only --output-root <completed-matrix>"
+    ],
+    "counts": {
+      "deadline": 4,
+      "matrix_cpu": 20,
+      "observer_cpu": 14,
+      "replay_lifecycle": 4
+    },
+    "logs": [
+      {
+        "bytes": 1872,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/build-qualified-v2.log",
+        "sha256": "26ad5cf25d78d28fb6c30f901dfbc0247213a7c9681d3c271dd6ff0c1d0aab92"
+      },
+      {
+        "bytes": 1418,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/replay-spec.log",
+        "sha256": "43678caa5dc23e6655e99140ba1e3ee3fd636f8e4f69a8787c7701dc010973aa"
+      },
+      {
+        "bytes": 79,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/timing-spec-resumed.log",
+        "sha256": "15ca46f99271573723f96cd4e22a8bad4ab6a63cea7d044c7dfe9e42d89c68f0"
+      },
+      {
+        "bytes": 3602,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/matrix-spec-resumed.log",
+        "sha256": "ea0fde7c9aee6ae5eff3a0de2aad71a794ab57143cb2e268fd8cda47e2bf5860"
+      },
+      {
+        "bytes": 113,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/observer-spec-qualified.log",
+        "sha256": "f196bef0973ff999dcbcf679ca035393cbb4be84e582dd7f9d09005e1f656ac4"
+      },
+      {
+        "bytes": 130,
+        "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/build-v1/host-timing-resumed.log",
+        "sha256": "a831f84e7a257aa61182b37f789ebd3d718d1961c60ac9aa69fb26616d6e54cc"
+      }
+    ],
+    "observer_stop_qualification": {
+      "bytes": 4033,
+      "path": "/opt/mldata_ssd/pixelumm-power-observer-20261031-stop-qualified-v2/summary.json",
+      "sha256": "b4cb1e2de97f7045b42b9d7609adb7eff2d7ace516e653ab7b21eb738d7be6e5"
+    }
+  },
+  "claim": "The bounded decoder-only recovery A/A completed in both orders with bitwise same-latent source-MPS display parity and unchanged sampled guards. Short-idle requests are slower at lower observed GPU frequency.",
+  "claim_level": "VERIFIED within declared scope",
+  "claim_limits": [
+    "One pair per order on one saved latent/noise identity; descriptive association is not causal thermal attribution or a general timing guarantee.",
+    "Earlier roughly twofold drift and a causal DiT penalty remain unresolved; no DiT or full generation was run.",
+    "The source-MPS oracle uses the admitted gathered FP32 attention adapter; stock CUDA/Flex and full DiT trajectory or new intermediate parity are excluded.",
+    "GPU elapsed is the sum of per-root command-buffer start/end durations, including in-buffer stalls; active residency is a coarse system-level observation, not CPU/thread telemetry.",
+    "One-second idle has no resolvable interior sample at the two-second/whole-second-UTC observer resolution.",
+    "Tracked encode counters do not include opaque MPS allocations; memory limits and reported peaks are sampled.",
+    "Long recovery adds idle time and worsens end-to-end throughput; it is a diagnostic treatment only."
+  ],
+  "comparisons": {
+    "cell-01-short-long": {
+      "long": {
+        "gpu_seconds": 145.48392037366284,
+        "wall_seconds": 145.518375875
+      },
+      "short": {
+        "gpu_seconds": 155.33355324686272,
+        "wall_seconds": 155.3904945
+      },
+      "short_over_long": {
+        "gpu_seconds": 1.0677025532986872,
+        "wall_seconds": 1.0678410445803774
+      },
+      "thermal_levels": {
+        "long": [
+          0,
+          1
+        ],
+        "short": [
+          0,
+          1
+        ],
+        "warmup": [
+          0,
+          0
+        ]
+      }
+    },
+    "cell-02-long-short": {
+      "long": {
+        "gpu_seconds": 145.66338587290375,
+        "wall_seconds": 145.703116583
+      },
+      "short": {
+        "gpu_seconds": 161.15504475100897,
+        "wall_seconds": 161.184053958
+      },
+      "short_over_long": {
+        "gpu_seconds": 1.106352456283161,
+        "wall_seconds": 1.1062498712316922
+      },
+      "thermal_levels": {
+        "long": [
+          0,
+          1
+        ],
+        "short": [
+          1,
+          1
+        ],
+        "warmup": [
+          0,
+          1
+        ]
+      }
+    }
+  },
+  "date": "2026-10-31",
+  "decay_triggers": [
+    "Changed source/weights/input/latent/noise/oracle/geometry invalidates parity consumption until rerun.",
+    "Changed binary, hardware/OS/MPS, queue/recovery policy or host conditions requires a fresh timing matrix.",
+    "This packet indexes evidence; its structure is not itself proof."
+  ],
+  "excluded_attempt": {
+    "correction": "Use same RAW4 clock for deadline/receipt, retry early wakeups to minimum, retain strict 5/125s upper bounds; log raw/adjusted/wall intervals before admission.",
+    "failure_log": {
+      "bytes": 577,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v1/cell-01-short-long/stderr.log",
+      "sha256": "3a146cb27755a0e372e6d4e208aa2bd9b66b1390c029a08233da9e31170b052a"
+    },
+    "reason": "Interval-bound rejection before long pass; exact failed interval not recorded, cause unknown. No partial timing pair or parity assertion is consumed.",
+    "root": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v1"
+  },
+  "memory": [
+    {
+      "cell": "cell-01-short-long",
+      "max_group_footprint_gib": 21.153667248785496,
+      "max_swap_growth_bytes": 0,
+      "min_headroom_gib": 25.799957275390625,
+      "sample_count": 1138
+    },
+    {
+      "cell": "cell-02-long-short",
+      "max_group_footprint_gib": 21.1531026288867,
+      "max_swap_growth_bytes": 0,
+      "min_headroom_gib": 25.947799682617188,
+      "sample_count": 1133
+    }
+  ],
+  "next_falsifier": "Reduce measured GPU FFN/attention work, retain queue policy and parity, and compare at matched observed frequency/warmup; do not promote recovery sleep as a throughput optimization.",
+  "observed_passes": [
+    {
+      "eligible_samples": 70,
+      "encode_seconds": 144.3370365,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 145.055413955939,
+      "label": "warmup",
+      "mean_gpu_active_frequency_mhz": 1356.3,
+      "mean_gpu_power_mw": 48483.642857142855,
+      "observed_recovery_seconds": 0.0,
+      "range": "cell-01-short-long/warmup",
+      "terminal_wait_seconds": 0.764765458,
+      "thermal_pressure_counts": {
+        "Nominal": 70
+      },
+      "valid_samples": 70,
+      "wall_seconds": 145.101802125
+    },
+    {
+      "eligible_samples": 75,
+      "encode_seconds": 154.54688375,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 155.33355324686272,
+      "label": "short",
+      "mean_gpu_active_frequency_mhz": 1253.7866666666666,
+      "mean_gpu_power_mw": 41380.17333333333,
+      "observed_recovery_seconds": 1.004211959,
+      "range": "cell-01-short-long/short",
+      "terminal_wait_seconds": 0.843610708,
+      "thermal_pressure_counts": {
+        "Heavy": 52,
+        "Moderate": 13,
+        "Nominal": 10
+      },
+      "valid_samples": 75,
+      "wall_seconds": 155.3904945
+    },
+    {
+      "eligible_samples": 69,
+      "encode_seconds": 144.730905917,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 145.48392037366284,
+      "label": "long",
+      "mean_gpu_active_frequency_mhz": 1355.7101449275362,
+      "mean_gpu_power_mw": 48344.942028985504,
+      "observed_recovery_seconds": 120.010219667,
+      "range": "cell-01-short-long/long",
+      "terminal_wait_seconds": 0.787469916,
+      "thermal_pressure_counts": {
+        "Heavy": 1,
+        "Moderate": 9,
+        "Nominal": 59
+      },
+      "valid_samples": 69,
+      "wall_seconds": 145.518375875
+    },
+    {
+      "eligible_samples": 69,
+      "encode_seconds": 144.669316125,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 145.41875654208707,
+      "label": "warmup",
+      "mean_gpu_active_frequency_mhz": 1352.0289855072465,
+      "mean_gpu_power_mw": 48295.942028985504,
+      "observed_recovery_seconds": 0.0,
+      "range": "cell-02-long-short/warmup",
+      "terminal_wait_seconds": 0.796450459,
+      "thermal_pressure_counts": {
+        "Heavy": 1,
+        "Moderate": 9,
+        "Nominal": 59
+      },
+      "valid_samples": 69,
+      "wall_seconds": 145.465766625
+    },
+    {
+      "eligible_samples": 70,
+      "encode_seconds": 144.886995291,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 145.66338587290375,
+      "label": "long",
+      "mean_gpu_active_frequency_mhz": 1352.0285714285715,
+      "mean_gpu_power_mw": 48104.171428571426,
+      "observed_recovery_seconds": 120.01041075,
+      "range": "cell-02-long-short/long",
+      "terminal_wait_seconds": 0.816121292,
+      "thermal_pressure_counts": {
+        "Heavy": 3,
+        "Moderate": 9,
+        "Nominal": 58
+      },
+      "valid_samples": 70,
+      "wall_seconds": 145.703116583
+    },
+    {
+      "eligible_samples": 78,
+      "encode_seconds": 160.357912833,
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 100.0,
+        "median": 100.0,
+        "min": 100.0
+      },
+      "gpu_span_seconds": 161.15504475100897,
+      "label": "short",
+      "mean_gpu_active_frequency_mhz": 1200.8461538461538,
+      "mean_gpu_power_mw": 37897.96153846154,
+      "observed_recovery_seconds": 1.010256958,
+      "range": "cell-02-long-short/short",
+      "terminal_wait_seconds": 0.826141083,
+      "thermal_pressure_counts": {
+        "Heavy": 78
+      },
+      "valid_samples": 78,
+      "wall_seconds": 161.184053958
+    }
+  ],
+  "protocol": {
+    "actual_output_check": "All six full files freshly rehashed to pinned source-MPS SHA256, stricter than tolerance.",
+    "display_bytes_per_pass": 460062720,
+    "display_elements_per_pass": 115015680,
+    "display_sha256": "5ed0974dfd3b28d940c370fa8faef6a23b288d86adb03c6810758ae16c55cc9f",
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "export_policy": "All three exports/hashes only after all three existing terminal waits in each process.",
+    "gap_bounds_seconds": {
+      "long": [
+        120,
+        125
+      ],
+      "short": [
+        1,
+        5
+      ]
+    },
+    "guard_limits": {
+      "max_footprint_mib": 26624,
+      "max_swap_growth_mib": 64,
+      "memory_accounting": "file-cache",
+      "runtime_floor_pct": 10,
+      "runtime_floor_pct_exact": "10",
+      "timeout_sec": 1200
+    },
+    "named_budget_bytes": 25769803776,
+    "named_bytes": 20030040048,
+    "orders": [
+      "short-long",
+      "long-short"
+    ],
+    "per_pass_gpu_work": "Restore pinned latent, poison full display, run all 36 blocks plus head across five windows, copy to a distinct preallocated GPU snapshot.",
+    "pre_cell_recovery_seconds": 120,
+    "preterminal_waits": 0,
+    "recovery_clock": "CLOCK_MONOTONIC_RAW(4)",
+    "same_inputs": {
+      "decoder_cache_sha256": "74ee5e84f2b63af0189ffd7be0e4c758b8dfa9ff925e3c9cb389d207ce546dba",
+      "frames": 120,
+      "geometry": "768x416",
+      "input_sha256": "dcbe51749742701a2ee1a6d09a10e2f20e663f3ff54f646d801c743e17c7a104",
+      "latent_sha256": "ea79dc6896f3e956035acd0caa69b1730554d5459d80893989023493de4b5bba",
+      "noise_sha256": "166ea19d2812c0b4dedfedefd4f101b2abe8b4ec48364fb63705f781e1828547",
+      "oracle_report_sha256": "a91ad030b8cd682f4ca6c00ebfad41c4a3ea56a9bcff41155318f6fb12d2ea7e",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "segments_per_pass": 11731,
+    "stable_owners_per_cell": 42,
+    "terminal_waits_per_pass": 1,
+    "upstream_tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "risk_and_rollback": {
+    "guards": [
+      "GPU poison/restore/snapshots with deferred exports and owner/counter checks.",
+      "Strict pinned source/binary/input/oracle identities, RAW4 derived gaps and original guard limits.",
+      "Owned sampler PGID absence required; child exit alone and permission errors do not finalize raw capture."
+    ],
+    "risk": "CAUTION diagnostic measurement",
+    "rollback": "Atomic revert of this diagnostic-only commit; production generation is unchanged.",
+    "strongest_failure_mode": "Stale output, an invalid idle treatment, unfinished prior GPU owners or a leaked privileged observer could invalidate a paired claim."
+  },
+  "run": {
+    "alignment": {
+      "bytes": 12864,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/power-aligned-v2.json",
+      "sha256": "8726c5c5f84356dd89b477e0adc34a777c6fa706bfa4f0f063767b0be309752a"
+    },
+    "alignment_script": {
+      "bytes": 3331,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/analyze_power_v2.py",
+      "sha256": "2b40af8464c6721b6e689653f92f3bc9b2d88003c55450cf5b8227a0e3027151"
+    },
+    "analysis": {
+      "bytes": 11524,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/analysis.json",
+      "sha256": "72e6290afa8b565097eabb3450a0efd1b83cae2a2984fe7cdf27c1d02a4c9d91"
+    },
+    "analysis_exactly_reproduced": true,
+    "cells": [
+      {
+        "cell": "cell-01-short-long",
+        "completion": {
+          "bytes": 1127,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-01-short-long/completion.json",
+          "sha256": "b10f55c750c500622b93b52957fe5865fbc6206fb631128f113e9f22c7e58419"
+        },
+        "guard": {
+          "bytes": 353150,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-01-short-long/guard.jsonl",
+          "sha256": "73ff041d9e26859cb3941ad676c81b27995aca07bf1a0d50332917db712dee02"
+        },
+        "receipt": {
+          "bytes": 5804,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-01-short-long/output/receipt.json",
+          "sha256": "53b7e58a406b64609bfefcd01e627e410c1d51d2587579ffa4f8704ff305b9e5"
+        },
+        "stderr": {
+          "bytes": 256,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-01-short-long/stderr.log",
+          "sha256": "c5eea1d1813bf1118c73e87a62107f1a43e04a6df941cdc3b474cb42e9d8cd12"
+        },
+        "stdout": {
+          "bytes": 6766,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-01-short-long/stdout.log",
+          "sha256": "0c6fdf70b558c77c36286a5070077754c9c86befdd7baf4d6997a2b620718956"
+        }
+      },
+      {
+        "cell": "cell-02-long-short",
+        "completion": {
+          "bytes": 1127,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-02-long-short/completion.json",
+          "sha256": "aa52dba7f8645521d46ae2eec3905d9104b1cd67cccf2565553876f2d79ec752"
+        },
+        "guard": {
+          "bytes": 349657,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-02-long-short/guard.jsonl",
+          "sha256": "baf5c9489fbd060a9586428016e48e0ec643d46af89a5ca09addd7cc9e1922cd"
+        },
+        "receipt": {
+          "bytes": 5812,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-02-long-short/output/receipt.json",
+          "sha256": "4c3bd09a22d954dcb74f2aec261375270a7fd66c0a127fe93bbb7f48026e4c8c"
+        },
+        "stderr": {
+          "bytes": 256,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-02-long-short/stderr.log",
+          "sha256": "fe0d4c540d3927d457b406dc858dbff23ff159c52879a722457b6098845d57da"
+        },
+        "stdout": {
+          "bytes": 6769,
+          "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/cell-02-long-short/stdout.log",
+          "sha256": "c9a0bea23a56b096a1e3942692dcbbbb3a316c9d5579575589511b6fd5eaa5e5"
+        }
+      }
+    ],
+    "fresh_analysis": {
+      "bytes": 11524,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/analysis-recheck-v2.json",
+      "sha256": "72e6290afa8b565097eabb3450a0efd1b83cae2a2984fe7cdf27c1d02a4c9d91"
+    },
+    "launch": {
+      "bytes": 43885,
+      "path": "/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031/matrix-v2/launch.json",
+      "sha256": "cdd9958e9ff21d4ddf6f6091b08c855c900d5edafa68c2efcdab5da91bfe9e56"
+    },
+    "power_raw": {
+      "bytes": 363429,
+      "path": "/opt/mldata_ssd/pixelumm-power-observer-20261031-matrix-02/powermetrics.txt",
+      "sha256": "309afdecd2f6cc5a9fcce971111ef21e714ddc971dd8bb4f60dcc70ab2ea7f76"
+    },
+    "power_samples": {
+      "bytes": 758337,
+      "path": "/opt/mldata_ssd/pixelumm-power-observer-20261031-matrix-02/samples.jsonl",
+      "sha256": "f6e41682641b7c6c6390e2566cb27a74099d495d4bd0620f21ab9fca63cd4a98"
+    },
+    "power_summary": {
+      "bytes": 4161,
+      "path": "/opt/mldata_ssd/pixelumm-power-observer-20261031-matrix-02/summary.json",
+      "sha256": "63816fe3699a52186b5a0bbe1cebba932615c0c3c9f590f17b361e8d1e5d42c3"
+    }
+  },
+  "schema": "cogni_ml.pixelumm_recovery_evidence/v1",
+  "source_state": {
+    "binary": {
+      "device": 16777290,
+      "inode": 21983228,
+      "mode": 493,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-next-20261031/cinematic-v1/build-v1/pixelumm_recovery_probe",
+      "sha256": "2f5d75d10ab0630e457b5a59b41339c77ac312d947f3e6d4e1e6ed29ff0828c6",
+      "size_bytes": 2410088
+    },
+    "git_parent": "fec3115595d18c2d571eda65fc697742b8fd67e1",
+    "manifest_files": 356,
+    "source_manifest_sha256": "fad2710b9a229c3fe5e0787ec27ccdf3d717c019ae43f8ed7b119d8b2cc31a75",
+    "verification": "Source and binary identities checked before and after each guarded cell; no repository mutation during matrix."
+  },
+  "telemetry": {
+    "boundary_policy": "Exclude complete sample windows within one sample interval of either pass/idle boundary.",
+    "coverage": {
+      "all_observed_samples_valid": true,
+      "duration_complete": false,
+      "expected_sample_count": 1800,
+      "gpu_active_frequency_mhz": {
+        "max": 1394.0,
+        "mean": 844.6764705882352,
+        "median": 1229.5,
+        "min": 0.0
+      },
+      "gpu_active_residency_pct": {
+        "max": 100.0,
+        "mean": 62.79973389355742,
+        "median": 100.0,
+        "min": 0.0
+      },
+      "gpu_power_mw": {
+        "max": 53220.0,
+        "mean": 28357.85714285714,
+        "median": 39012.5,
+        "min": 0.0
+      },
+      "interrupted": true,
+      "missing_field_counts": {},
+      "sample_count": 714,
+      "thermal_pressure_counts": {
+        "Heavy": 262,
+        "Moderate": 64,
+        "Nominal": 388
+      },
+      "valid_duration_seconds": 1432.20649,
+      "valid_sample_count": 714,
+      "valid_sample_fraction": 1.0
+    },
+    "deliberate_stop": "SIGTERM to owned observer after matrix, then privileged SIGINT to owned sampler group; verified no group members before raw finalization.",
+    "group_checks": [
+      {
+        "command": [
+          "/usr/bin/sudo",
+          "-n",
+          "/usr/bin/pgrep",
+          "-g",
+          "70203"
+        ],
+        "error": null,
+        "process_group_id": 70203,
+        "returncode": 0,
+        "state": "present",
+        "stderr_excerpt": null
+      },
+      {
+        "command": [
+          "/usr/bin/sudo",
+          "-n",
+          "/usr/bin/pgrep",
+          "-g",
+          "70203"
+        ],
+        "error": null,
+        "process_group_id": 70203,
+        "returncode": 1,
+        "state": "absent",
+        "stderr_excerpt": null
+      }
+    ],
+    "idle_ranges": {
+      "cell-01-short-long/long-idle": {
+        "boundary_excluded_samples": 4,
+        "eligible_samples": 57,
+        "end_unix_ms": 1793470999164,
+        "gpu_active_frequency_mhz": {
+          "max": 512.0,
+          "mean": 32.35087719298246,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "gpu_active_residency_pct": {
+          "max": 2.41,
+          "mean": 0.09087719298245615,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "gpu_power_mw": {
+          "max": 17.0,
+          "mean": 0.543859649122807,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "overlapping_samples": 61,
+        "start_unix_ms": 1793470879154,
+        "thermal_pressure_counts": {
+          "Heavy": 37,
+          "Moderate": 7,
+          "Nominal": 13
+        },
+        "valid_sample_fraction": 1.0,
+        "valid_samples": 57
+      },
+      "cell-01-short-long/short-idle": {
+        "boundary_excluded_samples": 1,
+        "eligible_samples": 0,
+        "end_unix_ms": 1793470723763,
+        "gpu_active_frequency_mhz": null,
+        "gpu_active_residency_pct": null,
+        "gpu_power_mw": null,
+        "overlapping_samples": 1,
+        "start_unix_ms": 1793470722759,
+        "thermal_pressure_counts": {},
+        "valid_sample_fraction": null,
+        "valid_samples": 0
+      },
+      "cell-02-long-short/long-idle": {
+        "boundary_excluded_samples": 4,
+        "eligible_samples": 57,
+        "end_unix_ms": 1793471547775,
+        "gpu_active_frequency_mhz": {
+          "max": 457.0,
+          "mean": 47.14035087719298,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "gpu_active_residency_pct": {
+          "max": 2.76,
+          "mean": 0.12701754385964914,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "gpu_power_mw": {
+          "max": 31.0,
+          "mean": 1.1228070175438596,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "overlapping_samples": 61,
+        "start_unix_ms": 1793471427764,
+        "thermal_pressure_counts": {
+          "Heavy": 36,
+          "Moderate": 9,
+          "Nominal": 12
+        },
+        "valid_sample_fraction": 1.0,
+        "valid_samples": 57
+      },
+      "cell-02-long-short/short-idle": {
+        "boundary_excluded_samples": 1,
+        "eligible_samples": 0,
+        "end_unix_ms": 1793471694489,
+        "gpu_active_frequency_mhz": null,
+        "gpu_active_residency_pct": null,
+        "gpu_power_mw": null,
+        "overlapping_samples": 1,
+        "start_unix_ms": 1793471693479,
+        "thermal_pressure_counts": {},
+        "valid_sample_fraction": null,
+        "valid_samples": 0
+      }
+    },
+    "sample_interval_ms": 2000,
+    "sampler_stopped": true,
+    "utc_header_resolution_ms": 1000
+  }
+}

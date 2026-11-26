@@ -1,0 +1,190 @@
+{
+  "schema": "cogni_ml.native_pixelumm_continuation_evidence/v1",
+  "date": "2026-11-06",
+  "baseline_commit": "552a539d8bc3c5025a0a65345b7d3f6101b83891",
+  "status": "VERIFIED within the explicit-input Torch 2.6 gathered MPS fixture",
+  "source_sha256": {
+    "src/ml/video/pixelumm_continuation.cr": "9bc77a38eaf2dd3cc7ea0d52bc7b6301766f251a4cad46686110846e1e937af2",
+    "src/ml/video/kernels/pixelumm_continuation.metal": "c4186a5bc85b17459785f1bc334a1ba1a3c4722a35d50ad323ede35880988973",
+    "examples/hy_nomas_decode_latent.cr": "2bec09ba53c5a98f27c7dee976243e9593e928b71c9081f75ded4c4323efea32",
+    "examples/support/hy_nomas_decode_latent_admission.cr": "77ef61d803e6b47dc4e13d60be0087d1a6171901147c6ee196c3e038b6b332ee",
+    "examples/support/hy_nomas_generation.cr": "1ce396b83c64928239e48dc58202ffc3f59f3fdf952e8994fe44684455cb1bed",
+    "examples/pixelumm_continuation_probe.cr": "ee84cc213652303d2dc0ec2f3df76434ad10493159fab993011717bcd89079b0",
+    "examples/support/pixelumm_continuation_probe.metal": "e04670000d364da17c460c65e9f566b43780abed2f3edab7cda464e73459c1c1",
+    "spec/pixelumm_continuation_spec.cr": "fcba0b11353724de8e4472487c77a7ef86a101dfda6a73273b9a05fc5c8d9d5c",
+    "spec/hy_nomas_decode_latent_admission_spec.cr": "05bbc4e00fefc86c10c6f915cdf3e9df58ebd74f3663349f81849762b6400e28",
+    "Makefile": "c8cdaf0e984c9230f0fa0b8cbb5e192e781201d7e9ff657d44e400f6f4cc936a"
+  },
+  "scope": "all36blocks/sixwindows; explicit T1 noise-tail surrogate; Torch2.6 MPS gathered adapter; not stock CUDA or RNG replay",
+  "runtime": "PyTorch 2.6.0 MPS gathered adapter; native Metal/MPS arithmetic",
+  "source": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "hymm/models/vae/pixelumm_decoder/model.py": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "hymm/models/vae/autoencoder_dcae_v.py": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+    "hymm/models/vae/pixelumm_decoder/autoencoder.py": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf"
+  },
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "dod": {
+    "cpu_command": "crystal spec -Dcpu_only spec/pixelumm_continuation_spec.cr spec/pixelumm_generation_spec.cr spec/hy_nomas_decode_latent_admission_spec.cr --error-trace",
+    "cpu_observed": "26 examples, 0 failures, 0 errors, 0 pending",
+    "synthetic": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/synthetic.log",
+      "sha256": "91206cd16dc73220686d85bab294e939c38a9dcf57d4d5bc85a80721f94a62fa",
+      "nbytes": 945
+    },
+    "synthetic_guard": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/synthetic.guard.jsonl",
+        "sha256": "d4257a6f72fc14ffbc6396f3a6f9d8cfa9df2e7d1d0c7f2e2c801178d05756ce",
+        "nbytes": 1668
+      },
+      "finished": [
+        {
+          "event": "finished",
+          "monotonic": 1059560.234614833,
+          "returncode": 0
+        }
+      ],
+      "sampled_peak_group_footprint_bytes": 81992,
+      "sampled_minimum_headroom_bytes": 34467037184,
+      "swap_growth_bytes": 0
+    },
+    "comparison": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/comparison-upstream26.json",
+      "sha256": "08f479669185449a29c2e7e9a3457b4ad10bc94febf555e06cef778771e35ea9",
+      "nbytes": 4338
+    },
+    "native_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/native-v1/receipt.json",
+      "sha256": "a3939edace5cacb72cc06bec95d3acba723a47e24ee7cfe8bef0200854704996",
+      "nbytes": 6920
+    },
+    "upstream_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/upstream26-full-v1/receipt.json",
+      "sha256": "8a83663d40fafedbe5bd524c1669c2f5a640d6f8995c29cfd6828fc2b38f0ef7",
+      "nbytes": 72741
+    },
+    "native_guard": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/execute.guard.jsonl",
+        "sha256": "bd0c22ddbd6038c8f080d2393ae9b89a95a16d1a962c5273a41aca5c7282f411",
+        "nbytes": 80614
+      },
+      "finished": [
+        {
+          "event": "finished",
+          "monotonic": 1059724.890903416,
+          "returncode": 0
+        }
+      ],
+      "sampled_peak_group_footprint_bytes": 19256307592,
+      "sampled_minimum_headroom_bytes": 19964706816,
+      "swap_growth_bytes": 0
+    },
+    "upstream_guard": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/upstream26-full.guard.jsonl",
+        "sha256": "6064be87b1a6694e94689b0097266bd9b57a8e5afadf09ddaf98c26c6eca6a44",
+        "nbytes": 90284
+      },
+      "finished": [
+        {
+          "event": "finished",
+          "monotonic": 1061613.955107208,
+          "returncode": 0
+        }
+      ],
+      "sampled_peak_group_footprint_bytes": 5990870944,
+      "sampled_minimum_headroom_bytes": 19064668160,
+      "swap_growth_bytes": 0
+    },
+    "metrics": {
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_waits": 1
+    },
+    "raw": {
+      "shape": [
+        1,
+        3,
+        140,
+        288,
+        512
+      ],
+      "elements": 61931520,
+      "outside_atol_rtol": 0,
+      "nonfinite": 0,
+      "different_f32_words": 0,
+      "max_abs": 0.0,
+      "first_mismatch": null,
+      "actual_sha256": "a5b54d0e9a16c5d2e9e1cf4a11a2b3a724aeb204e592d3f006add2caf31f4e91",
+      "expected_sha256": "a5b54d0e9a16c5d2e9e1cf4a11a2b3a724aeb204e592d3f006add2caf31f4e91"
+    },
+    "display": {
+      "shape": [
+        1,
+        3,
+        120,
+        288,
+        512
+      ],
+      "elements": 53084160,
+      "outside_atol_rtol": 0,
+      "nonfinite": 0,
+      "different_f32_words": 0,
+      "max_abs": 0.0,
+      "first_mismatch": null,
+      "actual_sha256": "52d5d126022bf44dbeb54c2daa7cd73be734ba6839b07cb859dad57e8452d170",
+      "expected_sha256": "52d5d126022bf44dbeb54c2daa7cd73be734ba6839b07cb859dad57e8452d170"
+    },
+    "upstream_driver": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/full_context_reference26.py",
+      "sha256": "dd7befbfd29f929dd3b1c4db5be43ea4ee099661c57f672d1040bd8bc9f45d7f"
+    },
+    "native_driver": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/run_decode.py",
+      "sha256": "d495c36b1a43f7d7ed2ceb2e0cdaeb60f5d30051006a54e3f161c9d19401b6ad"
+    }
+  },
+  "counterfactual": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/native-counterfactual.json",
+    "sha256": "454bf77d6af4c75b0425faa8eb5cc124fb38142f6164afeec663dda055b09470",
+    "nbytes": 301
+  },
+  "runtime_drift": {
+    "torch28_full_comparison": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/comparison.json",
+      "sha256": "46dc3ae69a25c4e96739474188138eb11883992924fde8d1f11a2b501baa9a72",
+      "nbytes": 5901
+    },
+    "native_norm_comparison": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/norm-native-lineage-comparison.json",
+      "sha256": "c57e650866396afea388211fe5b6202b51bba962d8f3b7948995da3a2365a0fa",
+      "nbytes": 838
+    },
+    "native_norm_probe_status": "Norm payload capture completed, then optional conversion.torch_version receipt emission failed (exit 1, empty manifest); not a successful complete probe receipt. Full continuation receipt is independent and complete."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Explicit imported-window route; NCTHW strides, timeline offsets, borrowed lifetimes, unchanged defaults, full cumulative path, missing-context control and terminal-only waits",
+    "reviewer": "continuation_native_block_probe; same-lineage review is correlated"
+  },
+  "rollback": "Omit opt-in previous-input quartet. Default standalone and cumulative sequence remain unchanged.",
+  "limits": [
+    "Declared previous noise is a frozen T1-noise-tail surrogate for missing T0 noise",
+    "No stock CUDA or full-clip RNG parity",
+    "No Torch 2.8 arithmetic qualification",
+    "No complete image-to-video pipeline parity or independent actor-control claim",
+    "One-run duration is not a paired speedup measurement"
+  ],
+  "refresh_on": [
+    "source/runtime/weight changes",
+    "input or noise changes",
+    "geometry/precision/overlap changes",
+    "missing or mutated bound artifacts"
+  ]
+}

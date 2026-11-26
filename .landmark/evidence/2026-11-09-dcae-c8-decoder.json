@@ -1,0 +1,688 @@
+{
+  "schema": "cogni_ml.dcae_v_decoder_c8/v1",
+  "date": "2026-11-09",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bitwise parity and observed timings/footprints on the pinned two-tile real latent fixture. Complete decoder depth, two of six causal tiles. C8 is opt-in.",
+    "excluded": [
+      "Other geometries or videos",
+      "Stable speedup magnitude on a quiet host",
+      "Full video generation",
+      "Exclusive GPU kernel timing",
+      "Tile-local allocations or unsampled memory peaks",
+      "A new upstream execution"
+    ],
+    "adversary": "Robust for complete fixture parity and the observed run records. Host/order drift limits generalization of timing; both orders are reported."
+  },
+  "source_base_commit": "e057ce2c245fa65587313e5f28c4bf4f62217abf",
+  "implementation_sources": {
+    "examples/dcae_v_decoder_probe.cr": "e9744cc2cef0c4c57a78d29e1c34988fc3fc8e2f688b7b7cee35392f183bc66c",
+    "src/ml/video/dcae_v_decoder.cr": "574ba618b17883acfed9b6ab21eef471e0abfeffa47dc101c18b9b8246fbda4d",
+    "src/ml/video/dcae_v_decoder_profile.cr": "156f903ef2fe1e2d90e8f6c8d68bf1a556f3f8e7e65d7d50e9d23e1458426cb9",
+    "src/ml/video/dcae_v_mps.cr": "91033a4e9ee3ddb8a1ebb58642470054c27c407b1cd4a61cb5e7e930c65b1978",
+    "src/ml/video/dcae_v_mps_bridge.mm": "31c8298dc5fcfe00bee9c08edd6cd3d479b1b437596d243ed4d5ef26952cd56d",
+    "src/ml/video/dcae_v_norm_mps_bridge.mm": "e0068a7967073748cebd4ba09687f4253abf5a6bd1513b93e6298620afcf23ce",
+    "src/ml/video/dcae_v_encoder.cr": "161c242c318c0fe709d31b9864f8b3269a5c5c93997398138b6047d2e7d90464",
+    "src/ml/video/kernels/dcae_v_decoder.metal": "ac8ba52ced97a16b3576007ac3d4ad71426cfa390a63d1b0bd6c2f932c3d2a5b",
+    "src/ml/video/kernels/dcae_v_encoder.metal": "0df35bf37254ffbc9f69124069775145842b6209ccf955a90133ff82fda2ee15",
+    "src/ml/video/metal_mps_command_chain.cr": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893",
+    "src/ml/video/metal_mps_command_chain.mm": "f973b615fcc9a7d56541a974c6cf1862110f30babdff709234555b2d7ec44ba3",
+    "examples/support/hy_nomas_probe_instrumentation.cr": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48",
+    "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+    "src/ml/video/dcae_v_mps_profile.h": "ebfee79ef5f978aa5ba0e7100041cf9e414e4dde2200c281161a952c812d4b5a",
+    "src/ml/video/mps_api_profile.h": "8993c3cd22562a799d7fc682aa9230815e88d54988cad9d1eea52190cf390817",
+    "src/ml/video/dcae_v_decoder_c8.cr": "c815e9506907250dd9191c0a3f4f52b4ee3c402f2ef48c13beda1d30e0001183",
+    "src/ml/video/kernels/dcae_v_decoder_c8.metal": "d16099ef651754a8e78157ee8d3b5851605c3a76461d1a98526ed98fdc42ec85",
+    "src/ml/video/metal_ops.cr": "b31c1bfa9eb9028389e69b546377f26cf7980e726a488ce5fc061e0bbc79098a",
+    "src/ml/video/metal_stage_io.mm": "87ef86f5eb6f76fbc6019e0bc63613a8ca58b091a069347604fc27aed7a02150",
+    "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13"
+  },
+  "comparison_source_sha256": "704b2809fe743f72faae022023abfecdc2a13a340b10e3592b1d1b939b5d0812",
+  "binary": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/build/dcae_v_decoder_probe",
+    "bytes": 1340216,
+    "sha256": "394bce8d36a68100a72d23bf301850764faee54590964a36d843d12b69bbc774"
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "module": {
+      "path": "/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/autoencoder_dcae_v.py",
+      "bytes": 63218,
+      "sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+    },
+    "original_checkpoint_sha256": "ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b",
+    "native_weights_sha256": "f53c94b06685027b8131b7f52cab519edee1e51287d93d8fdac6a17506f8881b",
+    "full_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-native-decoder-20261108.t9_k76ut/upstream-full/decoder-reference.safetensors",
+      "bytes": 212890136,
+      "sha256": "0e873cba80446ef26920469ef3c1700f6e1686d021fb35b973872de4e383c2c7"
+    },
+    "prefix20": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/upstream-prefix20.safetensors",
+      "bytes": 70963592,
+      "sha256": "db96ee9247e69b338e3ce8d4ea349404208d6d50d6ba022548751b566632bc4e"
+    },
+    "prefix_lineage": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/prefix-lineage-verified.json",
+      "bytes": 3339,
+      "sha256": "7961bd5f4ed32793e83ddd5eb5e982c49a3958d647f5718046ce3f867eaa256c"
+    },
+    "input_payload_sha256": "43081cf72cc0feda5edff7531f449209a542a2fb8d5ba8ae15d3067a06462a3c",
+    "output_payload_sha256": "1ea898048e2cc31bd82baf0c85bf4586f0d99137d14c8ba6b75f7d780dd0b9fe",
+    "independent_two_tile_upstream_run": false,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "pixels_per_cache": 17694720
+  },
+  "measurement": {
+    "host": "Apple M2 Max, macOS 26.6.2 (25G83), 64 GiB unified memory",
+    "order": [
+      "b1",
+      "a1",
+      "a2",
+      "b2"
+    ],
+    "arms": {
+      "a": "MPS",
+      "b": "C8 stage 2, MPS elsewhere"
+    },
+    "timing": "First request after setup in each new process; includes GPU packing of input and weight, encode and terminal wait; excludes setup and post-drain output export/parity check.",
+    "phase_timing": "Sum of existing Metal GPU command-root intervals, lower/upper bound where one root spans both tiles. No intermediate GPU wait. These are not exclusive kernel intervals.",
+    "phase_footprint": "Maximum sampled process-group phys_footprint inside each possible GPU window. The two phases share resident state. These are not phase-local allocations.",
+    "known_host_drift": "Cache-aware startup headroom changed between the first C8 and MPS; headroom also rose during the first C8. No controlled GPU clock, file-cache purge, or independent repeated counterbalanced block.",
+    "guard": {
+      "runtime_floor_pct": 10,
+      "memory_accounting": "file-cache",
+      "max_process_group_footprint_bytes": 12884901888,
+      "max_swap_growth_bytes": 67108864,
+      "minimum_observed_headroom_bytes": 12138364928,
+      "maximum_observed_swap_growth_bytes": 0
+    },
+    "extra_reused_c8_pack_bytes": 410517504,
+    "pairs": [
+      {
+        "labels": [
+          "a1",
+          "b1"
+        ],
+        "wall_seconds_saved": 29.200349708000005,
+        "wall_time_reduction_pct": 13.787825332330339,
+        "wall_speed_ratio": 1.1599289820199943,
+        "peak_footprint_extra_bytes": 727564240,
+        "cache": {
+          "cold": {
+            "gpu_time_reduction_pct_bounds": [
+              13.159018688047908,
+              13.26489211126064
+            ],
+            "peak_footprint_extra_bytes": 739327952
+          },
+          "live": {
+            "gpu_time_reduction_pct_bounds": [
+              14.362651969012695,
+              14.466139005097666
+            ],
+            "peak_footprint_extra_bytes": 727564240
+          }
+        }
+      },
+      {
+        "labels": [
+          "a2",
+          "b2"
+        ],
+        "wall_seconds_saved": 12.735552751,
+        "wall_time_reduction_pct": 5.274688593518928,
+        "wall_speed_ratio": 1.0556840459556203,
+        "peak_footprint_extra_bytes": 726515712,
+        "cache": {
+          "cold": {
+            "gpu_time_reduction_pct_bounds": [
+              -0.6308272099722068,
+              -0.5027793860101104
+            ],
+            "peak_footprint_extra_bytes": 745635864
+          },
+          "live": {
+            "gpu_time_reduction_pct_bounds": [
+              10.618279825150289,
+              10.730017443731576
+            ],
+            "peak_footprint_extra_bytes": 726515712
+          }
+        }
+      }
+    ],
+    "runs": [
+      {
+        "label": "b1",
+        "arm": "c8",
+        "request": {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 182.5832275,
+          "encode_seconds": 158.016300417,
+          "terminal_wait_seconds": 24.566926959,
+          "gpu_seconds": 182.4754615800921,
+          "segments": 493,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5639231000,
+          "conv_layout": "c8_stage2",
+          "profile": false,
+          "cache_profile": true
+        },
+        "phases": {
+          "cold": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "c8_stage2",
+              "tile": 0,
+              "cache": "cold",
+              "possible_root_count": 247,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269409.455490875,
+              "last_possible_gpu_end_seconds": 1269500.6161065002,
+              "definite_gpu_root_seconds": 91.1013069592882,
+              "possible_gpu_root_seconds": 91.16046004276723
+            },
+            "memory": {
+              "peak_footprint_bytes": 11019521000,
+              "peak_time_seconds": 1269497.561738958,
+              "min_headroom_bytes": 12138364928,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 176
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779",
+              "candidate_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779"
+            }
+          },
+          "live": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "c8_stage2",
+              "tile": 1,
+              "cache": "live",
+              "possible_root_count": 247,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269500.5569534167,
+              "last_possible_gpu_end_seconds": 1269591.9312780001,
+              "definite_gpu_root_seconds": 91.31500153732486,
+              "possible_gpu_root_seconds": 91.37415462080389
+            },
+            "memory": {
+              "peak_footprint_bytes": 11096493104,
+              "peak_time_seconds": 1269567.775421,
+              "min_headroom_bytes": 12219187200,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 177
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da",
+              "candidate_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da"
+            }
+          }
+        },
+        "memory": {
+          "peak_footprint_bytes": 11096493104,
+          "peak_time_seconds": 1269567.775421,
+          "min_headroom_bytes": 12138364928,
+          "max_swap_growth_bytes": 0,
+          "sample_count": 363
+        },
+        "startup_headroom_bytes": 20769177600,
+        "setup_seconds": 3.632878458,
+        "operations": 482,
+        "c8_convolutions": 40,
+        "output_sha256": "0017b1df7ba152297423a7ef2284336e508aefc4a2dfd4c417f76013a32855ac",
+        "output_retention": "Disposable export after validated parity",
+        "raw": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b1.command.json",
+            "bytes": 3879,
+            "sha256": "87f1dbd07c04e8f7b26c316a4763abc2a98ae5ba3c90eb290b633759b517dd46"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b1.execution.json",
+            "bytes": 204,
+            "sha256": "58a74e90a5d33c967930e9296a1a1be65122edb1717c403b1d67c31011c62693"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b1.log",
+            "bytes": 2567,
+            "sha256": "3e52bf66f2995d5f3ec120e7262141b3bbc78058b3fa1ca896c16d5faa069dcb"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b1.guard.jsonl",
+            "bytes": 112870,
+            "sha256": "6a9e8ee4b8c088c16c71e622cbcf4ae23acf219e19b9a0d3add59352774fb164"
+          }
+        ]
+      },
+      {
+        "label": "a1",
+        "arm": "mps",
+        "request": {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 211.783577208,
+          "encode_seconds": 186.783559458,
+          "terminal_wait_seconds": 25.00001775,
+          "gpu_seconds": 211.73290070937946,
+          "segments": 593,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228713496,
+          "conv_layout": "native",
+          "profile": false,
+          "cache_profile": true
+        },
+        "phases": {
+          "cold": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "native",
+              "tile": 0,
+              "cache": "cold",
+              "possible_root_count": 297,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269599.75611725,
+              "last_possible_gpu_end_seconds": 1269704.7902763751,
+              "definite_gpu_root_seconds": 104.97400958114304,
+              "possible_gpu_root_seconds": 105.03394666453823
+            },
+            "memory": {
+              "peak_footprint_bytes": 10280193048,
+              "peak_time_seconds": 1269704.475196875,
+              "min_headroom_bytes": 27629060096,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 204
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779",
+              "candidate_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779"
+            }
+          },
+          "live": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "native",
+              "tile": 1,
+              "cache": "live",
+              "possible_root_count": 297,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269704.7303392917,
+              "last_possible_gpu_end_seconds": 1269811.4894392916,
+              "definite_gpu_root_seconds": 106.69895404484123,
+              "possible_gpu_root_seconds": 106.75889112823643
+            },
+            "memory": {
+              "peak_footprint_bytes": 10368928864,
+              "peak_time_seconds": 1269786.685887458,
+              "min_headroom_bytes": 27372339200,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 206
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da",
+              "candidate_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da"
+            }
+          }
+        },
+        "memory": {
+          "peak_footprint_bytes": 10368928864,
+          "peak_time_seconds": 1269786.685887458,
+          "min_headroom_bytes": 27372339200,
+          "max_swap_growth_bytes": 0,
+          "sample_count": 416
+        },
+        "startup_headroom_bytes": 38101729280,
+        "setup_seconds": 2.01344075,
+        "operations": 482,
+        "c8_convolutions": 0,
+        "output_sha256": "f60cb0ad365988f9a4bade0892c5907c8fb6a293e5a6f17d44ab58c2e034fe75",
+        "output_retention": "Disposable export after validated parity",
+        "raw": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a1.command.json",
+            "bytes": 3867,
+            "sha256": "d8b3eb09e1b05f481f41acd77fab453d2c70e7a6525fa09d7cca3f0ceba05c7f"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a1.execution.json",
+            "bytes": 204,
+            "sha256": "071ce83e791bfbe462edfc0116e15708d2f503dc5822c88c77164d58867038c1"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a1.log",
+            "bytes": 2551,
+            "sha256": "e5e061b3ade868aa91436213f399adc057c157297ac121e72db6dbd7f5043c0f"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a1.guard.jsonl",
+            "bytes": 130094,
+            "sha256": "5b6b08e941a665e33ab5a848744badad0bc47a51d9f54b046dfda479a839f674"
+          }
+        ]
+      },
+      {
+        "label": "a2",
+        "arm": "mps",
+        "request": {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 241.446533292,
+          "encode_seconds": 211.265843333,
+          "terminal_wait_seconds": 30.180689875,
+          "gpu_seconds": 241.3964368312154,
+          "segments": 593,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228713496,
+          "conv_layout": "native",
+          "profile": false,
+          "cache_profile": true
+        },
+        "phases": {
+          "cold": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "native",
+              "tile": 0,
+              "cache": "cold",
+              "possible_root_count": 297,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269826.6421249167,
+              "last_possible_gpu_end_seconds": 1269942.6157076252,
+              "definite_gpu_root_seconds": 115.89982391474769,
+              "possible_gpu_root_seconds": 115.97338053979911
+            },
+            "memory": {
+              "peak_footprint_bytes": 10280422424,
+              "peak_time_seconds": 1269942.589978416,
+              "min_headroom_bytes": 25288966144,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 224
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779",
+              "candidate_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779"
+            }
+          },
+          "live": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "native",
+              "tile": 1,
+              "cache": "live",
+              "possible_root_count": 297,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1269942.5421510001,
+              "last_possible_gpu_end_seconds": 1270068.038973375,
+              "definite_gpu_root_seconds": 125.42305629141629,
+              "possible_gpu_root_seconds": 125.49661291646771
+            },
+            "memory": {
+              "peak_footprint_bytes": 10369338464,
+              "peak_time_seconds": 1270037.964266166,
+              "min_headroom_bytes": 23561682944,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 243
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da",
+              "candidate_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da"
+            }
+          }
+        },
+        "memory": {
+          "peak_footprint_bytes": 10369338464,
+          "peak_time_seconds": 1270037.964266166,
+          "min_headroom_bytes": 23561682944,
+          "max_swap_growth_bytes": 0,
+          "sample_count": 472
+        },
+        "startup_headroom_bytes": 38029983744,
+        "setup_seconds": 2.033119083,
+        "operations": 482,
+        "c8_convolutions": 0,
+        "output_sha256": "f60cb0ad365988f9a4bade0892c5907c8fb6a293e5a6f17d44ab58c2e034fe75",
+        "output_retention": "Disposable export after validated parity",
+        "raw": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a2.command.json",
+            "bytes": 3867,
+            "sha256": "84c4086cc059fe407664ee23a6f87c113b0664f62b28c3f84c617659ba8e4d57"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a2.execution.json",
+            "bytes": 203,
+            "sha256": "e79f4b2ac0e4c4ea718bd603fa3c9ed2d03c4a2a9d8e17f1067993598014ec5a"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a2.log",
+            "bytes": 2555,
+            "sha256": "a8cd95f5c942c6f8119e1a26b38430530c3ab0ade7a8406b292c18d02064e4fa"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/a2.guard.jsonl",
+            "bytes": 147528,
+            "sha256": "ef16865b8bcc26e97f433f95e9b9a818ddab5e2a489118ad67f3c5dccc41bd68"
+          }
+        ]
+      },
+      {
+        "label": "b2",
+        "arm": "c8",
+        "request": {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 228.710980541,
+          "encode_seconds": 201.330310291,
+          "terminal_wait_seconds": 27.380670084,
+          "gpu_seconds": 228.66175599955022,
+          "segments": 493,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5639231000,
+          "conv_layout": "c8_stage2",
+          "profile": false,
+          "cache_profile": true
+        },
+        "phases": {
+          "cold": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "c8_stage2",
+              "tile": 0,
+              "cache": "cold",
+              "possible_root_count": 247,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1270074.8030952502,
+              "last_possible_gpu_end_seconds": 1270191.4342115,
+              "definite_gpu_root_seconds": 116.55647079041228,
+              "possible_gpu_root_seconds": 116.6309515403118
+            },
+            "memory": {
+              "peak_footprint_bytes": 11026058288,
+              "peak_time_seconds": 1270191.243545458,
+              "min_headroom_bytes": 23858511872,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 225
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779",
+              "candidate_pixel_sha256": "5fd25a1fda10f4c53e8fe98735f5a8d63f64b606d793329281b3d9df4de4b779"
+            }
+          },
+          "live": {
+            "gpu": {
+              "event": "dcae_decoder_cache_profile",
+              "request": 0,
+              "conv_layout": "c8_stage2",
+              "tile": 1,
+              "cache": "live",
+              "possible_root_count": 247,
+              "shared_root_count": 1,
+              "first_possible_gpu_start_seconds": 1270191.35973075,
+              "last_possible_gpu_end_seconds": 1270303.465184,
+              "definite_gpu_root_seconds": 112.03080445923842,
+              "possible_gpu_root_seconds": 112.10528520913795
+            },
+            "memory": {
+              "peak_footprint_bytes": 11095854176,
+              "peak_time_seconds": 1270276.173278333,
+              "min_headroom_bytes": 24245043200,
+              "max_swap_growth_bytes": 0,
+              "sample_count": 216
+            },
+            "parity": {
+              "values": 17694720,
+              "bitwise_mismatches": 0,
+              "tolerance_failures": 0,
+              "nonfinite_count": 0,
+              "max_abs_error": 0.0,
+              "upstream_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da",
+              "candidate_pixel_sha256": "9d386864e93ab0252f0a467c708451338a3060dc1e9746e8b6854cc7e43058da"
+            }
+          }
+        },
+        "memory": {
+          "peak_footprint_bytes": 11095854176,
+          "peak_time_seconds": 1270276.173278333,
+          "min_headroom_bytes": 23858511872,
+          "max_swap_growth_bytes": 0,
+          "sample_count": 448
+        },
+        "startup_headroom_bytes": 35699884032,
+        "setup_seconds": 2.066187875,
+        "operations": 482,
+        "c8_convolutions": 40,
+        "output_sha256": "0017b1df7ba152297423a7ef2284336e508aefc4a2dfd4c417f76013a32855ac",
+        "output_retention": "Disposable export after validated parity",
+        "raw": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b2.command.json",
+            "bytes": 3879,
+            "sha256": "05c7d82e8b554b8422b30f5650ea2999eb30ec8f02a55aa68a86cfc34d4b815e"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b2.execution.json",
+            "bytes": 204,
+            "sha256": "dc47d55cc9fd473a6b1adcf2b680bfb79bc2a4b3413577b15776a58ea95b20e1"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b2.log",
+            "bytes": 2565,
+            "sha256": "037a78259f5e1b044f3da9a150e5f984927279a50fdb451c46fc1ad1eb939df4"
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/b2.guard.jsonl",
+            "bytes": 139765,
+            "sha256": "fd7e16ec13aa1c4da2127bdb0c8f811b910ae5b8c180534ca9556ab1c2b45a27"
+          }
+        ]
+      }
+    ]
+  },
+  "negative_witness": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/live-negative.json",
+    "bytes": 1172,
+    "sha256": "fc88a7aa9884a18ebfd7af5a598fa6ee60839452793eecff0ee74b589d35b4c9"
+  },
+  "audit": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/verification-b1-a1-a2-b2.json",
+    "bytes": 33035,
+    "sha256": "77073b56d906db7006b62c3593404a86b372eef5ae07a4f83221c487333f5aa3"
+  },
+  "replay_tools": [
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/run_probe.py",
+      "bytes": 3422,
+      "sha256": "66e3b5abbdb170940f5038ff691ecd42e53f8f2a2ce25bd7f35cf67b9c06a71b"
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/check_probe.py",
+      "bytes": 9979,
+      "sha256": "c60c8488c2423c2a4e7d8435ca25937074f7bbb96c2427c3a6590776f36c2848"
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-c8-decoder-20261109.acSEOBRM/verify_live_negative.py",
+      "bytes": 2325,
+      "sha256": "f61db6840aee4655cedfa6f039a7807fa94d8da02c48c3e62ee01180e3839b47"
+    }
+  ],
+  "rollback": "Omit --c8 or prepare the workspace with packed_c8: false.",
+  "refresh_on": "Change in source, binary, upstream, runtime, precision, geometry, cache schedule, input, or timing method."
+}

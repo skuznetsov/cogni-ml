@@ -1,0 +1,484 @@
+{
+  "schema": "cogni_ml.hy_nomas_portrait_upstream_control_evidence/v1",
+  "date": "2026-11-06",
+  "status": "VERIFIED for the bounded same-photo, same-conditioning and same-noise MPS control",
+  "source_commit_before_diagnostic": "e5abda697abca39043934c79ff147f2d267177f3",
+  "scope": "One 512x288 five-second generated T1 after a repeated-photo technical T0; original BF16 weights; four DiT Euler steps; fixed saved upstream Qwen state26; pinned MPS adapters, not stock CUDA/FlexAttention execution",
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "inputs": {
+    "reference_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-reference/manifest.json",
+      "sha256": "04dd1a12f22d41336499b1d3d9d83d2bc92313900cd6116d3565392da04e6628",
+      "bytes": 738
+    },
+    "prompt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-prompt-v2.json",
+      "sha256": "f6978c01f40e871bf6e4a87d9d4140640f1818dbb87ce3341d52cc3b36b65848",
+      "bytes": 1155
+    },
+    "conditioning_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-continuation-v2.json",
+      "sha256": "0f35bb09964f2b28d28069e8d39a8a1d6194607d4269de6bb824ff54d828e2ac",
+      "bytes": 45143
+    },
+    "conditioning_payload_sha256": "283fecfdd64107f5b9e7b0ff9784fcca977e4170c416bc11fc4d14e0664035ad",
+    "native_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2/receipt.json",
+      "sha256": "ca8be135ef659497594dec9647c72240f911be8cfd6be989f0740fbf76cd66f5",
+      "bytes": 6861
+    },
+    "native_latent_bank": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-native-v2/latent-bank.f32le",
+      "sha256": "1717edc3d6cf33a3a374852a3dc58cd9d82d5f74965fab6dd0239bbe93da943b",
+      "bytes": 3317760
+    },
+    "qwen_scope": "saved upstream state26, V263; native live text encoding is excluded",
+    "noise_rule": "saved initial latent/cache epsilon and exact channel-strided decoder noise prefix [0,240); no random redraw or surrogate",
+    "decoder_rope_rule": "saved records already tile-major; no second permutation"
+  },
+  "encoder": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dcae-t0-v1/receipt.json",
+      "sha256": "ed5f4f1f46ce23c8d698b5f1ee36f4934586fcc3006389829a7d0bb8efe8dbf9",
+      "bytes": 2598
+    },
+    "producer": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_encoder_control.py",
+      "sha256": "e1ebdbb6752af7c327c3c717ed26bbbb561714588de86bbd6bf159367d3af064",
+      "bytes": 18083
+    },
+    "runtime": {
+      "torch": "2.8.0",
+      "device": "mps",
+      "dtype": "BF16",
+      "mps_fallback": false,
+      "autocast": false
+    },
+    "producer_receipt_bound": true,
+    "comparison": {
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "outside_tolerance": 0,
+      "unequal_f32_values": 0,
+      "bitwise_equal": true,
+      "values": 138240,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "guard": {
+      "artifact": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dcae-t0-v1.guard.jsonl",
+        "sha256": "448af82a16f404c2d5b0c1f6694b08fb15f371b10cecd55a0517a309bf26045e",
+        "bytes": 193249
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 19327352832,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 1066769.600102208,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 1200
+      },
+      "returncode": 0,
+      "samples": 621,
+      "peak_sampled_group_bytes": 10501523160,
+      "minimum_sampled_headroom_bytes": 21297741824,
+      "minimum_sampled_pressure_free_pct": 68,
+      "maximum_swap_growth_bytes": 0
+    }
+  },
+  "dit": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1/receipt.json",
+      "sha256": "55658d3937b971e0c1e8ef365757a994d1fa0a23febc0de533ffc9f702e064e5",
+      "bytes": 14821
+    },
+    "producer": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_dit_control.py",
+      "sha256": "85c2f520f112b2a28037499d03a457c5d580915f707c4f861ac63ef64d1c2595",
+      "bytes": 18268
+    },
+    "runtime": {
+      "torch_version": "2.8.0",
+      "device": "mps",
+      "fallback": 0,
+      "diffusers_version": "0.36.0"
+    },
+    "producer_receipt_bound": true,
+    "comparison": {
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "outside_tolerance": 0,
+      "unequal": 0,
+      "values": 138240
+    },
+    "guard": {
+      "artifact": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1.guard.jsonl",
+        "sha256": "69b0fd0e9714a1a3d13edda556c49e63a51000b88eaf565325d8d725cfc1b2bd",
+        "bytes": 45789
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 19327352832,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 1065420.507227666,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 1800
+      },
+      "returncode": 0,
+      "samples": 146,
+      "peak_sampled_group_bytes": 5075748808,
+      "minimum_sampled_headroom_bytes": 26057179136,
+      "minimum_sampled_pressure_free_pct": 77,
+      "maximum_swap_growth_bytes": 0
+    }
+  },
+  "decoder": {
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-decoder-v1/receipt.json",
+      "sha256": "0cb969d9399e42109816170229c548721620c2db4e61bc6b36c31145ac41bc6a",
+      "bytes": 4445
+    },
+    "producer": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_decoder_control.py",
+      "sha256": "6c3aaef7cf7ab8ea52cc66900b29fc7a8dee0d18b831a6b85dfd7fa8e5ebb22b",
+      "bytes": 41922
+    },
+    "runtime": {
+      "torch_version": "2.6.0",
+      "pytorch_enable_mps_fallback": "0",
+      "wall_seconds": 217.01682812487707,
+      "intermediate_readbacks": 0,
+      "explicit_sync_calls": 0,
+      "terminal_transfer_count": 1
+    },
+    "producer_receipt_bound": false,
+    "comparison": {
+      "scope": "generated T1 pixels only; native clean T0 frames [0,120) excluded",
+      "native_pixel_crop": [
+        120,
+        240
+      ],
+      "shape": [
+        1,
+        3,
+        120,
+        288,
+        512
+      ],
+      "representation": "display F32 planar RGB [0,1] after pinned BF16 postprocess",
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "max_abs_error": 0.0,
+      "mean_abs_error": 0.0,
+      "any_value_outside_tolerance": false,
+      "all_values_finite": true,
+      "result": "match"
+    },
+    "guard": {
+      "artifact": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-decoder-v1.guard.jsonl",
+        "sha256": "b3627893bd12aeb12fdcc2793cdc998dea9e0fcef7877f49f19a39bd01214fb9",
+        "bytes": 134459
+      },
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 19327352832,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 1066109.948710125,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 1800
+      },
+      "returncode": 0,
+      "samples": 435,
+      "peak_sampled_group_bytes": 6222170392,
+      "minimum_sampled_headroom_bytes": 19168329728,
+      "minimum_sampled_pressure_free_pct": 74,
+      "maximum_swap_growth_bytes": 0
+    }
+  },
+  "commands": {
+    "encoder": {
+      "env": {
+        "PYTORCH_ENABLE_MPS_FALLBACK": "0"
+      },
+      "cwd": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "argv": [
+        "python3",
+        "-B",
+        "examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "18432",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "1200",
+        "--log",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dcae-t0-v1.guard.jsonl",
+        "--",
+        "/opt/mldata_ssd/runtimes/cogni-ml/hy-nomas-oracle-torch2.8.0/bin/python",
+        "-B",
+        "spec/support/hy_nomas_portrait_encoder_control.py",
+        "--execute",
+        "--output-dir",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dcae-t0-v1",
+        "--encoder-weights",
+        "/opt/mldata_ssd/models/hy-nomas/dcae-v-encoder-bf16.safetensors"
+      ]
+    },
+    "dit": {
+      "env": {
+        "PYTORCH_ENABLE_MPS_FALLBACK": "0"
+      },
+      "cwd": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "argv": [
+        "python3",
+        "-B",
+        "examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "18432",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "1800",
+        "--log",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1.guard.jsonl",
+        "--",
+        "/opt/mldata_ssd/runtimes/cogni-ml/hy-nomas-oracle-torch2.8.0/bin/python",
+        "-B",
+        "spec/support/hy_nomas_portrait_dit_control.py",
+        "--execute",
+        "--output-dir",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1"
+      ]
+    },
+    "decoder": {
+      "env": {
+        "PYTORCH_ENABLE_MPS_FALLBACK": "0"
+      },
+      "cwd": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "argv": [
+        "python3",
+        "-B",
+        "examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "18432",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "1800",
+        "--log",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-decoder-v1.guard.jsonl",
+        "--",
+        "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+        "-B",
+        "spec/support/hy_nomas_portrait_decoder_control.py",
+        "--execute",
+        "--output-dir",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-decoder-v1",
+        "--input-latents",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1/latent.f32le",
+        "--input-latents-sha256",
+        "19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42"
+      ]
+    },
+    "export_tests": {
+      "cwd": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "spec",
+        "-p",
+        "hy_nomas_export_test.py",
+        "-q"
+      ],
+      "result": "6 tests passed"
+    },
+    "paired_export": {
+      "argv": [
+        "python3",
+        "-B",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/compare_portrait_upstream_v1.py"
+      ],
+      "producer": {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/compare_portrait_upstream_v1.py",
+        "sha256": "d3e22e898dd1ee6f57b9a15c16b9f8bb5d1c65e088d302508e831e4468444d35",
+        "bytes": 5232
+      },
+      "result": "exit 0; terminal CPU file work only"
+    }
+  },
+  "linkage": {
+    "encoder_clean_t0": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dcae-t0-v1/latent.f32le",
+      "sha256": "6730c2618b6534768d626bbbd70119a46e2808bbcce7a7c20e6dd87e8e22e7ed",
+      "bytes": 552960
+    },
+    "dit_first_sixty_latents": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-dit-v1/latent.f32le",
+      "sha256": "19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42",
+      "bytes": 1105920
+    },
+    "upstream_display_t1": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-decoder-v1/upstream-t1-display.f32le",
+      "sha256": "d68b3f87f34c7de271421a7f80cef18715e6af80650ec90e921660b4917dc298",
+      "bytes": 212336640
+    },
+    "encoder_native_t0_bitwise_equal_independent_cpu_check": true,
+    "dit_native_first_sixty_bitwise_equal_independent_cpu_check": true,
+    "display_t1_sha256_identical": true
+  },
+  "display": {
+    "analysis": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/analysis.json",
+      "sha256": "deb7fe1cde7f90760ab5d6496514e8a5f2e5b56e6f15f6c3aa65d6ba935b95f6",
+      "bytes": 7228
+    },
+    "native_left_upstream_right": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/native-left-upstream-right-5s.mp4",
+      "sha256": "c864e60a56593435d5480b739cb32681ea3c434635a38f74e712a50fb4ed383b",
+      "bytes": 183927
+    },
+    "source_video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/upstream-T1-5s.mp4",
+      "sha256": "8b5cb2c974df9810704ecb5533ce331462e8f7a33c6fd3986a8f40360fd82862",
+      "bytes": 92304
+    },
+    "paired_tail": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/paired-tail.png",
+      "sha256": "f1498f6d5e29ca5a4d9beac763d7b138fd4d7daa4cef734d54a2dfb63917e1fd",
+      "bytes": 805497
+    },
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "width": 1024,
+          "height": 288,
+          "r_frame_rate": "24/1",
+          "nb_read_frames": "120"
+        }
+      ],
+      "format": {
+        "duration": "5.000000"
+      }
+    },
+    "comparison": {
+      "values": 53084160,
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "unequal": 0,
+      "outside_tolerance": 0
+    }
+  },
+  "synchronization": "Model arithmetic and diagnostic comparisons stay on MPS; each isolated stage has zero intermediate readbacks, zero explicit MPS synchronize calls and one packed terminal transfer. Production native path is unchanged.",
+  "interpretation": "The supplied fixed-conditioning MPS reference reproduces the native weak motion and late asymmetric eye deformation. This rules out a native-vs-this-reference arithmetic difference for the tested outputs; it does not prove natural blinking, correct semantic conditioning, actor control or stock full-pipeline CUDA parity.",
+  "adversary": {
+    "verdict": "ROBUST within declared output scope",
+    "lineage": "same-lineage review is correlated",
+    "checks": [
+      "independent native/source F32 output equality and digest recomputation",
+      "decoder consumes authenticated source DiT result, exact saved noise and saved RoPE",
+      "one terminal transfer per stage; no production path changes"
+    ],
+    "limitation": "Decoder producer hash is current frozen worktree identity, not bound inside its immutable execution receipt."
+  },
+  "rejected_or_excluded": [
+    "Prior Torch 2.8 PixelUMM full-output failure remains rejected; pinned decoder oracle is Torch 2.6.0",
+    "No claim that every saved DiT intermediate matches native; native midpoint captures are absent",
+    "No hardware speedup claim from these isolated diagnostic timings",
+    "Sampled guard cannot rule out between-poll spikes; file-backed memory is a reclaimability estimate"
+  ],
+  "refresh_on": [
+    "source or producer edits",
+    "runtime/precision changes",
+    "weights, reference, text conditioning or noise changes",
+    "cache/rope/window/blender/geometry changes",
+    "artifact mutation or loss"
+  ],
+  "rollback": "Remove the new diagnostic helpers/evidence references; production native inference is untouched",
+  "conditioning_contract": {
+    "source_sha256": {
+      "hymm/pipeline/base.py": "77a039514ff494cb496a194c60ca3270f09c15b194bda25448a036a6fcc79582",
+      "hymm/pipeline/causal_ar.py": "f9aae49b14becb87d958665f763e510c28eeaaad9292f00ac511d1146202949f",
+      "configs/experiment/inference.yaml": "d4db57b63597f98d4bddddd98355198e4e8c25da366d2e27bc7e74a79d26ec67",
+      "hymm/models/text_encoder/encoder.py": "aa84b366d6e0a5cf9c73e591e6827746e8cab97852a112d1b4783dc7c2d507f1"
+    },
+    "stock_reference_image_entrypoint": {
+      "scope": "ordinary pinned seg_ar route only",
+      "present": false,
+      "source": [
+        "hymm/pipeline/base.py:268-295",
+        "hymm/pipeline/causal_ar.py:1985-1998",
+        "hymm/pipeline/causal_ar.py:2034-2039"
+      ],
+      "interpretation": "The repeated-photo technical T0 is an experimental conditioning extension; matching its arithmetic does not establish useful motion."
+    },
+    "same_scene_text_cache": {
+      "matches_for_this_fixture": true,
+      "source": [
+        "hymm/pipeline/causal_ar.py:2193-2201",
+        "hymm/pipeline/causal_ar.py:2367",
+        "hymm/pipeline/causal_ar.py:2617"
+      ],
+      "rule": "One 00:00-00:10 scene; cache text on first chunk and reuse it for the next chunk. Distinct segment indices are a different context."
+    },
+    "cache_writer": {
+      "sigma": 0.206897,
+      "arithmetic": "F32 coefficient products and sum, then one BF16 rounding",
+      "source": "hymm/pipeline/causal_ar.py:2542-2559",
+      "rng_scope": "External replay uses identical saved tensors for both paths; not a claim about stock CPU generator state or draw order."
+    },
+    "steps": {
+      "control_dit_steps": 4,
+      "preset_dit_steps": 8,
+      "source": "configs/experiment/inference.yaml:84",
+      "causal_claim": "Neither four steps nor the conditioning extension is yet established as the cause of weak motion."
+    }
+  },
+  "dod": {
+    "expected_signal": "CPU-only preflights admit authenticated assets; guarded MPS stages export finite endpoint tensors within unchanged atol=rtol=2e-5; terminal file analysis and ffprobe validate the paired five-second comparison.",
+    "observed_signal": "All three controls exit 0; every compared endpoint is bitwise equal; terminal export tests pass and both media files have matching SHA-256.",
+    "fallback": "Independent terminal CPU comparison of native and upstream output files plus hash/stride/geometry linkage checks; correlated read-only artifact adversary."
+  }
+}

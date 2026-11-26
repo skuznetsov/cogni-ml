@@ -1,0 +1,612 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-k16",
+  "base_commit": "69633aad0b40b596e9ece618d237072fb2d24868",
+  "status": "VERIFIED within bounded same-operand projection diagnostics",
+  "risk": "CAUTION: opt-in performance experiment; no production promotion",
+  "claim": "K16/8 KiB is bit-exact but slower than K32/16 KiB in every measured pair for both dense F16 and direct Q4 at this geometry.",
+  "problem": "Test whether halving shared panel storage offsets increased handoffs and reduced per-panel loader concurrency.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "launches": [
+      {
+        "arm": "dense.k16",
+        "kernel": "hy_q4_bench_dense_k16",
+        "pipeline": "hy_q4_bench_dense_k16",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_memory_bytes": 8192,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 16,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 512
+      },
+      {
+        "arm": "dense.k32",
+        "kernel": "hy_q4_bench_dense_k32",
+        "pipeline": "hy_q4_bench_dense_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_memory_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "packed.k16",
+        "kernel": "hy_q4_bench_packed_k16",
+        "pipeline": "hy_q4_bench_packed_k16",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_memory_bytes": 8192,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 16,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 512
+      },
+      {
+        "arm": "packed.k32",
+        "kernel": "hy_q4_bench_packed_k32",
+        "pipeline": "hy_q4_bench_packed_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_memory_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      }
+    ],
+    "arithmetic": "F16 operands, F32 accumulation, 1024 ascending K8 MMA steps, common merge and BF16 bias.",
+    "dense_first": "Frozen dense-only v1 passed full byte replay before the first new packed candidate launch in v2.",
+    "panel_counts": {
+      "k16": 512,
+      "k32": 256
+    },
+    "shared_memory_bytes": {
+      "k16": 8192,
+      "k32": 16384
+    },
+    "source_hashes": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "benchmark_sha256": "c904ac8240981695bde8c7904bc47f0182bba3a36e4a596ea32f6e28ff925adf",
+      "dense_sha256": "99ca4953cd8c494a330d3f891edf2db39799a3dd185105eb6a263b55e90fbfd5",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158",
+      "kpanel_sha256": "0304fee3a1025da22694a048e974661c296e4422dd2dc3bae3a0b98b43acaf39",
+      "k16_sha256": "6b4e4db6963df40da303e58717f19ebba89cb410bd6eb5e820ed8e38162dcdc8"
+    },
+    "input_scope": "23 authenticated saved real rows cyclically repeated to M1280 on GPU; not a new full-prefix activation distribution.",
+    "schedule": "Two warmup and six measured rounds, 16 projections per timed root, opposite initial orders, six candidate-first and six control-first measured pairs.",
+    "timed_path": "Complete projection including packed tile decode where applicable, GEMM, F32 merge and BF16 bias; setup, checks and packing excluded.",
+    "rollback": "Remove opt-in benchmark target and examples; production kernels and defaults are unchanged."
+  },
+  "dod": {
+    "runner": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py",
+    "command_identity_directory": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs",
+    "zero_exit_runs": [
+      "device-limits-v1",
+      "build-dense-v1",
+      "freeze-dense-v1",
+      "dense-forward-v1",
+      "tests-final-v1",
+      "verify-dense-v1-final",
+      "build-k16-v2",
+      "freeze-k16-v2",
+      "admission-v2",
+      "k16-forward-v1",
+      "k16-reverse-v1",
+      "verify-forward-v2",
+      "verify-reverse-v2",
+      "aggregate-v1",
+      "closure-integrity-v1",
+      "format-v1"
+    ],
+    "expected_signal": "Release builds and byte replays PASS; finite atol=rtol=2e-5; all four candidate outputs bitwise equal B64 and identical-operand MPS raw/biased; no preterminal read/wait or tracked encode allocation; memory guard passes.",
+    "speedup_falsifier": "K16 must improve same-round ratios in both initial schedules and relative-order strata; the measured result refutes this condition.",
+    "byte_replays": 3,
+    "frozen_checker_tests": 60,
+    "pre_metal_admission_negatives": 11,
+    "fallback": "Full terminal byte recomputation, pinned prior-control banks, comparator corruption controls, loader/address/order source review, and live selected-source binding."
+  },
+  "results": {
+    "gpu_median_ms_by_run": {
+      "k16-forward-v1": {
+        "dense.k16": 4.97662760426465,
+        "dense.k32": 4.367296874988824,
+        "packed.k16": 5.854190103946166,
+        "packed.k32": 5.013990885345265,
+        "mps.resident": 4.2507122393544705,
+        "mps.expand": 4.325492187490454
+      },
+      "k16-reverse-v1": {
+        "dense.k16": 5.052588541730074,
+        "dense.k32": 4.4591601563297445,
+        "packed.k16": 5.8653854166550445,
+        "packed.k32": 4.871929687396914,
+        "mps.resident": 4.127397135107458,
+        "mps.expand": 4.350511718712369
+      }
+    },
+    "paired_duration_ratios": {
+      "dense.k16.over.dense.k32": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.1357178982589196,
+        "min_ratio": 1.087485127359007,
+        "max_ratio": 1.1578597797181438,
+        "time_reduction_pct_by_run": {
+          "k16-forward-v1": -13.952125232553247,
+          "k16-reverse-v1": -13.30807516653023
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.136831474024302
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.116308943416814
+          }
+        }
+      },
+      "packed.k16.over.packed.k32": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.1966466592264178,
+        "min_ratio": 1.1407275782969548,
+        "max_ratio": 1.2556668928657317,
+        "time_reduction_pct_by_run": {
+          "k16-forward-v1": -16.757095052897064,
+          "k16-reverse-v1": -20.391421736403114
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1847071337462538
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.205157804713692
+          }
+        }
+      },
+      "dense.k32.over.mps.resident": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.0594466605579187,
+        "min_ratio": 1.0150893372950378,
+        "max_ratio": 1.115728833883968,
+        "time_reduction_pct_by_run": {
+          "k16-forward-v1": -2.74270825851195,
+          "k16-reverse-v1": -8.038068796441355
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.0539726945905876
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.081403482635956
+          }
+        }
+      },
+      "packed.k32.over.mps.resident": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.1711347373620922,
+        "min_ratio": 1.1407847338391914,
+        "max_ratio": 1.2338538757084334,
+        "time_reduction_pct_by_run": {
+          "k16-forward-v1": -17.956488301516018,
+          "k16-reverse-v1": -18.038791226472874
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1692097912907293
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.1711347373620922
+          }
+        }
+      }
+    },
+    "bank_identities": {
+      "all_28_final_banks_equal_between_orders": true,
+      "all_24_dense_v1_banks_equal_to_final_v2": true,
+      "original_bf16_quality_gate_passed": false,
+      "g2_same_operand_gate_passed": false
+    },
+    "all_four_candidate_raw_and_biased_outputs_equal_b64_and_mps_bits": true,
+    "unchanged_finite_f32_tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "original_bf16_quality": [
+      {
+        "name": "packed.g1.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621164,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914271354675293,
+        "rmse": 0.6173250074231923,
+        "relative_l2": 0.04703424499104567,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "packed.g2.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621108,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914328575134277,
+        "rmse": 0.6173250756047323,
+        "relative_l2": 0.04703425018582511,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.resident.bias.vs.original_bf16_saved_upstream_rows",
+        "elements": 2621440,
+        "failures": 2621164,
+        "raw_bit_differences": 2621440,
+        "max_abs": 3.2914271354675293,
+        "rmse": 0.6173250074231923,
+        "relative_l2": 0.04703424499104567,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "original_bf16_quality_passed": false,
+    "g2_same_operand_passed": false,
+    "sync_and_storage_per_final_run": {
+      "terminal_waits": 1,
+      "preterminal_readbacks": 0,
+      "terminal_packed_readbacks": 1,
+      "encode_named_allocations": 0,
+      "command_segments": 97,
+      "named_bytes": 868056672,
+      "all_math_and_input_replication_on_gpu": true,
+      "diagnostic_async_boundaries": 96
+    },
+    "timed_root_overlap_seconds": 0,
+    "observed_mps_run_drift_pct": {
+      "resident": -2.9,
+      "decode_then_mps": 0.58
+    },
+    "timing_limitations": "Run ranges are not confidence intervals; host timing drift remains. No occupancy, decoder-stall or panel-handoff causality is inferred."
+  },
+  "guards": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "native_cap_mib": 2048,
+    "native_timeout_sec": 120,
+    "build_cap_mib": 4096,
+    "build_timeout_sec": 600,
+    "cpu_helper_cap_mib": 1024,
+    "cpu_helper_timeout_sec": 120,
+    "max_swap_growth_mib": 64,
+    "default_named_cap_mib": 896,
+    "maximum_named_cap_mib": 1024,
+    "observed": {
+      "k16-forward-v1": {
+        "sampled_peak_group_mib": 1385.7204895019531,
+        "sampled_min_headroom_gib": 30.996185302734375,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      "k16-reverse-v1": {
+        "sampled_peak_group_mib": 1420.5328521728516,
+        "sampled_min_headroom_gib": 31.119705200195312,
+        "sampled_max_swap_growth_bytes": 0
+      }
+    },
+    "limits": "Sampled footprints do not bound physical peaks; reclaimable cache is estimated; named counters exclude private MPS allocations."
+  },
+  "mini_quad": {
+    "cassandra": "Loader holes/cursor drift, changed MMA order or extra waits can invalidate the comparison; reject by fixed geometry, source anchors, full bytes and API/lifetime review.",
+    "maieutic": "Shared-memory savings are useful only if whole-projection timing improves with arithmetic and root isolation preserved.",
+    "daedalus": "Implement only K16 clones and opt-in target; qualify dense first, then direct Q4; no production change.",
+    "adversary": "ROBUST for the bounded negative timing/exactness result; BROKEN for the K16 speedup hypothesis at the measured geometry.",
+    "checks": "Loader coverage/address bounds and K8 sequence; API/buffer lifetime and one terminal read/wait; independent recomputation of raw paired ratios and both order strata.",
+    "provenance": "Correlated same-lineage agent reviews, not independent experimental replication."
+  },
+  "evidence": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026",
+    "curated_artifact_identities": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/aggregate-v1.json",
+        "sha256": "9f09ed15d69bbe39dd4c8113375554cc5c136ebffb16378ed5adc6768ffaeeda",
+        "nbytes": 6541
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/closure-integrity-v1.json",
+        "sha256": "6bb2e472a1d4879ebdaacda8e2e5083d973aedefc8d021fcca9558bb794f80a7",
+        "nbytes": 42137
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/admission-v2.json",
+        "sha256": "329e1f18a292d7642f4bd974837849ff92b5564af692d2ba116f11c29264bbc3",
+        "nbytes": 1252
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v1-receipt.json",
+        "sha256": "fbc0f1f43d55fb8a6947492c9e55f7089db6f2ba59704801dea088842cabca4d",
+        "nbytes": 3008
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v2-receipt.json",
+        "sha256": "0ba7e651e100b4ea391c9719e84a54ba9e8323818097d8579a5961a7db236ad8",
+        "nbytes": 3008
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v1.json",
+        "sha256": "d1f86d3744a2aad56a328095c6e8998922cb2d7e196534c98b7099b89ecc65a1",
+        "nbytes": 5558
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v2.json",
+        "sha256": "d32e4f9430da37f2ab1f7a6857bdfb2133fe5ef22705bba2c9d2884a49ab7b61",
+        "nbytes": 5558
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/checkers-frozen-v1.json",
+        "sha256": "13e8afcfcfdd7e203ae1ade185a3a8137ef12ebb50c2f2bdf8fce38c6061952a",
+        "nbytes": 870
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/admission_v2.py",
+        "sha256": "fac29ea9c847face1e8cf026ce6588dd6a501f7c95071d7ebb3d97449b53adb7",
+        "nbytes": 2489
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/aggregate_v1.py",
+        "sha256": "8fdf6c4cacede19121a9def0d22c03d351c8a54487912bdb5840d504466590e9",
+        "nbytes": 3796
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/closure_integrity_v1.py",
+        "sha256": "30ad80e9684bf3a2ddef53c1f31ad0ad7c6a9258c617c0b5dcabeb8869a26097",
+        "nbytes": 7692
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/write_packet_v1.py",
+        "sha256": "545ddfac786cc360c7448787857f85d033175bb162cfe9ce209025737855fcd6",
+        "nbytes": 11179
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/freeze_native.py",
+        "sha256": "25902f888607cf40eed066f2eb7176acb07ca8aa8ba2cdba36c2ff01a9497d7c",
+        "nbytes": 1826
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py",
+        "sha256": "b39a6b8de69cfddf7ccd470ae5d3e10d70e88ec174d7ce3453b491252e04ddcf",
+        "nbytes": 1156
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/closure-integrity-v1.argv.json",
+        "sha256": "15e189951991bd82d120ae159940b5863676bd19f27e67947fe4401730dc28b8",
+        "nbytes": 625
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/closure-integrity-v1.guard.jsonl",
+        "sha256": "bd924aa764ece9b078036e7cfdadaa9971548f3a6958b61e146ac550f3f27ae7",
+        "nbytes": 1969
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/closure-integrity-v1.out",
+        "sha256": "339ac448166a8fa48909937173467739209638e77fde05d4db0c2ffae480489c",
+        "nbytes": 1204
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/format-v1.argv.json",
+        "sha256": "fc7da869157016a4432cc1808fdd58aee5a8b531238289b2d12211af0b828dd7",
+        "nbytes": 649
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/format-v1.guard.jsonl",
+        "sha256": "037bccf91ea747a56f8c6dbd30db3a680b4adc578b406800a937417a38d4a8d9",
+        "nbytes": 1667
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/logs/format-v1.out",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "nbytes": 0
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-forward-v1.json",
+        "sha256": "8eb172efe0ac34df57fc9c838596f2bd23f75040ea86be306ca58864f688b25a",
+        "nbytes": 69865
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-reverse-v1.json",
+        "sha256": "6103184dd406de5d0a7075d52f3457314fb5eb6a9ae62e46d949f2e4629bc1d6",
+        "nbytes": 69949
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/verify-dense-v1-final.json",
+        "sha256": "c72dd53d172909e606606ec5e74492e3832d02ef4280228f99b852c3b57eec83",
+        "nbytes": 47157
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/verify-forward-v2.json",
+        "sha256": "b53208b0c729a899457eb223514fb247234e376951d78643360a93402f8bb803",
+        "nbytes": 60445
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/verify-reverse-v2.json",
+        "sha256": "b729f6ac2cacef4686dce5b0435371436977981ccba16a4ec0aae1b7dff2839e",
+        "nbytes": 60445
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/verify_k16_v1.py",
+        "sha256": "5dbc6dd3a4c9550c8130da5e1b499c66a2395ddc018aadbc4e2e19ff3b6d8105",
+        "nbytes": 62518
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/test_verify_k16_v1.py",
+        "sha256": "1c7338613bf3e36a2cd7844df4d51d6d092bc84ec5cc5611fb174d94ccb6935c",
+        "nbytes": 35040
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/verify_k16_v2.py",
+        "sha256": "0ef241dd604a78aeb1dc8ad9cf431078f4ad51371e83511a1f3bb107d0171c1a",
+        "nbytes": 63960
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/test_verify_k16_v2.py",
+        "sha256": "835e1403be1fcb79279f4ceb53270787de50136affa087b49fb29f7ff19de807",
+        "nbytes": 37489
+      }
+    ],
+    "hardware_and_toolchain": {
+      "hardware": "Apple M2 Max",
+      "os": "26.6.2",
+      "sdk": "27.0",
+      "crystal": "Crystal 1.22.1 (2026-10-22)\n\nLLVM: 23.1.4\nDefault target: aarch64-apple-darwin25.6.0"
+    },
+    "native_lineages": {
+      "native-v1": {
+        "selected_source_files": 31,
+        "linked_objects": 10,
+        "live_sources_checked": false,
+        "receipt": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v1-receipt.json",
+          "sha256": "fbc0f1f43d55fb8a6947492c9e55f7089db6f2ba59704801dea088842cabca4d",
+          "nbytes": 3008
+        }
+      },
+      "native-v2": {
+        "selected_source_files": 31,
+        "linked_objects": 10,
+        "live_sources_checked": true,
+        "receipt": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/native-v2-receipt.json",
+          "sha256": "0ba7e651e100b4ea391c9719e84a54ba9e8323818097d8579a5961a7db236ad8",
+          "nbytes": 3008
+        }
+      }
+    },
+    "binaries": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/build/hy_nomas_q4_k16_benchmark-v1",
+        "sha256": "fbf2f4c008ae316ab1ea67d8be72bf5634062132cdfb80ac5e164a5a3ddb2b71",
+        "nbytes": 1837336
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/build/hy_nomas_q4_k16_benchmark-v2",
+        "sha256": "312a12390289971e42897d968bb0d2adadc32f46ad5aaa77a4d8071df0ba7eab",
+        "nbytes": 1837416
+      }
+    ],
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "weight_offset": 61441024,
+      "weight_bytes": 9437184,
+      "bias_offset": 61436928
+    },
+    "baseline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/reports/dense-m1280-forward-v1.json",
+      "sha256": "af8d416961c1a7a982b5e67826422d911974a0ae510ca4db2f3b9208295caee3",
+      "m1280_hashes_checked": 20
+    },
+    "integrity_index": "closure-integrity-v1 pins both 31-source snapshots, binaries, ten linked objects, reports/sidecars, checkers, fixture, Q4 payload and earlier guarded logs; live v2 source checked.",
+    "validation_scope": "Packet parsing, referenced identity checks and explicit path scope supplement executed numerical checks; packet presence is not proof.",
+    "repository_validator": "Generic evidence template/validator absent in this checkout; direct JSON, pin and scope checks used.",
+    "limitation": "Not a hermetic build, driver attestation, physical allocation proof or new neural validation."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "examples/hy_nomas_q4_k16_benchmark.cr",
+      "examples/support/hy_nomas_q4_k16_benchmark.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-k16.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/hy_nomas_q4_k16_benchmark.cr",
+      "examples/support/hy_nomas_q4_k16_benchmark.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-k16.json"
+    ],
+    "default_deny": true
+  },
+  "allowed_paths": [
+    "Makefile",
+    "examples/hy_nomas_q4_k16_benchmark.cr",
+    "examples/support/hy_nomas_q4_k16_benchmark.cr",
+    "docs/hy-nomas-q4-reduction-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/2026-10-26-hy-nomas-q4-k16.json"
+  ],
+  "decision": "Keep K32/16 KiB; K16 remains an opt-in diagnostic. Do not promote a production kernel or widen tolerances.",
+  "next_falsifier": "Resource/stall profiling that separates panel-handoff cost from reduced loader concurrency; this result alone admits no new kernel variant.",
+  "decay_trigger": "Source/cache/fixture, geometry/schedule, precision/ownership, toolchain/device/OS/MPS changes or missing external evidence.",
+  "refresh": "Use fresh artifacts and matching frozen stages; repeat guarded dense qualification, paired native schedules, full byte replay, source binding and reviews before reusing the claim.",
+  "failure_policy": "Reopen dependent claims; retain original-BF16 quality failure and exact K32 control; no fallback that weakens guard, tolerance or ownership.",
+  "open_boundaries": [
+    "Original-BF16 Q4 quality gate and existing G2 reduction failures remain unwaived.",
+    "Saved upstream fixture replay only; no new full upstream run.",
+    "No occupancy, handoff, decoder-stall or loader causal attribution.",
+    "No full block, model, capture, generation or end-to-end speed claim.",
+    "Selected-source/object receipts are not hermetic build or driver attestation."
+  ]
+}

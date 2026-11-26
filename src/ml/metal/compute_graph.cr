@@ -1,3 +1,5 @@
+require "./compute_graph_schedule"
+
 module ML
   module Metal
     enum GraphSubmissionState
@@ -521,90 +523,36 @@ module ML
         @stats = nil
       end
 
-      private record AccessRecord, op_index : Int32, binding : BufBinding
-
       # Compile: analyze dependencies, group into waves
       def compile! : Nil
         n = @ops.size
         return if n == 0
 
-        # Offset-aware dependency analysis: two ops on the same buffer only conflict
-        # if their accessed offset ranges overlap. This allows concurrent writes to
-        # different regions of the same buffer (e.g., 8 MoE expert outputs).
-
-        # Track all active writers/readers per buffer_id
-        writers = {} of UInt64 => Array(AccessRecord)
-        readers = {} of UInt64 => Array(AccessRecord)
-
-        wave_of = Array(Int32).new(n, 0)
-
-        n.times do |i|
-          op = @ops[i]
-          max_dep_wave = -1  # Track max WAVE of dependencies (not max op index!)
-
-          # Collect explicit + implicit (indirect dispatch) buffer accesses
-          all_accesses = op.buffers.dup
-          if (d = op.dispatch) && d.mode.indirect? && (ibuf = d.indirect_buf)
-            all_accesses << BufBinding.new(ibuf, -1, d.indirect_off, access: BufferAccess::Read)
+        accesses = [] of CogniGraphSchedule::Access
+        op_offsets = [0_u32]
+        @ops.each do |op|
+          op.buffers.each do |binding|
+            mode = case binding.access
+                   when .read?       then CogniGraphSchedule::AccessMode::Read
+                   when .write?      then CogniGraphSchedule::AccessMode::Write
+                   when .read_write? then CogniGraphSchedule::AccessMode::ReadWrite
+                   else raise "unsupported ComputeGraph buffer access mode"
+                   end
+            accesses << CogniGraphSchedule::Access.new(binding.buffer_id,
+              binding.offset, binding.length, mode, binding.partition)
           end
 
-          all_accesses.each do |binding|
-            bid = binding.buffer_id
-
-            case binding.access
-            when .read?
-              if ws = writers[bid]?
-                ws.each do |wr|
-                  if binding.conflicts?(wr.binding)
-                    w = wave_of[wr.op_index]
-                    max_dep_wave = w if w > max_dep_wave
-                  end
-                end
-              end
-              (readers[bid] ||= [] of AccessRecord) << AccessRecord.new(i, binding)
-
-            when .write?
-              if rs = readers[bid]?
-                rs.each do |rd|
-                  if binding.conflicts?(rd.binding)
-                    w = wave_of[rd.op_index]
-                    max_dep_wave = w if w > max_dep_wave
-                  end
-                end
-              end
-              if ws = writers[bid]?
-                ws.each do |wr|
-                  if binding.conflicts?(wr.binding)
-                    w = wave_of[wr.op_index]
-                    max_dep_wave = w if w > max_dep_wave
-                  end
-                end
-              end
-              (writers[bid] ||= [] of AccessRecord) << AccessRecord.new(i, binding)
-
-            when .read_write?
-              if ws = writers[bid]?
-                ws.each do |wr|
-                  if binding.conflicts?(wr.binding)
-                    w = wave_of[wr.op_index]; max_dep_wave = w if w > max_dep_wave
-                  end
-                end
-              end
-              if rs = readers[bid]?
-                rs.each do |rd|
-                  if binding.conflicts?(rd.binding)
-                    w = wave_of[rd.op_index]; max_dep_wave = w if w > max_dep_wave
-                  end
-                end
-              end
-              rec = AccessRecord.new(i, binding)
-              (writers[bid] ||= [] of AccessRecord) << rec
-              (readers[bid] ||= [] of AccessRecord) << rec
-            end
+          # Indirect dispatch reads its argument buffer even when no explicit
+          # buffer binding was declared for it.
+          if (dispatch = op.dispatch) && dispatch.mode.indirect? && (indirect = dispatch.indirect_buf)
+            accesses << CogniGraphSchedule::Access.new(indirect.handle.address,
+              dispatch.indirect_off, -1_i64, CogniGraphSchedule::AccessMode::Read, -1_i32)
           end
-
-          wave_of[i] = max_dep_wave + 1
+          op_offsets << accesses.size.to_u32
         end
+
+        schedule = CogniGraphSchedule.compile(op_offsets, accesses)
+        wave_of = schedule.wave_of
 
         # Group ops by wave
         max_wave = wave_of.max? || 0

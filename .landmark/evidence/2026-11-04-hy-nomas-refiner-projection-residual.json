@@ -1,0 +1,286 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_projection_residual_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "3a7586602a46a8283e3acc53ee87434cabf5cc26",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected block0 projection and residual1 on frozen T0, B1/V263/processed1280/H16/D128.",
+    "boundary": "First divergence advances to block0.norm2; block1 has a different input and both complete blocks fail numeric parity.",
+    "adversary": "ROBUST within the frozen block0 scope; same-lineage review is correlated. Disabled preservation, fresh enabled repeat and comparator sensitivity controls pass.",
+    "refresh": "Rerun on source, binary, runtime, input, weights, layout, precision or evidence changes."
+  },
+  "execution": {
+    "oracle": "Inherited caller-pinned Hy-Nomas 911cea6458a89c2663513ff7099561ec190dd491 on the PyTorch 2.8.0 MPS adapter.",
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_tolerance": 0,
+    "risk": "CAUTION",
+    "rollback": "Omit --refiner-source-projection-residual-control, which defaults false.",
+    "native_math": "Existing Metal command chain and terminal drain. GPU comparison and replay each export one packed metric vector with CPU fallback disabled.",
+    "full_generation_executed": false,
+    "pin_scope": "Selected sources checked against retained stage pins; no exhaustive toolchain closure."
+  },
+  "first_divergence": {
+    "control": {
+      "full": "block0.proj",
+      "valid": "block0.proj",
+      "padding": "block0.residual1"
+    },
+    "enabled": {
+      "full": "block0.norm2",
+      "valid": "block0.norm2",
+      "padding": "block0.norm2"
+    }
+  },
+  "exact_projection_residual": {
+    "block0.proj": {
+      "count": 2621440,
+      "mismatch_count": 0,
+      "max_abs": 0.0
+    },
+    "block0.residual1": {
+      "count": 2621440,
+      "mismatch_count": 0,
+      "max_abs": 0.0
+    },
+    "block1.proj": {
+      "count": 2621440,
+      "mismatch_count": 357902,
+      "max_abs": 1.3125
+    },
+    "block1.residual1": {
+      "count": 2621440,
+      "mismatch_count": 188667,
+      "max_abs": 1.0
+    }
+  },
+  "valid_raw": {
+    "control": {
+      "block0.proj": {
+        "count": 538624,
+        "mismatch_count": 528996,
+        "max_abs": 0.062488555908203125
+      },
+      "block0.residual1": {
+        "count": 538624,
+        "mismatch_count": 527065,
+        "max_abs": 0.475311279296875
+      },
+      "block0.norm2": {
+        "count": 538624,
+        "mismatch_count": 521564,
+        "max_abs": 0.030033111572265625
+      },
+      "block0.output": {
+        "count": 538624,
+        "mismatch_count": 533703,
+        "max_abs": 0.6151275634765625
+      },
+      "block1.input": {
+        "count": 538624,
+        "mismatch_count": 533703,
+        "max_abs": 0.6151275634765625
+      },
+      "block1.output": {
+        "count": 538624,
+        "mismatch_count": 535325,
+        "max_abs": 1.1998291015625
+      }
+    },
+    "enabled": {
+      "block0.proj": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.residual1": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "block0.norm2": {
+        "count": 538624,
+        "mismatch_count": 514781,
+        "max_abs": 0.015609264373779297
+      },
+      "block0.output": {
+        "count": 538624,
+        "mismatch_count": 529039,
+        "max_abs": 0.39776611328125
+      },
+      "block1.input": {
+        "count": 538624,
+        "mismatch_count": 529039,
+        "max_abs": 0.39776611328125
+      },
+      "block1.output": {
+        "count": 538624,
+        "mismatch_count": 531590,
+        "max_abs": 1.2971954345703125
+      }
+    }
+  },
+  "norm2_replay": {
+    "raw_at_mixed_tolerance": {
+      "full": {
+        "count": 2621440,
+        "mismatch_count": 2506205,
+        "max_abs": 0.01561880111694336
+      },
+      "valid": {
+        "count": 538624,
+        "mismatch_count": 514781,
+        "max_abs": 0.015609264373779297
+      },
+      "padding": {
+        "count": 2082816,
+        "mismatch_count": 1991424,
+        "max_abs": 0.01561880111694336
+      }
+    },
+    "rounded_at_zero_tolerance": {
+      "full": {
+        "count": 2621440,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "valid": {
+        "count": 538624,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      },
+      "padding": {
+        "count": 2082816,
+        "mismatch_count": 0,
+        "max_abs": 0.0
+      }
+    }
+  },
+  "preservation": {
+    "comparisons": {
+      "control": {
+        "preblock": {
+          "sha256": "009b080e3ec4e6122a80764c7d6587c777d6c594ef2eadf78810e93a360380b0",
+          "tensor_count": 9
+        },
+        "refiner": {
+          "sha256": "c9c97714ea6e94ae7ec0b261296d2b624060bd4e12300aaa3d65d6527718c3ba",
+          "tensor_count": 16
+        },
+        "blocks": {
+          "sha256": "8b6128600fb10d38c04a9466aa52aceb0b98b559fb4d3905721c92af73f9687d",
+          "tensor_count": 37
+        }
+      },
+      "enabled-repeat": {
+        "preblock": {
+          "sha256": "9353f861c36342ac6edfd05c7abfa24f89e346debff330c1959fa36ae3d091f9",
+          "tensor_count": 9
+        },
+        "refiner": {
+          "sha256": "c9c97714ea6e94ae7ec0b261296d2b624060bd4e12300aaa3d65d6527718c3ba",
+          "tensor_count": 16
+        },
+        "blocks": {
+          "sha256": "e63bbc08bbffdd6cc965151bbccae5025293026efb9dc6861e6fefd0ccb622d6",
+          "tensor_count": 37
+        }
+      }
+    },
+    "instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "named_bytes": 944620612
+  },
+  "tests": {
+    "crystal_cpu_examples": 29,
+    "crystal_gpu_examples": 1,
+    "python_tests": 81
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "control",
+      "enabled",
+      "enabled-repeat",
+      "preservation",
+      "norm2-replay",
+      "python",
+      "control-compare",
+      "enabled-compare",
+      "residual-spec"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 21470609408,
+    "peak_sampled_process_group_bytes": 2344044848,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/build/hy_nomas_reference_cache_probe",
+      "bytes": 2400800,
+      "sha256": "d9ecfedb7f49c342d8c3d73ec092814e8ee5b94a8d0d09a5f51b8b22f19cc226"
+    },
+    "native_enabled_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/enabled-blocks.json",
+      "bytes": 15383,
+      "sha256": "e287b5fa3a88d37be26b3cd9a50d1262492cc3990bd60c49c7e0d4a467e6b344"
+    },
+    "native_enabled_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/enabled-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "e63bbc08bbffdd6cc965151bbccae5025293026efb9dc6861e6fefd0ccb622d6"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/control-compare.json",
+      "bytes": 62581,
+      "sha256": "ba9967e9b312d9f2808498cd861e54af6f4fff8de2fdb492c70d31d7fcbf74ab"
+    },
+    "enabled_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/enabled-compare.json",
+      "bytes": 63039,
+      "sha256": "9fcc8d6155ff12a9a6496199fb3b6fdacfe9860170525f28eabb256be15b734e"
+    },
+    "norm2_replay_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/norm2-replay.py",
+      "bytes": 2699,
+      "sha256": "7eca0e743eea026a1cc6b4850d2ed1f833bd21e78f83d770463cc75088a96017"
+    },
+    "norm2_replay_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/logs/norm2-replay.out",
+      "bytes": 5273,
+      "sha256": "171b7edfef490bd0a11607027d17bac428e32f96d3c0c5cf154059c7c0ac20b8"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/logs/preservation.out",
+      "bytes": 1087,
+      "sha256": "17630e8197c056c62329f73a1d631f8a081652acdd8da03ac59ee3be3b3f09d9"
+    },
+    "residual_spec_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/logs/residual-spec.out",
+      "bytes": 79,
+      "sha256": "1f01129a7a0479d7af3af378d94ed973f6179b57d1a9c849f4255a71de1afd14"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "schema": "cogni_ml.hy_nomas_query_head_robustness_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "6b6f7e161f3b8da5bd87a0e52cb9d19884a1126f",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Authenticated same-pass restricted-frame Q/K measurement with frozen heads and exact key-roll equivariance; no independent-state, semantic correspondence, transport, acting, native peak or speed claim.",
+    "adversary": "ROBUST within this measurement scope. Read-only same-lineage review independently checked case results against source summaries; it is correlated, not independent replication.",
+    "refresh_on": [
+      "source/runtime",
+      "weights",
+      "scripts/binary/linked objects",
+      "inputs/capture geometry/precision/selection policy",
+      "missing or mutated bound evidence"
+    ],
+    "rollback": "Omit the opt-in CPU prepare/qualify CLI; the frozen GPU binary and production generation are unchanged."
+  },
+  "boundaries": {
+    "risk": "CAUTION: bounded GPU measurement, CPU fixture selection and post-drain evaluation only.",
+    "changed_paths": [
+      "spec/support/hy_nomas_query_head_robustness.py",
+      "spec/hy_nomas_query_head_robustness_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-06-hy-nomas-query-head-robustness.json"
+    ],
+    "production_defaults_changed": false,
+    "full_generation_run": false,
+    "new_gpu_kernel_or_binary": false,
+    "query_transport_implemented": false,
+    "actor_control_qualified": false
+  },
+  "frozen_design": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-heads-ht33zt1c/frozen-declaration.json",
+    "sha256": "f1565dd240195bbcb43f8e3f90bd5de6318944f0ffc698d6a82d9834a57f3fe1",
+    "heads": [12, 15],
+    "discovery_frame": 0,
+    "held_out_frames": [1, 14, 29],
+    "positions_per_frame": 144,
+    "strict_diagonal_minimum": 108,
+    "screen_is_accuracy_tolerance_or_transport_gate": false,
+    "roll_frame": 14,
+    "key_roll": 17,
+    "case_count": 9,
+    "independent_saved_states": 1,
+    "independent_scenes_tested": false,
+    "scope": "Distinct held-out frame rows from the same saved noisy T0 forward; patches are not independent statistical samples."
+  },
+  "source": {
+    "capture_sha256": "89967d4b9fb4d55d7d2fa45a07d0cc9a5bf8273ffddea3c2ba035cd342d60897",
+    "capture_receipt_sha256": "9649ad3c7ae94359812dcc88162ae86fe34f9c359fb8e49e14e60a8156ae18e8",
+    "anchor_input_sha256": "02024f72af2b09de6994637fde4799d5320a04f7cabc769710c192a5d01ed2a8",
+    "source_block_pin": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "timeline_preprocessing_pin": "911cea6458a89c2663513ff7099561ec190dd491",
+    "weights_sha256": "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b",
+    "recorded_T0_sigma": 0.206897,
+    "recorded_timestep": 206.897,
+    "full_tensor_shape": [1, 4320, 16, 128],
+    "tensor_boundaries": ["img.q_qknorm", "img.k_qknorm", "img.q_rope", "img.k_rope"],
+    "array_geometry": [144, 16, 128],
+    "storage": "Lossless F32 expansion of exact selected BF16 bytes; QK/metrics arithmetic runs on GPU.",
+    "scope_limit": "Reuses the authenticated one-block source capture of native preblock tensors; no independent noise-to-preblock replay or new capture synchronization qualification."
+  },
+  "verification": {
+    "atol": 2e-5,
+    "rtol": 2e-5,
+    "exact_metric_columns": ["greater_count", "argmax"],
+    "dod_command": "python3 -B -m unittest -v spec.hy_nomas_query_head_robustness_test spec.hy_nomas_query_correspondence_test spec.hy_nomas_query_capture_test",
+    "dod_signal": "23 CPU tests, 4 real-fixture admission falsifiers, all 9 native/source GPU pairs, both post-drain metric audits and 4 exact source/native key-roll checks pass.",
+    "gpu_commands": "The external index binds prepare/matrix/qualify stage argv, child receipts, guards and outputs. The matrix uses the unchanged native v3 binary and source-equation MPS oracle sequentially; no PyTorch is in the native path.",
+    "plan_sha256": "4679508ad1d11b60310d5494c5c747c177b1d0bce42e1226150a1e749353adf9",
+    "native_binary_sha256": "0eafae36447cae361c97ec69226e29b4561cc0e3c1834e0f0bce4c5a212a6c77",
+    "score_arrays_byte_identical": true,
+    "maximum_metric_abs_difference": 2.682209014892578e-7,
+    "maximum_postdrain_audit_abs_difference": 4.76837158203125e-7,
+    "source_native_counts_fractions_screen_exact": true,
+    "qualification": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-heads-ht33zt1c/qualified.json",
+      "sha256": "ecde917d246969f09e8fb5034c28ebc1372407ebec7c47f1fe9ae26a8cf304cb"
+    },
+    "postdrain_evidence_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-heads-ht33zt1c/postdrain-evidence-summary.json",
+      "sha256": "8c01c6bf04523fff19bf0997bd7e579510f8aea4a3b655a04f8c30a963f593a2"
+    },
+    "refuted_audit": "An exploratory whole-summary dictionary equality assertion failed on floating means. Exactness was narrowed to discrete counts/fractions/screen; the existing floating numeric gates were preserved without tolerance changes. See indexed postdrain-analysis.json.",
+    "repository_graph_validation": "The skill template and scripts/validate-landmark-graph.sh are absent. Use JSON parsing, exact source/path review, live indexed digest/reference checks and git diff --check; no graph validator or native rebuild is claimed."
+  },
+  "execution": {
+    "native_named_bytes": 3741696,
+    "native_named_buffers": 4,
+    "native_dispatches": 2,
+    "native_command_chains": 1,
+    "native_named_encode_allocations": 0,
+    "native_encode_readbacks": 0,
+    "native_encode_waits": 0,
+    "native_terminal_waits": 1,
+    "native_postwait_readbacks": 2,
+    "cpu_scope": "Fixture byte slicing/permutation precedes GPU execution; qualification and summaries run after terminal drains. No production path is added."
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "stage_process_cap_bytes": 2147483648,
+    "swap_growth_stop_bytes": 67108864,
+    "qualified_guard_stages": 21,
+    "minimum_headroom_bytes": 25206915072,
+    "minimum_reported_pressure_free_pct": 91,
+    "maximum_sampled_group_footprint_bytes": 191186288,
+    "maximum_observed_swap_growth_bytes": 0,
+    "final_live_children_all_stages": 0,
+    "native_peak_qualified": false,
+    "limit": "Polling misses between-sample spikes; named buffers exclude opaque resources. Cold diagnostic stages establish neither native peak nor speedup."
+  },
+  "findings": {
+    "held_out_frame_order": [1, 14, 29],
+    "head_12_pre_RoPE_counts": [8, 9, 10],
+    "head_12_post_RoPE_counts": [109, 118, 121],
+    "head_15_pre_RoPE_counts": [13, 12, 15],
+    "head_15_post_RoPE_counts": [138, 139, 136],
+    "head_12_post_screen_passed": true,
+    "head_15_post_screen_passed": true,
+    "heads_reselected": false,
+    "head_12_frame_1_count_above_screen_minimum": 1,
+    "frame_14_post_keyroll_diagonal_counts": {"12": 0, "15": 0},
+    "interpretation": "Large pre/post contrast is consistent with RoPE-associated positional structure. The key roll moves content and phases together and proves equivariance only; no phase-preserving semantic null or labeled cross-frame match was tested."
+  },
+  "continuation": {
+    "return_pointer": "docs/hy-nomas-object-control-frontier.md, Frozen-head robustness and RoPE discriminator",
+    "next_falsifier": "Permute K content with destination RoPE phases held fixed using a GPU gather and the existing BF16 RoPE boundary.",
+    "before_transport": "Independent states and labeled nonzero-displacement correspondences must beat same-location/equal-area shams, followed by a causal rollout protecting other actors and background.",
+    "missing_evidence": "Alternative saved runs have preblock or K/V artifacts but no authenticated Q/K capture for independent-state qualification."
+  },
+  "evidence_index": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-heads-ht33zt1c/qualified-artifacts-v1.json",
+    "sha256": "0efd537bed89d16c96932a63156583483f44f9d6621aa434c7d9cda2fab06fda",
+    "experiment_artifacts": 188,
+    "source_snapshots": 10,
+    "inherited_references": 6,
+    "availability": "External SSD; missing/mutated bytes reopen dependent claims."
+  },
+  "limitations": [
+    "Inherited linked-object compilation and complete runtime bytes are not reconstructed.",
+    "The parent index is digest-bound; this turn does not revalidate every parent artifact.",
+    "Same-pass frames, restricted 144-key affinity and authored rectangles do not establish independent scenes, tracking or validated actor segmentation.",
+    "The screen and top-level numerical pass are separate fields; neither qualifies query transport."
+  ]
+}

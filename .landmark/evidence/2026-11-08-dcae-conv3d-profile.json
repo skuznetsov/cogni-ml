@@ -1,0 +1,2049 @@
+{
+  "schema": "cogni_ml.dcae_conv3d_profile/v1",
+  "date": "2026-11-08",
+  "source_base_commit": "c0c20b59b1ec0062dd78b8da3f53a340ed55c9c5",
+  "source_state": "Fresh default-profile receipts pin the final source set. Historical candidate receipts pin the archived 15-file experimental source and retained fusion binary.",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Default native DCAE-V operation/root/API profiling, fresh default parity, a historical fusion crossover, and bounded Conv3D arithmetic-boundary diagnostics.",
+    "performance_objective": "IN_PROGRESS: no repeatable matched speedup has been demonstrated or promoted.",
+    "numerical": "Fresh small and real-T10 default receipts are checked at unchanged atol=rtol=2e-5; both fixtures match bitwise.",
+    "not_claimed": [
+      "An optimized/default Conv3D speedup",
+      "Stable regression from unmatched or position-drifting candidate samples",
+      "Exclusive kernel time from command-root attribution",
+      "GPU occupancy, DRAM bandwidth or execution-unit cause from root timings",
+      "New full upstream model execution in this profiling task",
+      "Full generation rate, video quality or identity repair",
+      "No opaque MPS allocations or driver-internal waits",
+      "A hidden BF16 accumulator equivalence from the F32 diagnostic lane"
+    ]
+  },
+  "risk_tier": "CAUTION",
+  "implementation_sources": {
+    "examples/dcae_v_decoder_probe.cr": "6581438f0c8915735cd73f84cd56af9fbcf7f8b090295ff78f58c158fdb9ef15",
+    "src/ml/video/dcae_v_decoder.cr": "eacfa57f14dbc19a07ea788586cecb64e7439560fed47f947cce57726b4882ed",
+    "src/ml/video/dcae_v_decoder_profile.cr": "156f903ef2fe1e2d90e8f6c8d68bf1a556f3f8e7e65d7d50e9d23e1458426cb9",
+    "src/ml/video/dcae_v_mps.cr": "91033a4e9ee3ddb8a1ebb58642470054c27c407b1cd4a61cb5e7e930c65b1978",
+    "src/ml/video/dcae_v_mps_bridge.mm": "31c8298dc5fcfe00bee9c08edd6cd3d479b1b437596d243ed4d5ef26952cd56d",
+    "src/ml/video/dcae_v_norm_mps_bridge.mm": "e0068a7967073748cebd4ba09687f4253abf5a6bd1513b93e6298620afcf23ce",
+    "src/ml/video/dcae_v_encoder.cr": "161c242c318c0fe709d31b9864f8b3269a5c5c93997398138b6047d2e7d90464",
+    "src/ml/video/kernels/dcae_v_decoder.metal": "ac8ba52ced97a16b3576007ac3d4ad71426cfa390a63d1b0bd6c2f932c3d2a5b",
+    "src/ml/video/kernels/dcae_v_encoder.metal": "0df35bf37254ffbc9f69124069775145842b6209ccf955a90133ff82fda2ee15",
+    "src/ml/video/metal_mps_command_chain.cr": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893",
+    "src/ml/video/metal_mps_command_chain.mm": "f973b615fcc9a7d56541a974c6cf1862110f30babdff709234555b2d7ec44ba3",
+    "examples/support/hy_nomas_probe_instrumentation.cr": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48",
+    "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+    "src/ml/video/dcae_v_mps_profile.h": "ebfee79ef5f978aa5ba0e7100041cf9e414e4dde2200c281161a952c812d4b5a",
+    "src/ml/video/mps_api_profile.h": "8993c3cd22562a799d7fc682aa9230815e88d54988cad9d1eea52190cf390817"
+  },
+  "binary": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/final-build/dcae_v_decoder_probe",
+    "bytes": 1305640,
+    "sha256": "f7fb15360ae4adb2058827663e6267a5f0b58a9feb2afa133f61713e148ce259",
+    "availability": "local retained evidence"
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "module_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+    "weights_sha256": "f53c94b06685027b8131b7f52cab519edee1e51287d93d8fdac6a17506f8881b",
+    "source_full_reference_sha256": "0e873cba80446ef26920469ef3c1700f6e1686d021fb35b973872de4e383c2c7",
+    "prefix_derivation": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/prefix-derivation.json",
+      "bytes": 1428,
+      "sha256": "5365098208d210ee9033270c1d5b2e26e58c1b5786c63a5c32c0d579b2a50865",
+      "availability": "local retained evidence"
+    },
+    "prefix_lineage_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/prefix-lineage-verified.json",
+      "bytes": 3339,
+      "sha256": "7961bd5f4ed32793e83ddd5eb5e982c49a3958d647f5718046ce3f867eaa256c",
+      "availability": "local retained evidence"
+    },
+    "prefix_lineage_verifier": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/verify_prefix_lineage.py",
+      "bytes": 3268,
+      "sha256": "5f584c7224097dc19e734a5dffce89ac4f4e51529944e927a7fa3e6ddb740f0d",
+      "availability": "local retained evidence"
+    },
+    "policy": "Authenticated per-BCTHW-channel complete causal prefixes from the previously executed original PyTorch MPS BF16 oracle; no PyTorch in the native measured path."
+  },
+  "measurement": {
+    "real_input_shape": [
+      1,
+      32,
+      10,
+      9,
+      16
+    ],
+    "real_output_shape": [
+      1,
+      3,
+      40,
+      288,
+      512
+    ],
+    "small_input_shape": [
+      1,
+      32,
+      20,
+      1,
+      1
+    ],
+    "boundary": "Prepared setup/uploads excluded; request includes GPU command encoding and the existing sole terminal drain; serialization follows it.",
+    "attribution": "Marker endpoints may share a command root. Definite/candidate values are assignable root-duration bounds, not exclusive shader time; candidate group sums can double-count.",
+    "api": "Wall and calling-thread CPU times are separate. Nested scopes are not additive. Large commitAndContinue wall with small calling-thread CPU is consistent with blocking/backpressure. This aggregate does not establish temporal overlap with GPU roots or its cause.",
+    "clean_final_runs": {
+      "smoke": "smoke-default-clean-final",
+      "real_t10": "tile10-default-clean-final",
+      "both_profiled": true,
+      "layout": "default native BF16 Conv3D"
+    },
+    "co_residency": "Historical paired plans shared input/weights/scratch with distinct outputs, but both compiled plans coexisted. Unknown private MPS resources remain covered by the process guard; this is not a single-plan residency estimate.",
+    "root_scope": "Associated command intervals can include internal GPU waits or idle time; arithmetic dominance is not established. API profile phase0 is a whole-request aggregate, not a per-operation correlation."
+  },
+  "guard": {
+    "memory_accounting": "file-cache",
+    "reserve_pct": 10,
+    "process_group_cap_bytes": 19327352832,
+    "swap_growth_cap_bytes": 67108864,
+    "timeout_seconds": 1800,
+    "scope": "One model process at a time; sampled whole-group footprint covers opaque MPS resources. Reclaimable file cache is estimated, not guaranteed immediately free memory."
+  },
+  "synchronization": {
+    "production_change": "No added submit, pause/resume, explicit GPU wait or tensor readback. Profile reads root timestamps only after the existing terminal drain.",
+    "observed_completed_requests": "The fresh runs must each retain one terminal wait and zero instrumented named-buffer hot allocations, readbacks and preterminal waits.",
+    "disabled_profile": "Recorder is absent by default; weak graph API scopes perform a lightweight hook/TLS check and return without timing when the chain has no API profile. Zero overhead is not claimed."
+  },
+  "runs": [
+    {
+      "label": "tile10-profile",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-profile.command.json",
+          "bytes": 3159,
+          "sha256": "34b5e0b6496aa6e5a89ada23af8e1ce954f3363ad1ae16b39a9e52c8c23e636b",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-profile.execution.json",
+          "bytes": 204,
+          "sha256": "50f74336771a93cd71e756d2eca5d5a692b976e4b02f2a29dcdc93d2ace5ac0e",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-profile.comparison.json",
+          "bytes": 1985,
+          "sha256": "20ce5b01f054d3123c4c7a34f4036ecc9801695041aa84ffb6d0e6bf9667d210",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-profile.guard.jsonl",
+          "bytes": 65989,
+          "sha256": "57fa37f174a7c82bbdd4c111d82b1491a0770f65d6421e060e113f063c1af0cd",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-profile.log",
+          "bytes": 138273,
+          "sha256": "a91e07c8cb4f7cc0d4f63f7eae3127741753e541a4aea0582961a001471660b1",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 107.43792009353638,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "58c217c15d35f790fdf51e950efbfa9bc69ef39ec7b7fc2e6c55e9597aee0a20"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": true,
+          "sample_kind": "first_request_with_upload",
+          "wall_seconds": 105.123250125,
+          "encode_seconds": 80.489031458,
+          "terminal_wait_seconds": 24.634218541,
+          "gpu_seconds": 105.07793470681645,
+          "segments": 297,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5193231896,
+          "auto_layout": false,
+          "profile": true
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 9988098952,
+        "minimum_cache_aware_headroom_bytes": 32040714240,
+        "sampled_swap_growth_bytes": 0
+      },
+      "final_profile": {
+        "root_summary": {
+          "root_count": 297,
+          "root_duration_sum_seconds": 105.07793470681645,
+          "union_seconds": 105.07793470681645,
+          "envelope_seconds": 105.07813870813698,
+          "overlap_seconds": 0.0
+        },
+        "stage2_residual_group_definite_seconds": {
+          "stage_2/residual_conv3d": 53.33960137492977
+        },
+        "stage1_residual_group_definite_seconds": {
+          "stage_1/residual_conv3d": 26.613543540937826
+        },
+        "api": {
+          "name": "unassigned",
+          "operations": {
+            "graph_encode": {
+              "count": 0,
+              "wall_total_ns": 0,
+              "wall_max_ns": 0,
+              "thread_cpu_total_ns": 0,
+              "thread_cpu_max_ns": 0,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 0,
+              "exclusive_thread_cpu_total_ns": 0
+            },
+            "commit_and_continue": {
+              "count": 296,
+              "wall_total_ns": 80410203751,
+              "wall_max_ns": 5373194958,
+              "thread_cpu_total_ns": 5696958,
+              "thread_cpu_max_ns": 86041,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 80410203751,
+              "exclusive_thread_cpu_total_ns": 5696958
+            },
+            "t5_linear_encode": {
+              "count": 0,
+              "wall_total_ns": 0,
+              "wall_max_ns": 0,
+              "thread_cpu_total_ns": 0,
+              "thread_cpu_max_ns": 0,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 0,
+              "exclusive_thread_cpu_total_ns": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "tile10-default-final-profile",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-final-profile.command.json",
+          "bytes": 3393,
+          "sha256": "36b9082884a78e01d54cf9c889a686c3ce397fa8f38ad9ca40819b38d5d6cf32",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-final-profile.execution.json",
+          "bytes": 204,
+          "sha256": "17f8c6d7d380cfdfc348bda91c7daf6954276d8c3aa2c924d678fadc788f5af0",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-final-profile.comparison.json",
+          "bytes": 2079,
+          "sha256": "adb2930cc2da878461dd4316a2bd8972a2c1a77d89466b222f603739e46d8784",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-final-profile.guard.jsonl",
+          "bytes": 71272,
+          "sha256": "49ed2f8604c4e707b9c1ff1bdd64307bb4659c53321f6de9693bc62b3831fbbe",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-final-profile.log",
+          "bytes": 138823,
+          "sha256": "1801df8cc63fd8e0db4062ed1015adf4fe02d4af1ff1fcc338b68fc676e895b4",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 116.65697383880615,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "3d3ed1d16b0db1d5122201a62fabe56a9fb00a9b11a2d25f5dc2a9efa2004424"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "variant": "A",
+          "paired_layout_order": "",
+          "wall_seconds": 114.382768792,
+          "encode_seconds": 85.807379125,
+          "terminal_wait_seconds": 28.575389541,
+          "gpu_seconds": 114.33551350282505,
+          "segments": 297,
+          "gpu_root_union_seconds": null,
+          "gpu_root_envelope_seconds": null,
+          "gpu_root_overlap_seconds": null,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5193231896,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": true
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 9987754888,
+        "minimum_cache_aware_headroom_bytes": 29309288448,
+        "sampled_swap_growth_bytes": 0
+      },
+      "final_profile": {
+        "root_summary": {
+          "root_count": 297,
+          "root_duration_sum_seconds": 114.33551350282505,
+          "union_seconds": 114.33551350282505,
+          "envelope_seconds": 114.33570816670544,
+          "overlap_seconds": 0.0
+        },
+        "stage2_residual_group_definite_seconds": {
+          "stage_2/residual_conv3d": 57.30298966658302
+        },
+        "stage1_residual_group_definite_seconds": {
+          "stage_1/residual_conv3d": 30.68468108261004
+        },
+        "api": {
+          "name": "unassigned",
+          "operations": {
+            "graph_encode": {
+              "count": 325,
+              "wall_total_ns": 84961666678,
+              "wall_max_ns": 5765272750,
+              "thread_cpu_total_ns": 85353484,
+              "thread_cpu_max_ns": 5682917,
+              "nested_count": 265,
+              "nested_wall_total_ns": 84880760867,
+              "nested_thread_cpu_total_ns": 5272334,
+              "exclusive_wall_total_ns": 80905811,
+              "exclusive_thread_cpu_total_ns": 80081150
+            },
+            "commit_and_continue": {
+              "count": 296,
+              "wall_total_ns": 85722107410,
+              "wall_max_ns": 5764996000,
+              "thread_cpu_total_ns": 5793751,
+              "thread_cpu_max_ns": 112125,
+              "nested_count": 265,
+              "nested_wall_total_ns": 84880760867,
+              "nested_thread_cpu_total_ns": 5272334,
+              "exclusive_wall_total_ns": 85722107410,
+              "exclusive_thread_cpu_total_ns": 5793751
+            },
+            "t5_linear_encode": {
+              "count": 0,
+              "wall_total_ns": 0,
+              "wall_max_ns": 0,
+              "thread_cpu_total_ns": 0,
+              "thread_cpu_max_ns": 0,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 0,
+              "exclusive_thread_cpu_total_ns": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "smoke-conv-silu",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-conv-silu.command.json",
+          "bytes": 3527,
+          "sha256": "8a67f320aa3e77c8920e69cf8cb52819b224d903cdf66893b2ae5831adcde36c",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-conv-silu.execution.json",
+          "bytes": 203,
+          "sha256": "0e1a5809a7671ac07feade564da9e72f1b75360298ef8e4ad7c6e3c1188c4d12",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-conv-silu.comparison.json",
+          "bytes": 9528,
+          "sha256": "c055b800971d11b352fe0ca50a7db177710795ebd35ac5223978db4e8d633687",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-conv-silu.guard.jsonl",
+          "bytes": 6947,
+          "sha256": "81a71ba27fd0cd1f0901388ab6f966776eca1316af9d20bbba606adf3838787d",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-conv-silu.log",
+          "bytes": 3067,
+          "sha256": "5fa49bb833e4f0d65142b6ba7fcb3e7e5691fb4a92fd736db980313cc5777337",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 9.407865762710571,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "bcee97b151dc123f54f974980cefcc99b822fcebca8ab8e1748ff188778909a6"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "variant": "B",
+          "paired_layout_order": "",
+          "wall_seconds": 3.358366125,
+          "encode_seconds": 2.073966791,
+          "terminal_wait_seconds": 1.2843992499999999,
+          "gpu_seconds": 3.3443942486774176,
+          "segments": 149,
+          "gpu_root_union_seconds": null,
+          "gpu_root_envelope_seconds": null,
+          "gpu_root_overlap_seconds": null,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 2481731416,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 1,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "reused_request_diagnostic",
+          "variant": "B",
+          "paired_layout_order": "",
+          "wall_seconds": 3.315203125,
+          "encode_seconds": 2.038900083,
+          "terminal_wait_seconds": 1.2763027089999999,
+          "gpu_seconds": 3.313670832430944,
+          "segments": 149,
+          "gpu_root_union_seconds": null,
+          "gpu_root_envelope_seconds": null,
+          "gpu_root_overlap_seconds": null,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 2481731416,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 18,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 3033533368,
+        "minimum_cache_aware_headroom_bytes": 35399565312,
+        "sampled_swap_growth_bytes": 0
+      }
+    },
+    {
+      "label": "tile10-conv-silu",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu.command.json",
+          "bytes": 3373,
+          "sha256": "f581d2c7e423d06e09fd02d3048bd331db044e30e26d1621d5faf76aa6727f5e",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu.execution.json",
+          "bytes": 204,
+          "sha256": "ae737cad6daf9d6cc37402457e3efc6c96c304d53c45837379ebd33d8f5631b7",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu.comparison.json",
+          "bytes": 2089,
+          "sha256": "6e6ed70a2d9970ce8facf262922222cdefb20c937f5bd0571dc534a5ee05cf2c",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu.guard.jsonl",
+          "bytes": 67851,
+          "sha256": "36071732a9c1e870a201fce16cc60bda3acf4b32a9adff70afb9b50327d12c4e",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu.log",
+          "bytes": 2430,
+          "sha256": "f66125f90d9c32ba89e721594e52e70dec144f63e02a76f788567baba09144b7",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 111.71340107917786,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "4eb4953eb03afedbe9d9f080872ba74ac80bdd6d63ac9118804b9f79c70212c7"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "variant": "B",
+          "paired_layout_order": "",
+          "wall_seconds": 109.322353834,
+          "encode_seconds": 83.886974542,
+          "terminal_wait_seconds": 25.435379166,
+          "gpu_seconds": 109.27451875037514,
+          "segments": 297,
+          "gpu_root_union_seconds": null,
+          "gpu_root_envelope_seconds": null,
+          "gpu_root_overlap_seconds": null,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5193231896,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 9980136328,
+        "minimum_cache_aware_headroom_bytes": 28680437760,
+        "sampled_swap_growth_bytes": 0
+      }
+    },
+    {
+      "label": "tile10-conv-silu-abba",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.command.json",
+          "bytes": 3593,
+          "sha256": "3bb9e9395595fa07444b7d05b92a48024a0d1acfd3f38200138a8115c7831a96",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.execution.json",
+          "bytes": 300,
+          "sha256": "77d98cd110a61f2638ace9743478de17a25c35aa31f06ea4774a7000eda360f2",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.comparison.json",
+          "bytes": 2079,
+          "sha256": "adb2930cc2da878461dd4316a2bd8972a2c1a77d89466b222f603739e46d8784",
+          "availability": "local retained evidence"
+        },
+        "alternate.comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.alternate.comparison.json",
+          "bytes": 2089,
+          "sha256": "6e6ed70a2d9970ce8facf262922222cdefb20c937f5bd0571dc534a5ee05cf2c",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.guard.jsonl",
+          "bytes": 447204,
+          "sha256": "74d6353974565d4a2e532ef7dc5480e11ed2163fef9c5427fd7ba824c449f0b7",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-abba.log",
+          "bytes": 6016,
+          "sha256": "d211405a28cdf74bf64de9d9cd3c9c16773e0a6ff2dac7addc9916988ad7414c",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 744.2386729717255,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "3d3ed1d16b0db1d5122201a62fabe56a9fb00a9b11a2d25f5dc2a9efa2004424",
+        "alternate_output_sha256": "4eb4953eb03afedbe9d9f080872ba74ac80bdd6d63ac9118804b9f79c70212c7"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "warmup",
+          "variant": "A",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 108.59487825,
+          "encode_seconds": 83.69818975,
+          "terminal_wait_seconds": 24.896688417,
+          "gpu_seconds": 108.54464541724883,
+          "segments": 297,
+          "gpu_root_union_seconds": 108.54464541724883,
+          "gpu_root_envelope_seconds": 108.54485608334653,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 1,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "warmup",
+          "variant": "B",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 115.005395042,
+          "encode_seconds": 86.03061875,
+          "terminal_wait_seconds": 28.974776208,
+          "gpu_seconds": 115.00347858038731,
+          "segments": 298,
+          "gpu_root_union_seconds": 115.00347858038731,
+          "gpu_root_envelope_seconds": 115.00369683327153,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 2,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "A",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 140.382555875,
+          "encode_seconds": 106.547257,
+          "terminal_wait_seconds": 33.83529875,
+          "gpu_seconds": 140.38057379075326,
+          "segments": 297,
+          "gpu_root_union_seconds": 140.38057379075326,
+          "gpu_root_envelope_seconds": 140.38078387500718,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 3,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "B",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 128.79147525,
+          "encode_seconds": 100.34681625,
+          "terminal_wait_seconds": 28.444658875000002,
+          "gpu_seconds": 128.78965549869463,
+          "segments": 297,
+          "gpu_root_union_seconds": 128.78965549869463,
+          "gpu_root_envelope_seconds": 128.7898917084094,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 4,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "B",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 126.324730083,
+          "encode_seconds": 96.196143708,
+          "terminal_wait_seconds": 30.128586291,
+          "gpu_seconds": 126.32313008443452,
+          "segments": 298,
+          "gpu_root_union_seconds": 126.32313008443452,
+          "gpu_root_envelope_seconds": 126.32334904163145,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 5,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "A",
+          "paired_layout_order": "ABBA",
+          "wall_seconds": 121.575209584,
+          "encode_seconds": 93.48289825,
+          "terminal_wait_seconds": 28.092311208,
+          "gpu_seconds": 121.57381279231049,
+          "segments": 298,
+          "gpu_root_union_seconds": 121.57381279231049,
+          "gpu_root_envelope_seconds": 121.57403462496586,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "alternate.comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 10361064544,
+        "minimum_cache_aware_headroom_bytes": 27298938880,
+        "sampled_swap_growth_bytes": 0
+      }
+    },
+    {
+      "label": "tile10-conv-silu-baab",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.command.json",
+          "bytes": 3593,
+          "sha256": "efe1d27161f2071ef49f38f6954af997948d09e8584e6624c42bc038956861e1",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.execution.json",
+          "bytes": 300,
+          "sha256": "500dca7fc8b2a5b120240b4aca875a66aec22e79ef56a9ade7f574631d0ade89",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.comparison.json",
+          "bytes": 2079,
+          "sha256": "adb2930cc2da878461dd4316a2bd8972a2c1a77d89466b222f603739e46d8784",
+          "availability": "local retained evidence"
+        },
+        "alternate.comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.alternate.comparison.json",
+          "bytes": 2089,
+          "sha256": "6e6ed70a2d9970ce8facf262922222cdefb20c937f5bd0571dc534a5ee05cf2c",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.guard.jsonl",
+          "bytes": 440312,
+          "sha256": "060856cef7e5bf543075b1eddd8c9c3c754211141194f74bb5b6f595d136573b",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-conv-silu-baab.log",
+          "bytes": 6018,
+          "sha256": "5675cdde99419cc3e46350f29e88d5e4c53bd96e01ce09729a342b2cb5014c18",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 731.8108222484589,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "3d3ed1d16b0db1d5122201a62fabe56a9fb00a9b11a2d25f5dc2a9efa2004424",
+        "alternate_output_sha256": "4eb4953eb03afedbe9d9f080872ba74ac80bdd6d63ac9118804b9f79c70212c7"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "warmup",
+          "variant": "B",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 106.988733708,
+          "encode_seconds": 82.433389875,
+          "terminal_wait_seconds": 24.555343708,
+          "gpu_seconds": 106.9428915430326,
+          "segments": 297,
+          "gpu_root_union_seconds": 106.9428915430326,
+          "gpu_root_envelope_seconds": 106.94310016650707,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 1,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "warmup",
+          "variant": "A",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 108.464987125,
+          "encode_seconds": 81.994990875,
+          "terminal_wait_seconds": 26.469996125,
+          "gpu_seconds": 108.4630770853255,
+          "segments": 298,
+          "gpu_root_union_seconds": 108.4630770853255,
+          "gpu_root_envelope_seconds": 108.46330233314075,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 2,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "B",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 127.540590083,
+          "encode_seconds": 95.28716875,
+          "terminal_wait_seconds": 32.253421291,
+          "gpu_seconds": 127.53763508563861,
+          "segments": 297,
+          "gpu_root_union_seconds": 127.53763508563861,
+          "gpu_root_envelope_seconds": 127.53786387504078,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 3,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "A",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 143.950504958,
+          "encode_seconds": 112.646047375,
+          "terminal_wait_seconds": 31.304457458999998,
+          "gpu_seconds": 143.94850987405516,
+          "segments": 297,
+          "gpu_root_union_seconds": 143.94850987405516,
+          "gpu_root_envelope_seconds": 143.94872537488118,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 4,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "A",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 123.643951041,
+          "encode_seconds": 95.75561575,
+          "terminal_wait_seconds": 27.888335167,
+          "gpu_seconds": 123.64098883373663,
+          "segments": 297,
+          "gpu_root_union_seconds": 123.64098883373663,
+          "gpu_root_envelope_seconds": 123.64124087500386,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "native",
+          "profile": false
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 5,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "matched_crossover",
+          "variant": "B",
+          "paired_layout_order": "BAAB",
+          "wall_seconds": 117.79171225,
+          "encode_seconds": 90.394519042,
+          "terminal_wait_seconds": 27.397193125,
+          "gpu_seconds": 117.79008616530336,
+          "segments": 298,
+          "gpu_root_union_seconds": 117.79008616530336,
+          "gpu_root_envelope_seconds": 117.79031899990514,
+          "gpu_root_overlap_seconds": 0.0,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5228621336,
+          "auto_layout": false,
+          "channels_last_conv": false,
+          "conv_layout": "conv-silu-stage2",
+          "profile": false
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "alternate.comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 10361064568,
+        "minimum_cache_aware_headroom_bytes": 26462797824,
+        "sampled_swap_growth_bytes": 0
+      }
+    },
+    {
+      "label": "smoke-default-clean-final",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-default-clean-final.command.json",
+          "bytes": 3547,
+          "sha256": "5c9cd03b5abb7cf45eee7069fc6a062bbd3b809c4b6ce66d5c903f52acefc934",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-default-clean-final.execution.json",
+          "bytes": 203,
+          "sha256": "ab2fe9eee2263360153029f084d98457ef0d69d82ae626ca51416ebc56521b20",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-default-clean-final.comparison.json",
+          "bytes": 9455,
+          "sha256": "a5d0a527b8fdee49a9002f00bcf23f6aeaf0c848e019e59cc0ec9e3f12a0eb58",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-default-clean-final.guard.jsonl",
+          "bytes": 7258,
+          "sha256": "8653dd480bfce22bd7c129325917441bda73c259b82d390cdab312f74d320af6",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/smoke-default-clean-final.log",
+          "bytes": 399431,
+          "sha256": "3971a55f44f56f6b268ddd6f0059c885e3ae1deaee12b6d55fff1828ea7920a6",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 9.972882986068726,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "aa6b8de1f07214579c722f13a943f80b72a4c34e68cbaef5c8c255a3b18314f4"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 3.658899083,
+          "encode_seconds": 2.237864042,
+          "terminal_wait_seconds": 1.421034959,
+          "gpu_seconds": 3.6456114589236677,
+          "segments": 149,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 2481731416,
+          "conv_layout": "native",
+          "profile": true
+        },
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 1,
+          "weights_upload": false,
+          "prepared_weight_validation": false,
+          "sample_kind": "reused_request_diagnostic",
+          "wall_seconds": 3.596228,
+          "encode_seconds": 2.20978925,
+          "terminal_wait_seconds": 1.386438625,
+          "gpu_seconds": 3.5938997485209256,
+          "segments": 149,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 2481731416,
+          "conv_layout": "native",
+          "profile": true
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 18,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 3051293648,
+        "minimum_cache_aware_headroom_bytes": 34166145024,
+        "sampled_swap_growth_bytes": 0
+      },
+      "final_profile": {
+        "root_summary": {
+          "root_count": 149,
+          "root_duration_sum_seconds": 3.5938997485209256,
+          "union_seconds": 3.5938997485209256,
+          "envelope_seconds": 3.5939971250481904,
+          "overlap_seconds": 0.0
+        },
+        "stage2_residual_group_definite_seconds": {
+          "stage_2/residual_conv3d": 0.0
+        },
+        "stage1_residual_group_definite_seconds": {
+          "stage_1/residual_conv3d": 0.0
+        },
+        "api": {
+          "name": "unassigned",
+          "operations": {
+            "graph_encode": {
+              "count": 650,
+              "wall_total_ns": 1325293159,
+              "wall_max_ns": 88826833,
+              "thread_cpu_total_ns": 32969673,
+              "thread_cpu_max_ns": 276959,
+              "nested_count": 86,
+              "nested_wall_total_ns": 1293469788,
+              "nested_thread_cpu_total_ns": 1368792,
+              "exclusive_wall_total_ns": 31823371,
+              "exclusive_thread_cpu_total_ns": 31600881
+            },
+            "commit_and_continue": {
+              "count": 148,
+              "wall_total_ns": 2173852320,
+              "wall_max_ns": 150275667,
+              "thread_cpu_total_ns": 2221744,
+              "thread_cpu_max_ns": 46625,
+              "nested_count": 86,
+              "nested_wall_total_ns": 1293469788,
+              "nested_thread_cpu_total_ns": 1368792,
+              "exclusive_wall_total_ns": 2173852320,
+              "exclusive_thread_cpu_total_ns": 2221744
+            },
+            "t5_linear_encode": {
+              "count": 0,
+              "wall_total_ns": 0,
+              "wall_max_ns": 0,
+              "thread_cpu_total_ns": 0,
+              "thread_cpu_max_ns": 0,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 0,
+              "exclusive_thread_cpu_total_ns": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "tile10-default-clean-final",
+      "files": {
+        "command.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-clean-final.command.json",
+          "bytes": 3453,
+          "sha256": "1d73af093d3f768716743dbbfe1a8b5e2fa01b195cd9aa9dde025305879c670c",
+          "availability": "local retained evidence"
+        },
+        "execution.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-clean-final.execution.json",
+          "bytes": 203,
+          "sha256": "3c58aa18ecd83fad86f9fa2ca9f77a890b3b5ab4c43aad6ee7c4a6177b62c8bd",
+          "availability": "local retained evidence"
+        },
+        "comparison.json": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-clean-final.comparison.json",
+          "bytes": 2016,
+          "sha256": "4843b38d6f73a07b751d9b0e3c575ba357d91d48f76d4055f212a43769278d58",
+          "availability": "local retained evidence"
+        },
+        "guard.jsonl": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-clean-final.guard.jsonl",
+          "bytes": 69414,
+          "sha256": "1c56b635a29a2075c0c09f793432643690cb72d275ff4c985a9fb23d3c8720ad",
+          "availability": "local retained evidence"
+        },
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-default-clean-final.log",
+          "bytes": 138337,
+          "sha256": "fbc9adafd30140c6754bda7dea0f16e6e38b48107a55166c659fc492042fe0a3",
+          "availability": "local retained evidence"
+        }
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 113.7258551120758,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "output_sha256": "858e9ffd887418e57d30b310296d0d84287100e9bbf270181ff7acf4853d6ce1"
+      },
+      "requests": [
+        {
+          "event": "dcae_decoder_native_request",
+          "request": 0,
+          "weights_upload": false,
+          "prepared_weight_validation": true,
+          "sample_kind": "first_request",
+          "wall_seconds": 111.49020775,
+          "encode_seconds": 85.800832167,
+          "terminal_wait_seconds": 25.6893755,
+          "gpu_seconds": 111.4434644987341,
+          "segments": 297,
+          "waits": 1,
+          "metrics": {
+            "allocations": 0,
+            "readbacks": 0,
+            "preterminal_waits": 0
+          },
+          "named_bytes": 5193231896,
+          "conv_layout": "native",
+          "profile": true
+        }
+      ],
+      "comparison.json": {
+        "passed": true,
+        "tensor_count": 2,
+        "total_failed_count": 0,
+        "total_bitwise_mismatch_count": 0,
+        "total_nonfinite_count": 0,
+        "total_tolerance_failure_count": 0,
+        "first_failed_tensor": null,
+        "first_failed_trace": null
+      },
+      "memory": {
+        "sampled_group_peak_bytes": 9988017032,
+        "minimum_cache_aware_headroom_bytes": 27320614912,
+        "sampled_swap_growth_bytes": 0
+      },
+      "final_profile": {
+        "root_summary": {
+          "root_count": 297,
+          "root_duration_sum_seconds": 111.4434644987341,
+          "union_seconds": 111.4434644987341,
+          "envelope_seconds": 111.44365804176778,
+          "overlap_seconds": 0.0
+        },
+        "stage2_residual_group_definite_seconds": {
+          "stage_2/residual_conv3d": 57.07927633356303
+        },
+        "stage1_residual_group_definite_seconds": {
+          "stage_1/residual_conv3d": 27.780344791710377
+        },
+        "api": {
+          "name": "unassigned",
+          "operations": {
+            "graph_encode": {
+              "count": 325,
+              "wall_total_ns": 84932454217,
+              "wall_max_ns": 5714838916,
+              "thread_cpu_total_ns": 90481009,
+              "thread_cpu_max_ns": 4396750,
+              "nested_count": 265,
+              "nested_wall_total_ns": 84847265175,
+              "nested_thread_cpu_total_ns": 5606130,
+              "exclusive_wall_total_ns": 85189042,
+              "exclusive_thread_cpu_total_ns": 84874879
+            },
+            "commit_and_continue": {
+              "count": 296,
+              "wall_total_ns": 85710928094,
+              "wall_max_ns": 5714420959,
+              "thread_cpu_total_ns": 6187919,
+              "thread_cpu_max_ns": 107667,
+              "nested_count": 265,
+              "nested_wall_total_ns": 84847265175,
+              "nested_thread_cpu_total_ns": 5606130,
+              "exclusive_wall_total_ns": 85710928094,
+              "exclusive_thread_cpu_total_ns": 6187919
+            },
+            "t5_linear_encode": {
+              "count": 0,
+              "wall_total_ns": 0,
+              "wall_max_ns": 0,
+              "thread_cpu_total_ns": 0,
+              "thread_cpu_max_ns": 0,
+              "nested_count": 0,
+              "nested_wall_total_ns": 0,
+              "nested_thread_cpu_total_ns": 0,
+              "exclusive_wall_total_ns": 0,
+              "exclusive_thread_cpu_total_ns": 0
+            }
+          }
+        }
+      }
+    }
+  ],
+  "historical_candidate_archive": {
+    "manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/experimental-controls-source/manifest.json",
+      "bytes": 2058,
+      "sha256": "5d3f717f858053404c254fb0641136d68de5e3b843c829aadc71dcda2dfeb5c1",
+      "availability": "local retained evidence"
+    },
+    "source_root": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/experimental-controls-source",
+    "source_count": 15,
+    "retained_fusion_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/fusion-build/dcae_v_decoder_probe",
+      "bytes": 1344760,
+      "sha256": "32b99f22f9aadafa52d3888221edfa3642aea2da5d5eeb4626f84a1486565519",
+      "availability": "local retained evidence"
+    },
+    "retired_temporal_index_test": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/experimental-controls-source/retired-temporal-index-contract-test.py",
+      "bytes": 8024,
+      "sha256": "a45e5aa12a5caaa2853b03c7a950a963069e4f2b8ff2ad10f0edac2324cc8b94",
+      "availability": "local retained evidence"
+    },
+    "retired_test_manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/experimental-controls-source/retired-test.json",
+      "bytes": 463,
+      "sha256": "bb7a7fe70f2ce56b82f3caeecd8a0d25841e56238b6e37a4197c6e5541fef313",
+      "availability": "local retained evidence"
+    },
+    "historical_run_labels": [
+      "smoke-conv-silu",
+      "tile10-conv-silu",
+      "tile10-conv-silu-abba",
+      "tile10-conv-silu-baab"
+    ],
+    "scope": "Historical candidate implementation is retained for replay and source pin verification; experimental mode/paired flags are absent from the final active API."
+  },
+  "fusion_candidate_crossover": {
+    "abba": {
+      "label": "tile10-conv-silu-abba",
+      "order": "ABBA",
+      "measured_requests": [
+        {
+          "request": 2,
+          "variant": "A",
+          "wall_seconds": 140.382555875,
+          "gpu_seconds": 140.38057379075326
+        },
+        {
+          "request": 3,
+          "variant": "B",
+          "wall_seconds": 128.79147525,
+          "gpu_seconds": 128.78965549869463
+        },
+        {
+          "request": 4,
+          "variant": "B",
+          "wall_seconds": 126.324730083,
+          "gpu_seconds": 126.32313008443452
+        },
+        {
+          "request": 5,
+          "variant": "A",
+          "wall_seconds": 121.575209584,
+          "gpu_seconds": 121.57381279231049
+        }
+      ],
+      "both_outputs_bitwise_identical": true
+    },
+    "baab": {
+      "label": "tile10-conv-silu-baab",
+      "order": "BAAB",
+      "measured_requests": [
+        {
+          "request": 2,
+          "variant": "B",
+          "wall_seconds": 127.540590083,
+          "gpu_seconds": 127.53763508563861
+        },
+        {
+          "request": 3,
+          "variant": "A",
+          "wall_seconds": 143.950504958,
+          "gpu_seconds": 143.94850987405516
+        },
+        {
+          "request": 4,
+          "variant": "A",
+          "wall_seconds": 123.643951041,
+          "gpu_seconds": 123.64098883373663
+        },
+        {
+          "request": 5,
+          "variant": "B",
+          "wall_seconds": 117.79171225,
+          "gpu_seconds": 117.79008616530336
+        }
+      ],
+      "both_outputs_bitwise_identical": true
+    },
+    "conclusion": "Both primary and alternate exports are bitwise identical in each historical paired run. No speedup is admitted: in both orders the native A second executable invocation (first measured A after warmup) is slower than its third invocation, showing substantial position/call-use drift."
+  },
+  "arithmetic_discriminator": {
+    "guard_config": {
+      "memory_accounting": "file-cache",
+      "reserve_pct": 10,
+      "process_group_cap_bytes": 4294967296,
+      "swap_growth_cap_bytes": 67108864
+    },
+    "scope": "Earlier ordered-FMA single stage-2 Conv3D discriminator. It is a rejected historical reduction-order experiment, not evidence about default-path performance.",
+    "command": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-t40-h3-w5.command.json",
+      "bytes": 4040,
+      "sha256": "c8da348ef34647ee4b4f2006841275014c4e465aba475fc99554ffddc50cea8d",
+      "availability": "local retained evidence"
+    },
+    "execution": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-t40-h3-w5.execution.json",
+      "bytes": 1211,
+      "sha256": "e783175fb0be2cd223aaee2243983275a9e0f8a21144dc08e5628480a40b64ba",
+      "availability": "local retained evidence"
+    },
+    "guard": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-t40-h3-w5.guard.jsonl",
+      "bytes": 3210,
+      "sha256": "03599f643d9a4ffb27e8ce912d5694f95a8ed38156f1c3b4ad0f185e3927eae2",
+      "availability": "local retained evidence"
+    },
+    "source": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-discriminator/ordered_conv_discriminator.cr",
+      "bytes": 11200,
+      "sha256": "619da4a44cbfd09f29ecc256ceca3e16247af500735f29b137ea8c6de60309a0",
+      "availability": "local retained evidence"
+    },
+    "comparator": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-discriminator/compare_ordered_conv.py",
+      "bytes": 3812,
+      "sha256": "b2ca04e6af512aad649cfbd84cabbd75d67096b0fdd8d3526cdd2943d2e1809b",
+      "availability": "local retained evidence"
+    },
+    "comparison": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-discriminator/arithmetic-t40-h3-w5/comparison.json",
+      "bytes": 1338,
+      "sha256": "579e05170d60ee4fbbf9a30166af4658d74749e4a411c5210650134863871b2b",
+      "availability": "local retained evidence"
+    },
+    "decision": "Rejected: ordered F32 FMA differs from the native BF16 Conv3D reduction and fails the unchanged tolerance on the bounded synthetic discriminator."
+  },
+  "arithmetic_boundary_diagnostic": {
+    "scope": "Single stage-2-shaped C512 BF16 Conv3D on shared synthetic T40/H3/W5 input/cache and real conv1 weights/bias; isolated arithmetic-boundary diagnostic, not a full model execution or performance measurement.",
+    "guard_config": {
+      "memory_accounting": "file-cache",
+      "reserve_pct": 10,
+      "process_group_cap_bytes": 4294967296,
+      "swap_growth_cap_bytes": 67108864
+    },
+    "native": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-t40-h3-w5-v2.command.json",
+        "bytes": 4781,
+        "sha256": "bba68d0b13f336a689d139b9dab4c1cb1d9a510b81a6faa1c9e6d2184d3e34b8",
+        "availability": "local retained evidence"
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 1.6442480830010027,
+        "source_unchanged": true,
+        "binary_unchanged": true,
+        "outputs": {
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/baseline-invalid-post.bf16": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/baseline-valid-post.bf16": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/bias.bf16": "3aebeaf0f26b26e77994d24aeae26f89b92f029b7bcdd2302695bfdefc51a199",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/cache.bf16": "f9542c65b3076ae9a8c89e99e04344d4633b08f657da875472e58ec27d09b9dc",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/input.bf16": "4398ca6bfd389634d93a9bc1e167e5417edf0708e056955acfb48561a7e55fd0",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/manifest.json": "672e93ffd10bc12b6c0bb119209aa31338beb4ead5c9a493a90b683cd22ce4c0",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/mpsf32-invalid-accum.f32": "ba5613136f805eb24ccd352bd40508a96954378740b4e278ea6c546eb6750921",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/mpsf32-valid-accum.f32": "976375a3d3ad35cc4b3e07fa50575526822f83b2d2bb067f7930f17f4c900483",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-invalid-post.bf16": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-invalid-pre.bf16": "a3cf779735d19e8872c85e9554392c7d69b60d236a8944d088c1677d131f8b4b",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-valid-post.bf16": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-valid-pre.bf16": "cff8b1bf40d5711969c4e30d869eb353338828012db41bf7b182367565339463",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-accum.f32": "7e27bf1795d580a38c322448b9555761089029edaf09a18fcb7bf3b7c25b7077",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-post.bf16": "34d0263bebe022ab75df99fb4ef7ab9cc3b6bd9c02ff27b1059b4b690966fe64",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-pre.bf16": "d29f60fb9d5dccf4baef428e16be9df809f4a8dfb482f4c543ea9c59c4154a89",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-accum.f32": "7fa5ef3672ac50fdf4033604862d0481dd2b40ae6c233a664725d263b9947d3c",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-post.bf16": "7f5726ea87a98c0f7d5abcfeb9c4d907203d148531db1fda2b253fdd153582bb",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-pre.bf16": "f8f4672832635d7735b1041cee63a421f022b6d2f7cb4c0804cf4fbdae2937f7",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/original-native-invalid-post.bf16": "34d0263bebe022ab75df99fb4ef7ab9cc3b6bd9c02ff27b1059b4b690966fe64",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/original-native-valid-post.bf16": "7f5726ea87a98c0f7d5abcfeb9c4d907203d148531db1fda2b253fdd153582bb",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/weight.bf16": "3c82a9bce393d00ff9fa51efa890d86febed75ce1a3f34d98530a31a0f356b69"
+        }
+      },
+      "execution_file": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-t40-h3-w5-v2.execution.json",
+        "bytes": 4897,
+        "sha256": "47304bf5ef14258dee64d69dc00fd90a021c1bd020509d6bbee8a43277f4739e",
+        "availability": "local retained evidence"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-t40-h3-w5-v2.guard.jsonl",
+        "bytes": 2290,
+        "sha256": "221464e490bcb8b6c0266445561cb7d2f6953656af01e7a8fc49e9c755e66c81",
+        "availability": "local retained evidence"
+      },
+      "log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-t40-h3-w5-v2.log",
+        "bytes": 3423,
+        "sha256": "5336046918a80f533416fb46721fb591550261b58e94f5a72bd07e8748a3d132",
+        "availability": "local retained evidence"
+      },
+      "binary": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-build/dcae_v_arithmetic_boundaries",
+        "bytes": 1235600,
+        "sha256": "9db872e2e9ba265f076be45afcdc0e288e4de09cb732edc2429f0a10c10363ef",
+        "availability": "local retained evidence"
+      },
+      "manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/manifest.json",
+        "bytes": 3157,
+        "sha256": "672e93ffd10bc12b6c0bb119209aa31338beb4ead5c9a493a90b683cd22ce4c0",
+        "availability": "local retained evidence"
+      },
+      "comparison": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/arithmetic-boundaries-comparison.json",
+        "bytes": 14041,
+        "sha256": "628091063b7059999bc61f564136e233a5d75644285c90bf081bc65fa5c443f1",
+        "availability": "local retained evidence"
+      },
+      "outputs": [
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/baseline-invalid-post.bf16",
+          "bytes": 614400,
+          "sha256": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/baseline-valid-post.bf16",
+          "bytes": 614400,
+          "sha256": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/bias.bf16",
+          "bytes": 1024,
+          "sha256": "3aebeaf0f26b26e77994d24aeae26f89b92f029b7bcdd2302695bfdefc51a199",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/cache.bf16",
+          "bytes": 15360,
+          "sha256": "f9542c65b3076ae9a8c89e99e04344d4633b08f657da875472e58ec27d09b9dc",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/input.bf16",
+          "bytes": 614400,
+          "sha256": "4398ca6bfd389634d93a9bc1e167e5417edf0708e056955acfb48561a7e55fd0",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/mpsf32-invalid-accum.f32",
+          "bytes": 1228800,
+          "sha256": "ba5613136f805eb24ccd352bd40508a96954378740b4e278ea6c546eb6750921",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/mpsf32-valid-accum.f32",
+          "bytes": 1228800,
+          "sha256": "976375a3d3ad35cc4b3e07fa50575526822f83b2d2bb067f7930f17f4c900483",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-invalid-post.bf16",
+          "bytes": 614400,
+          "sha256": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-invalid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "a3cf779735d19e8872c85e9554392c7d69b60d236a8944d088c1677d131f8b4b",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-valid-post.bf16",
+          "bytes": 614400,
+          "sha256": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/multi-valid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "cff8b1bf40d5711969c4e30d869eb353338828012db41bf7b182367565339463",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-accum.f32",
+          "bytes": 1228800,
+          "sha256": "7e27bf1795d580a38c322448b9555761089029edaf09a18fcb7bf3b7c25b7077",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-post.bf16",
+          "bytes": 614400,
+          "sha256": "34d0263bebe022ab75df99fb4ef7ab9cc3b6bd9c02ff27b1059b4b690966fe64",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-invalid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "d29f60fb9d5dccf4baef428e16be9df809f4a8dfb482f4c543ea9c59c4154a89",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-accum.f32",
+          "bytes": 1228800,
+          "sha256": "7fa5ef3672ac50fdf4033604862d0481dd2b40ae6c233a664725d263b9947d3c",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-post.bf16",
+          "bytes": 614400,
+          "sha256": "7f5726ea87a98c0f7d5abcfeb9c4d907203d148531db1fda2b253fdd153582bb",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/native-valid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "f8f4672832635d7735b1041cee63a421f022b6d2f7cb4c0804cf4fbdae2937f7",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/original-native-invalid-post.bf16",
+          "bytes": 614400,
+          "sha256": "34d0263bebe022ab75df99fb4ef7ab9cc3b6bd9c02ff27b1059b4b690966fe64",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/original-native-valid-post.bf16",
+          "bytes": 614400,
+          "sha256": "7f5726ea87a98c0f7d5abcfeb9c4d907203d148531db1fda2b253fdd153582bb",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-invalid-post.bf16",
+          "bytes": 614400,
+          "sha256": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-invalid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "a3cf779735d19e8872c85e9554392c7d69b60d236a8944d088c1677d131f8b4b",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-oracle.json",
+          "bytes": 1073,
+          "sha256": "ca358b714d408f8500a43456990dfccd7960c3debfa8bfad605490d4eb3cfb99",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-valid-post.bf16",
+          "bytes": 614400,
+          "sha256": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-valid-pre.bf16",
+          "bytes": 614400,
+          "sha256": "cff8b1bf40d5711969c4e30d869eb353338828012db41bf7b182367565339463",
+          "availability": "local retained evidence"
+        },
+        {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/weight.bf16",
+          "bytes": 14155776,
+          "sha256": "3c82a9bce393d00ff9fa51efa890d86febed75ce1a3f34d98530a31a0f356b69",
+          "availability": "local retained evidence"
+        }
+      ]
+    },
+    "torch_mps_oracle": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-torch-mps.command.json",
+        "bytes": 2355,
+        "sha256": "b4ca6b58b3a1ac6c6426c61e512bfc3b64dd35818f50aebb1234a7770357a6b2",
+        "availability": "local retained evidence"
+      },
+      "execution": {
+        "exit_code": 0,
+        "elapsed_seconds": 2.169521792093292,
+        "sources_unchanged": true,
+        "inputs_unchanged": true,
+        "outputs_sha256": {
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-invalid-post.bf16": "6a469bde6a260e89e270cd3aedf01e4498058eadafa6e3a3698dadea57da1b84",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-invalid-pre.bf16": "a3cf779735d19e8872c85e9554392c7d69b60d236a8944d088c1677d131f8b4b",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-oracle.json": "ca358b714d408f8500a43456990dfccd7960c3debfa8bfad605490d4eb3cfb99",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-valid-post.bf16": "e87cdec224ab42c4fa22fd8d6efcaf25d81cefb88600f571e703672c59b4b117",
+          "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-valid-pre.bf16": "cff8b1bf40d5711969c4e30d869eb353338828012db41bf7b182367565339463"
+        }
+      },
+      "execution_file": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-torch-mps.execution.json",
+        "bytes": 1296,
+        "sha256": "2c79a24e26a00e52cc27972e6770e3340598a92ed4e00f2524b6414b06b09a3a",
+        "availability": "local retained evidence"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-torch-mps.guard.jsonl",
+        "bytes": 2601,
+        "sha256": "b434a7b6496a989d295aa68140a32ae94e42ecf2dd58ffdb85fb8259b212d7fe",
+        "availability": "local retained evidence"
+      },
+      "log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries-torch-mps.log",
+        "bytes": 1073,
+        "sha256": "ca358b714d408f8500a43456990dfccd7960c3debfa8bfad605490d4eb3cfb99",
+        "availability": "local retained evidence"
+      },
+      "oracle_result": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/arithmetic-boundaries-t40-h3-w5-v2/torch-mps-oracle.json",
+        "bytes": 1073,
+        "sha256": "ca358b714d408f8500a43456990dfccd7960c3debfa8bfad605490d4eb3cfb99",
+        "availability": "local retained evidence"
+      },
+      "scope_limit": "Standalone PyTorch MPS Conv3D operator oracle over the same exported inputs; not a fresh full-model execution, not a performance comparison, and not proof of the hidden BF16 accumulator used by native MPS."
+    },
+    "sources": {
+      "native_crystal": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/dcae_v_arithmetic_boundaries.cr",
+        "bytes": 21142,
+        "sha256": "d28cb474b72ab715d1bc25967a5f15d31c9c10d4096a8a1f2c30243408e5ef81",
+        "availability": "local retained evidence"
+      },
+      "native_bridge": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/dcae_v_arithmetic_boundaries_bridge.mm",
+        "bytes": 18370,
+        "sha256": "8c65c10dc8a615d534621eb567cecbae0299b65793798daa6b0183b66c7a6409",
+        "availability": "local retained evidence"
+      },
+      "native_metal": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/dcae_v_arithmetic_boundaries.metal",
+        "bytes": 3271,
+        "sha256": "739d350901e59751480cb72172e771bc7c74107ec5ce0e6bc19fd5e405a274a1",
+        "availability": "local retained evidence"
+      },
+      "comparator": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/compare_arithmetic_boundaries.py",
+        "bytes": 12759,
+        "sha256": "08c6d4448b49e259f22223d32e53e8189f91efd5c73e4e1bf30fc5ab5c09bb3b",
+        "availability": "local retained evidence"
+      },
+      "torch_oracle": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/arithmetic-boundaries/torch_mps_oracle.py",
+        "bytes": 5112,
+        "sha256": "1b2d0c0a58cfa0a55af4c124040e554f764541cd2aa0a66e6b7445f470dad95d",
+        "availability": "local retained evidence"
+      },
+      "runner": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/run_boundary_oracle.py",
+        "bytes": 2192,
+        "sha256": "3ffeb9deed098ec8d025be25027c9fbb0edcaf133f719c752008d376a6b798e2",
+        "availability": "local retained evidence"
+      },
+      "memory_guard": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "bytes": 37589,
+        "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+        "availability": "local retained evidence"
+      }
+    }
+  },
+  "decisions": [
+    "Fresh final-source default profile is the admitted measurement path; profiling is opt-in and no speedup is claimed.",
+    "Residual Conv3D stage2/stage1 dominated stage-associated root intervals in earlier profiles, but root intervals do not localize exclusive convolution compute or exclude internal waits.",
+    "Auto layout, channels-last, temporal tiling, core optimization, F32 Conv3D and temporal Conv2D routes are no longer active API candidates; retain only historical disposition/evidence.",
+    "The historical fused-convolution crossover passed bitwise output comparison in both orders, but A's second executable invocation is slower than its third in each order; timing drift prevents a stable paired gain claim.",
+    "The fresh standalone PyTorch MPS Conv3D pre/post outputs match the multi-target BF16 boundary control bitwise for both cache cases; native pre-bias output does not, so accumulator/reduction order remains unresolved.",
+    "The upcast-F32 MPS lane rounds to the BF16 controls on this geometry, but it does not reveal the native BF16 backend's hidden accumulator semantics.",
+    "The profile API aggregate is a whole-request diagnostic and cannot be correlated to individual GPU roots by this evidence."
+  ],
+  "historical_candidate_source_archives": [
+    "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/rejected-temporal2d-source",
+    "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/rejected-f32-source",
+    "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/validated-temporal-tiles-source"
+  ],
+  "instruments": {
+    "scope": "Diagnostic only, not speedup evidence. Short trace has inventory but no shader-duration/counter rows; no hardware-cause inference.",
+    "failed_capture_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-metal-capture.partial-audit.md",
+      "bytes": 1373,
+      "sha256": "017f00bbc7020319173085bb91bc0201ac1d14c3a482cbde594827d5338437b8",
+      "availability": "local retained evidence"
+    },
+    "process_cleanup_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/trace-process-cleanup-audit.json",
+      "bytes": 381,
+      "sha256": "59ec0fad36c86f008f492587830e70f1ce87484e5cc4fc4b7f3368a8bf3e1e1d",
+      "availability": "local retained evidence"
+    },
+    "short_wrapper": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/capture_metal_short.py",
+      "bytes": 3066,
+      "sha256": "c1c4cff318f2c581a34e6c205f74959543394288122ca0e080100a71417517ea",
+      "availability": "local retained evidence"
+    },
+    "failed_wrapper": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/capture_metal.py",
+      "bytes": 3107,
+      "sha256": "a019244caaba42016d734c799aafc60130d2cb327d8d4ce2a0a38ed71244494b",
+      "availability": "local retained evidence"
+    },
+    "short_schema_inventory": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-metal-short.schemas.txt",
+      "bytes": 2327,
+      "sha256": "94858e084cf5b0413de38ee0d01c896f2b245ad2a6c41d39d359ae67f8b030e4",
+      "availability": "local retained evidence"
+    },
+    "short_table_inventory": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-metal-short.table-inventory.txt",
+      "bytes": 968,
+      "sha256": "046a57c5437b608927603dfb65d9e7c13e818c7a63ee15082d98e50a51da7bec",
+      "availability": "local retained evidence"
+    },
+    "sanitized_summary": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/tile10-metal-short.sanitized-summary.md",
+      "bytes": 2219,
+      "sha256": "be19be9e1b8bb150bf6829b49f8543b012d7f65b734a194a6f46e8e0eff17420",
+      "availability": "local retained evidence"
+    },
+    "raw_bundle_retirement": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/trace-bundle-cleanup.json",
+      "bytes": 1604,
+      "sha256": "d4841995ec12869b74c08c84bdae5d1b33190dd8b519f29f42166898009e2822",
+      "availability": "local retained evidence"
+    },
+    "privacy": "Raw Instruments trace bundles can contain inherited process environment. Only allowlisted summaries are retained; raw metadata is not part of this packet."
+  },
+  "verification": {
+    "crystal": {
+      "examples": 29,
+      "failures": 0,
+      "log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/clean-final-crystal-specs.log",
+        "bytes": 106,
+        "sha256": "e7f528ed4e9f56d553af40259d82bc89c07b76314d36d81cd62cd284ace1b948",
+        "availability": "local retained evidence"
+      }
+    },
+    "python": {
+      "tests": 28,
+      "failures": 0,
+      "log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/clean-final-python-tests.log",
+        "bytes": 127,
+        "sha256": "dcbd30ea8827feeade97d988f0125e71eb9ccda964781382b3147465c746bc55",
+        "availability": "local retained evidence"
+      }
+    },
+    "format": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/clean-final-format.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "availability": "local retained evidence"
+    },
+    "bridge_syntax": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/clean-final-bridge-syntax.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "availability": "local retained evidence"
+    },
+    "ruff": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/clean-final-ruff.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "availability": "local retained evidence"
+    },
+    "release_build": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/build-clean-final.log",
+      "bytes": 1619,
+      "sha256": "88e1f7034ea0e9475f99b0e840709ff2975fc29c80fa4b499a87c5015f976c9a",
+      "availability": "local retained evidence"
+    },
+    "evidence_index_generator": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/curate_evidence.py",
+      "bytes": 26046,
+      "sha256": "d6b07848f7aa548e182e837e91b0a21972ef151bb5dfa16aedb1199aca95a0c5",
+      "availability": "local retained evidence"
+    },
+    "evidence_index_validator": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/validate_profile_evidence.py",
+      "bytes": 49432,
+      "sha256": "7f5394326b52ec1352914cfabc1d7d1c08addd273de1ab27b4f28cc244a5998e",
+      "availability": "local retained evidence"
+    },
+    "commands": "See docs/dcae-v-decoder-frontier.md and retained command manifests; a successful validator does not execute these commands."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "review": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/final-adversary-review.json",
+      "bytes": 2726,
+      "sha256": "b8e9d7fd98488c6e18ca0305148f8f39a2d5959921035109816f69d77b22b456",
+      "availability": "local retained evidence"
+    },
+    "scope": "Final implementation and evidence review; same-lineage subagent review is correlated, not independent experimental replication."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/2026-11-08-native-dcae-v-decoder.json",
+      ".landmark/evidence/2026-11-08-dcae-conv3d-profile.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_decoder_probe.cr",
+      "spec/dcae_v_decoder_compare_test.py",
+      "spec/dcae_v_decoder_profile_spec.cr",
+      "spec/support/dcae_v_decoder_compare.py",
+      "src/ml/video/dcae_v_decoder.cr",
+      "src/ml/video/dcae_v_decoder_profile.cr",
+      "src/ml/video/dcae_v_mps.cr",
+      "src/ml/video/dcae_v_mps_bridge.mm",
+      "src/ml/video/dcae_v_mps_profile.h",
+      "src/ml/video/dcae_v_norm_mps_bridge.mm",
+      "src/ml/video/dcae_v_decoder_spec.cr"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/2026-11-08-dcae-conv3d-profile.json",
+      ".landmark/evidence/2026-11-08-native-dcae-v-decoder.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_decoder_probe.cr",
+      "spec/dcae_v_decoder_compare_test.py",
+      "spec/dcae_v_decoder_profile_spec.cr",
+      "spec/support/dcae_v_decoder_compare.py",
+      "src/ml/video/dcae_v_decoder.cr",
+      "src/ml/video/dcae_v_decoder_profile.cr",
+      "src/ml/video/dcae_v_mps_bridge.mm",
+      "src/ml/video/dcae_v_mps_profile.h",
+      "src/ml/video/dcae_v_norm_mps_bridge.mm"
+    ],
+    "unchanged": [
+      "Original default layout/Conv3D arithmetic",
+      "BF16 operation boundaries and tolerances",
+      "Cache transport across temporal tiles",
+      "Encoder defaults",
+      "No full generation or decoder default switch",
+      "No active experimental Conv3D or paired-layout API flags"
+    ]
+  },
+  "compiler_scratch_retirement": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/compiler-scratch-cleanup.json",
+    "bytes": 8014,
+    "sha256": "8b68c008b2aed36ee1472490769abe6bd32b25f489393bbaa4f75a90b20a1ab1",
+    "availability": "local retained evidence"
+  },
+  "links": {
+    "frontier": "docs/dcae-v-decoder-frontier.md",
+    "prior_port": ".landmark/evidence/2026-11-08-native-dcae-v-decoder.json"
+  },
+  "rollback": "The final change retains profiling as an opt-in API and restores the original default Conv3D arithmetic. Revert the coherent profiling/evidence change as one unit.",
+  "next_falsifier": "A future exact-safe performance proposal must first explain native-versus-PyTorch MPS pre-bias differences and BF16 midpoint crossings at real stage-2 geometry, or obtain per-kernel evidence. The tiny fixture rules out bias addition as the source of its mismatch, while the upcast-F32 lane does not identify the native BF16 accumulator. Require strict parity before any clean matched timing.",
+  "refresh_triggers": [
+    "Source or binary change",
+    "Runtime/OS/SDK or device change",
+    "Weights/input/reference/geometry change",
+    "Cache/rounding/measurement/guard policy change"
+  ],
+  "failure_policy": "Reject unproven profiles, nonfinite or out-of-tolerance values, invalid timestamps and unsafe memory admission. Do not widen tolerances or infer global speedup from a local or unpaired result."
+}

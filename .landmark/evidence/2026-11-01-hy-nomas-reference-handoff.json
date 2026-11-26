@@ -1,0 +1,202 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "canonical_status": "canonical_summary",
+  "created_at": "2026-11-02T02:35:33.596165+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Hash-verified diagnostic probes reproduce saved-reference PixelUMM pixels and F32 block-0 boundaries exactly, while retaining an explicitly failing original-BF16 handoff gate.",
+    "scope": "Fixed 512x288x120 saved BF16 latent, adapted source MPS PixelUMM, identical exported preblock inputs for standalone block 0, strict artifact admission and fixture-scoped SiLU localization. Not image-conditioned continuation qualification.",
+    "decay_trigger": "Source/binary/input/weights/geometry/precision/cache/backend/compiler/runtime/device change or referenced artifact modification/loss."
+  },
+  "capability_status": {
+    "image_conditioned_continuation": "IN_PROGRESS",
+    "bf16_gate": "FAILED at unchanged tolerance",
+    "experimental_opt_in_still_required": true,
+    "production_precision_changed": false,
+    "generated_t1_or_full_video": false
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/hy_nomas_reference_cache_probe.cr",
+      "examples/hy_nomas_reference_decode_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_cache_probe.cr",
+      "examples/support/hy_nomas_reference_latent.cr",
+      "spec/hy_nomas_reference_block0_compare_test.py",
+      "spec/hy_nomas_reference_block0_probe_spec.cr",
+      "spec/hy_nomas_reference_cache_probe_spec.cr",
+      "spec/hy_nomas_reference_cache_test.py",
+      "spec/hy_nomas_reference_decode_test.py",
+      "spec/hy_nomas_reference_latent_spec.cr",
+      "spec/support/hy_nomas_reference_block0_compare.py",
+      "spec/support/hy_nomas_reference_cache.py",
+      "spec/support/hy_nomas_reference_decode.py",
+      "spec/support/hy_nomas_reference_preqkv_compare.py",
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json"
+    ],
+    "changed_paths": [
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/hy_nomas_reference_cache_probe.cr",
+      "examples/hy_nomas_reference_decode_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_cache_probe.cr",
+      "examples/support/hy_nomas_reference_latent.cr",
+      "spec/hy_nomas_reference_block0_compare_test.py",
+      "spec/hy_nomas_reference_block0_probe_spec.cr",
+      "spec/hy_nomas_reference_cache_probe_spec.cr",
+      "spec/hy_nomas_reference_cache_test.py",
+      "spec/hy_nomas_reference_decode_test.py",
+      "spec/hy_nomas_reference_latent_spec.cr",
+      "spec/support/hy_nomas_reference_block0_compare.py",
+      "spec/support/hy_nomas_reference_cache.py",
+      "spec/support/hy_nomas_reference_decode.py",
+      "spec/support/hy_nomas_reference_preqkv_compare.py",
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json"
+    ],
+    "default_policy": "No other task changes; preserve unrelated untracked Python caches.",
+    "out_of_scope": [
+      "Original BF16 DiT/cache equivalence or all-layer parity",
+      "Complete upstream T0 patch/refiner/RNG preprocessing",
+      "Actual native history append in the standalone block probe",
+      "Fresh live encoder-to-DiT handoff, T1 continuation, full video or RoleWright identity/style quality",
+      "Unmodified eager PixelUMM flex-attention parity",
+      "Default text-only arithmetic changes, new model weights, UI and performance speedup claims"
+    ],
+    "raw_artifacts": [
+      {
+        "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1",
+        "availability": "local_only",
+        "note": "Captures, weights, binaries and logs stay outside Git. Digests cannot recover lost artifacts."
+      }
+    ]
+  },
+  "definition_of_done": {
+    "commands": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/qualification-commands.json",
+    "expected": "Strict saved-latent/companion admission and negative tests; same-input raw/display PixelUMM equality; F32 boundary controls exact; BF16 differences reported without widening 2e-5 tolerances or admitting continuation; zero instrumented native in-chain allocation/readback/wait counters; sampled 10% floor, process caps and swap-growth guard.",
+    "observed": "53 Crystal examples and 43 Python tests pass. Four final CPU comparison commands return 0 for two exact F32 controls and 2 for two failing BF16 controls. Native and adapted source decoder outputs are byte-identical; all nine declared guarded GPU probes finish normally with zero swap growth. Diagnostics DoD passed; BF16 continuation gate did not."
+  },
+  "evidence": [
+    {
+      "kind": "executed_decoder_and_payload_comparison",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/source-mps-decoder.json",
+      "result": "passed",
+      "signal": "Raw and display outputs byte-identical over 53,084,160 values each, all finite; first 20 unblended frames exact. Saved latent, adapted gathered-tile MPS attention only."
+    },
+    {
+      "kind": "same_epsilon_source_gpu_control",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/cache-noise-source-comparison.json",
+      "result": "passed",
+      "signal": "All 138,240 cache-noise values exact on identical exported epsilon; no RNG-stream parity claim."
+    },
+    {
+      "kind": "executed_native_source_comparison",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/main-comparison-f32-v3.json",
+      "result": "passed",
+      "signal": "14 main captures exact. F32 cache comparison is against pre-BF16-store constituents; native K/V are prospective only."
+    },
+    {
+      "kind": "executed_native_source_comparison",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/preqkv-comparison-f32-v3.json",
+      "result": "passed",
+      "signal": "Eight pre-QKV captures exact on identical F32 block inputs."
+    },
+    {
+      "kind": "numeric_falsifier",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/main-comparison-bf16-v3.json",
+      "result": "failed",
+      "signal": "All 14 boundaries exceed unchanged 2e-5 tolerance. First main capture img.q_projection max error 0.0228195190; largest main error 0.5 at prospective V."
+    },
+    {
+      "kind": "earliest_captured_divergence",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/preqkv-comparison-bf16-v3.json",
+      "result": "failed",
+      "signal": "All eight pre-QKV boundaries fail. First img.mod_silu: 777/2048 outside tolerance, max 0.00031266361474990845. Source SiLU/modulation outputs BF16, LayerNorm and QKV inputs F32 under MPS autocast."
+    },
+    {
+      "kind": "gpu_discriminating_probe",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/oracle/silu-localization.json",
+      "result": "localized_on_fixture",
+      "signal": "F32 SiLU matches native exactly. Output-only BF16 rounding still fails 410/2048; BF16 input plus BF16 output rounding matches source exactly. No native production precision fix or full-block inference follows from this."
+    },
+    {
+      "kind": "sampled_runtime_limits",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/qualification-summary.json",
+      "result": "passed",
+      "signal": "Nine serialized guarded GPU probes finish normally, file-cache accounting and 10% floor retained, zero observed swap growth. Native tracked allocations/readbacks/preterminal waits zero, one terminal drain per chain. Opaque MPS resources and between-sample spikes remain outside guarantees."
+    },
+    {
+      "kind": "strict_negative_admission_and_cpu_integration",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/final-cpu-checks.json",
+      "result": "passed",
+      "signal": "43 Python tests, final Crystal formatting and diff check pass; separate final-crystal-spec.json records 53 passing Crystal examples."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/qualification-summary.json",
+      "bytes": 62336,
+      "sha256": "91b94c0171db8349beaa73f2db1b966dca3144f07a3fc4ba65c74c9ec9bdaea1"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/qualification-commands.json",
+      "bytes": 14898,
+      "sha256": "d73853647e15c208bff3748b57d67159b018481d587f0bef53154db024590ac8"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/adversary-review.json",
+      "bytes": 1914,
+      "sha256": "ecdd997308b18f2828ee424899ad2d90e9fe2fd3d95339ec1c6fbf55793fa451"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/collect_handoff_evidence.py",
+      "bytes": 14538,
+      "sha256": "4b6f947745f34005f3e7b018bc92a9e0adc67ee77141e5051e28d2f277148711"
+    }
+  ],
+  "source_state": {
+    "parent_revision": "dce036adf35341cc7a26e37725b91c6f80fc39ee",
+    "actual_checkout_branch": "codex/hy-nomas-native",
+    "pins_ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/qualification-summary.json",
+    "upstream_reference_initialization_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "upstream_block_decoder_implementation_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "note": "Native receipt revision fields name upstream semantic/implementation bases, not the local Git HEAD. Final source fingerprints and executed binary digests are separate in the external summary. Decoder probe formatting changed whitespace only after runtime, with its pre-format source retained. Final comparator guards changed only CPU metadata admission. The block-0 build succeeded in observed agent exec output; no dedicated release transcript was saved. Runtime executed the separately hashed binary. No production src/ file changed in this slice."
+  },
+  "verification": {
+    "adversary_verdict": "ROBUST",
+    "review_provenance": "Correlated same-lineage source/admission/prose review plus root guarded executions, final CPU comparisons and digest/metric/guard assertions; not independent model evidence.",
+    "trust": {
+      "F": "Executed exact payload/numeric comparisons, strict negative admission and guard assertions",
+      "G": "Declared saved latent, block 0 inputs/captures and one SiLU vector fixture only",
+      "R": "Pinned source, authenticated BF16 weights, executed native binaries, fresh source MPS controls, sampled process guards"
+    }
+  },
+  "validation": {
+    "collector": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1/collect_handoff_evidence.py",
+    "observed_artifacts": 162,
+    "observed_source_pins": 57,
+    "repository_graph_validator": "Not present in repository or skill directory. The local collector executes actual artifact/source digests, exact/failed numerical predicates, counters and guard/exit assertions; structural validity alone is not semantic proof."
+  },
+  "next_falsifier": "Reproduce native opt-in BF16 SiLU input/output boundaries on the same vectors, then modulation linear, LayerNorm input cast, QKV, QK RMS, RoPE and actual BF16 cache store. Preserve source mixed F32/BF16 semantics rather than blanket-casting the block. Admit a clean-scene T0/T1 probe only after BF16 gates pass.",
+  "residual_risk": [
+    "Local hashes and structural receipts do not attest producer execution or recover lost artifacts. Guarded command logs and observed runtime results provide separate execution evidence.",
+    "Opaque MPS private allocations are not counted by named buffers; guard samples cannot bound between-poll spikes.",
+    "The F32 cache diagnostic uses pre-BF16-store constituents; native K/V are prospective, not a history append.",
+    "No fresh live encoder-to-DiT handoff, full T0 preprocessing parity, T1 continuation, or visual character/style qualification.",
+    "The clean scene art is prepared but not encoded.",
+    "Native BF16BoundaryControl rounds selected later boundaries but does not reproduce source input/modulation/normalization/RoPE boundaries.",
+    "Source and native captures deliberately share native preblock inputs, so they do not establish full upstream T0 preprocessing parity.",
+    "The first SiLU discriminator is a source MPS operation control, not an implemented native precision fix or evidence that all later mismatches are resolved."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-drafter-frontier.md",
+    "landmark": "LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01",
+    "encoder_evidence": ".landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json"
+  }
+}

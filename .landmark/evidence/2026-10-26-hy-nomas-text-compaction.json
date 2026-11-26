@@ -1,0 +1,306 @@
+{
+  "schema": "cogni_ml.hy_nomas_text_compaction_evidence",
+  "schema_version": 1,
+  "base_revision": "d548cf25582061e38d577c32e8a97bd77a587315",
+  "claim": "Verified fixed-fixture M64 parity to the frozen same-Q4 upstream fixture, GPU scratch reuse and an observed paired saved-input full54 speedup; compaction remains opt-in.",
+  "source_scope": "Batch1 video5280/text1280/valid23/storage64, D2048/H16/Dh128/F8192, camera/action/history/mask off, saved Qwen state26, unchanged refiner, staged Q4_K/BF16 operands and F32 MPS math.",
+  "reference": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025",
+    "fixture": "weights/full-q4-reference-v3.json",
+    "fixture_sha256": "fd51333fb7908f64915a06bf5bdc392be88332270dd0c18c969eef26781a5c2e",
+    "cache_index": "weights/q4-cache-v2/index.json",
+    "cache_index_sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0",
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "producer": "source/oracle-v3/spec/support/hy_nomas_q4_dit_reference.py",
+    "producer_sha256": "fd960c6bae7c7386145be6f616b05ee8d7661ec562675f079b77b369f4519ea8",
+    "producer_reexecuted_this_turn": false
+  },
+  "implementation": {
+    "text_storage_rows": 64,
+    "valid_text_tokens": 23,
+    "source_text_rows": 1280,
+    "text_qk_rms_reduction_rows": "original 1280 tokens times 16 heads; active native square/normalize is 64 tokens",
+    "padded_default_preserved": true,
+    "compact_cli_default": 64
+  },
+  "numerical": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "block0_selected_checkpoints_bitwise_equal": 40,
+    "full54_selected_captures_bitwise_equal": 14,
+    "paired_validation_requests": 4,
+    "standalone_requests": 2,
+    "rebuilt_default_cli_requests": 2,
+    "scratch_and_excluded_suffix_nan_poison_passed": true,
+    "inflight_release_rejected": true
+  },
+  "timing": {
+    "epoch_summaries": [
+      {
+        "epoch": 0,
+        "pair_count": 3,
+        "paired_padded_over_compact_total_ratio_median": 1.1118644569450047
+      },
+      {
+        "epoch": 1,
+        "pair_count": 3,
+        "paired_padded_over_compact_total_ratio_median": 1.1198123721674045
+      }
+    ],
+    "interpretation_scope": "descriptive timing on this fixed saved-input one-forward run",
+    "measured_pairs": 6,
+    "median_seconds_by_mode": {
+      "compact": {
+        "encode_seconds": 8.6217916245,
+        "gpu_elapsed_seconds": 9.075319812545786,
+        "terminal_wait_seconds": 0.4610457495,
+        "total_seconds": 9.1062946665
+      },
+      "padded": {
+        "encode_seconds": 9.3690945415,
+        "gpu_elapsed_seconds": 9.823246312473202,
+        "terminal_wait_seconds": 0.4828785,
+        "total_seconds": 9.8520347915
+      }
+    },
+    "paired_padded_over_compact_total_ratio_median": 1.1190185450262975
+  },
+  "representations": {
+    "combined_named_bytes": 20955878536,
+    "compact": {
+      "dit_text_tokens": 64,
+      "named_bytes": 10060081732,
+      "valid_text_tokens": 23
+    },
+    "declared_combined_ceiling_bytes": 23622320128,
+    "named_bytes_reduction_fraction": 0.07670068440457675,
+    "named_bytes_saved": 835715072,
+    "padded": {
+      "dit_text_tokens": 1280,
+      "named_bytes": 10895796804
+    }
+  },
+  "guard": {
+    "max_footprint_bytes": 23622320128,
+    "max_swap_growth_bytes": 67108864,
+    "memory_accounting": "file-cache",
+    "minimum_sampled_headroom_bytes": 16380411904,
+    "peak_group_footprint_bytes": 21578818392,
+    "physical_bytes": 68719476736,
+    "runtime_floor_pct": 10,
+    "sample_count": 388,
+    "timeout_sec": 900
+  },
+  "paired_guard_observations": {
+    "swap_growth_bytes": 0,
+    "finished_returncode": 0,
+    "all_six_adjacent_pairs_favor_compact": true,
+    "padded_epoch_median_drift_fraction": 0.4435067937668309,
+    "compact_epoch_median_drift_fraction": 0.4592641529062895
+  },
+  "counters": {
+    "segments_per_forward": 1244,
+    "terminal_waits_per_forward": 1,
+    "tracked_metal_allocations_during_encode": 0,
+    "preterminal_activation_readbacks": 0,
+    "diagnostic_readbacks_after_wait": 14
+  },
+  "checks": {
+    "crystal_examples": 22,
+    "python_analyzer_tests": 12,
+    "format_and_diff_check": "Crystal formatter check and git diff --check passed on the final source; this field is a receipt, not a validator."
+  },
+  "adversary": {
+    "verdict": "ROBUST within this fixed source/fixture numerical, poison, admission and descriptive timing scope",
+    "lineage": "correlated same-family review, not independent replication"
+  },
+  "artifact_root": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-compaction-20261026",
+  "artifacts": {
+    "source/aligned-rms64/manifest.json": {
+      "bytes": 2573,
+      "sha256": "3ec1cf03edd7562ccf2946abbd0e05007c8431fd1413ab2c11665e2861a51014"
+    },
+    "source/aligned-rms64/runtime-binaries.json": {
+      "bytes": 1483,
+      "sha256": "b350cce0ba710c01730efba4e8cdb28ce1d01eda00e90e2bd6ec8b157ac5ab81"
+    },
+    "source/default-m64-final/manifest.json": {
+      "bytes": 2755,
+      "sha256": "b8e1a8f256ebb3ac4520376d685f7eed8e0ac9259460984a62b046cf0a79db84"
+    },
+    "source/default-m64-final/bin/hy_nomas_q4_dit_probe": {
+      "bytes": 1974408,
+      "sha256": "ab69316f7fa8219dda5ada450f1e39988abffb5f7074453df73a92dc07c573d1"
+    },
+    "reports/row-projection-v1.json": {
+      "bytes": 5977,
+      "sha256": "a978a84d36ceb1d9113b00cefebaeef731f701aa22ccde1e357493d19ce1cd37"
+    },
+    "reports/row-stages-v1.json": {
+      "bytes": 17389,
+      "sha256": "1df38be91483fdb2605e6317911efe4146884187307ac7d81f6681f434769a3f"
+    },
+    "reports/row-stages-m64.json": {
+      "bytes": 17240,
+      "sha256": "2019bfd41d91a3cd0134dd5955daa7eff94ef310a2f4791f7fa44fe5f9e02646"
+    },
+    "reports/compact-q4-gate.json": {
+      "bytes": 6737,
+      "sha256": "72dcb1b25258fe7fa4d919d61afcddcc1752adf55148c1336199e5295e8c4275"
+    },
+    "reports/row-stages-rms64.json": {
+      "bytes": 12289,
+      "sha256": "3b6b996bef14c08824a7788e8e2b201b99943020edf5681770c96446cec60b7b"
+    },
+    "reports/compact-rms64-gate.json": {
+      "bytes": 11877,
+      "sha256": "51ca6e7fcd22a58e38cb88759b9749cf7a03e648629ac490115e1293e02de99b"
+    },
+    "reports/paired-rms64-v1.json": {
+      "bytes": 29934,
+      "sha256": "a4ae48c00861c1ac1828d612e8dfc35fdcb71a6d089d09799c657830b68901f0"
+    },
+    "reports/paired-rms64-v1.analysis.json": {
+      "bytes": 2971,
+      "sha256": "0f72366543551a4dcf950ee98a7240ce141a9d562fa4ab720527bc37e56d97bd"
+    },
+    "reports/compact-default-m64-gate.json": {
+      "bytes": 11875,
+      "sha256": "5794d11bfaed2f90accc92c935a2bde37e84399afc3d1573ebdd56c6aaf0276c"
+    },
+    "logs/build-aligned-rms64.argv.json": {
+      "bytes": 798,
+      "sha256": "698d046047ff8ec85952d949be73618ae17fa2fca4a997774aa4f035370b8d5e"
+    },
+    "logs/build-aligned-rms64.out": {
+      "bytes": 7104,
+      "sha256": "734235b8478fce2e6251288400fb685e2a2469c2aeff12944e8bc0d147e01690"
+    },
+    "logs/build-aligned-rms64.guard.jsonl": {
+      "bytes": 23815,
+      "sha256": "356e3be45efaca845070ff04bbf438c69c2f4f3c01511eefee97d6824795e991"
+    },
+    "logs/build-default-m64-v2.argv.json": {
+      "bytes": 660,
+      "sha256": "b7420dac20c063717b04b0f703f5bb0d45e3117fdc623572f638fe74cd9a50ca"
+    },
+    "logs/build-default-m64-v2.out": {
+      "bytes": 1263,
+      "sha256": "ebe19173d4b5e5ba086ff884627b126d13dd5360c6632bdb7ee065aca4997b91"
+    },
+    "logs/build-default-m64-v2.guard.jsonl": {
+      "bytes": 7504,
+      "sha256": "f28ea78f240706e875e38d01ab91a0345439a79b32c6b7aab8a9043330f2b4aa"
+    },
+    "logs/row-stages-rms64.argv.json": {
+      "bytes": 1250,
+      "sha256": "976e9df1479555fdc44f2b0d6cb26926d612b9b4cc2f7722461428d177e38a70"
+    },
+    "logs/row-stages-rms64.guard.jsonl": {
+      "bytes": 10281,
+      "sha256": "ef9d226d8ef20db62a5136a501da7a2ca75a355f5340fa640f4d033ac94c2fc8"
+    },
+    "logs/compact-rms64-gate.argv.json": {
+      "bytes": 1265,
+      "sha256": "0805d6a5fde2e24984769123daac41e8468da35492b083d8221ccbbda5744299"
+    },
+    "logs/compact-rms64-gate.guard.jsonl": {
+      "bytes": 14293,
+      "sha256": "bfddaa65fbbd53f2f6101ad0ae80ea29ff6c308d45487bd921d36ac58259e704"
+    },
+    "logs/paired-rms64-v1.argv.json": {
+      "bytes": 1276,
+      "sha256": "d924837a2ffdc005216651282342bc870be7ca75a84fb89846682aeef2c2ea18"
+    },
+    "logs/paired-rms64-v1.guard.jsonl": {
+      "bytes": 119786,
+      "sha256": "bf7bee600839b62ba2490a0f91eb711707fbb10b6e89bdee3c02ce9967b74e23"
+    },
+    "logs/compact-default-m64-gate.argv.json": {
+      "bytes": 1242,
+      "sha256": "add413a8a582c91772f70b566f3ce41b0a7b81c5db7927f4c03411e50dc5b219"
+    },
+    "logs/compact-default-m64-gate.guard.jsonl": {
+      "bytes": 18331,
+      "sha256": "eed854250d76d7e387484cf02efbb12d21c3d2b276f2a8d0f9d96312a21881d6"
+    },
+    "logs/analysis-unit-tests-final.out": {
+      "bytes": 111,
+      "sha256": "84d8772355e571485804666521d02c4d9d3dc524b3389ba7950c37dc4c70d799"
+    },
+    "source/aligned-rms64/bin/hy_nomas_q4_dit_probe": {
+      "bytes": 1974408,
+      "sha256": "711781e28f6e170719ecd07731afdc974cba95658917147867c1675c90142bde"
+    },
+    "source/aligned-rms64/bin/hy_nomas_text_compaction_benchmark": {
+      "bytes": 1996688,
+      "sha256": "80f6e6f4075c9a932ed041dd8bed159051c0d4831c7e575e55a0e934e1c08dba"
+    },
+    "source/aligned-rms64/bin/hy_nomas_text_row_stages_probe": {
+      "bytes": 1976832,
+      "sha256": "df70d329746d8a0ce75e2d4215c9e01036c9e24eb68ad555f604b4e3806c0249"
+    },
+    "source/aligned-rms64/bin/hy_nomas_text_row_projection_probe": {
+      "bytes": 1567600,
+      "sha256": "2f17231a0a55b65247ffda965eae41a999eaf6556d55873bb5ba333e6e254cfb"
+    }
+  },
+  "linked_objects_captured_after_runs": {
+    "bridge.o": {
+      "bytes": 129096,
+      "sha256": "a5689350b2929b77a6d07ebc55867d515cea2c6a1098d63081f9fa58ecbb2385"
+    },
+    "hy_nomas_attention_compact.o": {
+      "bytes": 86504,
+      "sha256": "77b38732e0d438929b49ecedc578288667a2f8587fc2bcee57021ac298cd659f"
+    },
+    "hy_nomas_mps_reductions.o": {
+      "bytes": 79168,
+      "sha256": "7de70f789c2c622a4ae72cc09534e11a7fbb6a80da0f677854782bdf057dcaa1"
+    },
+    "metal_mps_command_chain.o": {
+      "bytes": 121072,
+      "sha256": "dd85e85e8afccff327ccbb6317cb76b47d67a2e3c3e3c40a58828f3150f4af09"
+    },
+    "metal_stage_io.o": {
+      "bytes": 57512,
+      "sha256": "b0e2c503c8d4564772748dca9c76ff08a786c30329981595ea045ca6165d2a8a"
+    },
+    "qwen25_mps_bridge.o": {
+      "bytes": 298208,
+      "sha256": "d29a0049697c2f1c042ad04539c83e28d9f6ad488c2062bb99cf3ecd2e460ba3"
+    },
+    "wan_attention_mps_bridge.o": {
+      "bytes": 105352,
+      "sha256": "9fe22bf1c794318371b1dc529d35eaba2feb4d7bc004fe4a35cb1a22d871e924"
+    },
+    "wan_t5_attention_mps_bridge.o": {
+      "bytes": 33552,
+      "sha256": "693a3072feaa04fd719f13be8103d7aa23bb8658dd1add86c20ba9b33c9d086f"
+    },
+    "wan_t5_mps_bridge.o": {
+      "bytes": 22168,
+      "sha256": "e42a79acae65aae6c94c2d66260740e712e091448a43ee405638f60c5dd98707"
+    },
+    "wan_t5_rms_mps_bridge.o": {
+      "bytes": 61296,
+      "sha256": "9ee75ae8bd8629629b0f20fdd6598152fa42c18184e1f6b3e6b32aeb2d2a77bc"
+    }
+  },
+  "limitations": [
+    "No full diffusion generation, live Qwen encoder or pixel decoding.",
+    "No qualification of other text lengths, storage shapes, history or original BF16 model quality.",
+    "Selected comparisons are not all 54 layer boundaries.",
+    "Analyzer validates receipts rather than recomputing tensor bytes; passed does not enforce speedup.",
+    "Periodic guard samples and reclaimable file-cache estimates do not bound between-poll peaks.",
+    "Binary identity is post-run and the build is not a hermetic attestation.",
+    "Earlier failing source iterations were not frozen; their reports are observations."
+  ],
+  "rollback": "Leave serial compaction disabled or omit --compact-text.",
+  "refresh_on": [
+    "source or backend/toolchain/device change",
+    "input/weight or text geometry change",
+    "mask/segment/history or precision/lifetime change",
+    "missing external evidence"
+  ]
+}

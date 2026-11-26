@@ -1,0 +1,667 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-kpanel",
+  "base_commit": "9874df4cf86eac6d97a118b0e4145ef91b234fad",
+  "status": "VERIFIED within bounded projection diagnostics; K64 speed hypothesis rejected",
+  "risk": "CAUTION: derived kernel layout, barriers and GPU resource lifetime",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "K64 preserves the ascending K8 MMA sequence and all candidate output bits but loses all 12 same-round pairs to K32 for both dense F16 and direct Q4 at the tested geometry. Keep K32; no production promotion."
+  },
+  "problem": "Test whether halving B64 panel handoffs helps before pursuing more Q4 decoder work.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "launches": [
+      {
+        "arm": "dense.k32",
+        "kernel": "hy_q4_bench_dense_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "dense.k64",
+        "kernel": "hy_q4_bench_dense_k64",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 32768,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 64,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 128
+      },
+      {
+        "arm": "packed.k32",
+        "kernel": "hy_q4_bench_packed_k32",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 32,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 256
+      },
+      {
+        "arm": "packed.k64",
+        "kernel": "hy_q4_bench_packed_k64",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 32768,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1,
+        "k_panel": 64,
+        "k8_mmas_per_output": 1024,
+        "panel_iterations": 128
+      }
+    ],
+    "ordered_reduction": "1024 K8 MMAs/output; K32=256 panels, K64=128 panels, both full K8192 ascending.",
+    "transform": "K32 retains the prior uniform B64 clone. K64 doubles panel width/storage, uses all 256 weight loaders/four Q4 decoder lanes per row and adds the second K32 input band. Checked source anchors, separate constants and unchanged threadgroup barriers.",
+    "staging_and_precision": "Fill after MMA; F16 operands/F32 accumulation; unchanged merge and BF16 bias.",
+    "qualification_order": "Frozen dense-only v1 built, ran and passed full byte replay before the first Q4 K64 GPU run; final v2 then adds packed K32/K64.",
+    "schedule": "Two opposite-initial-order profiler-off runs, alternating forward/reverse rounds: 2 warmup + 6 measured, 16 complete projections/root.",
+    "timed": {
+      "dense": "resident canonical F16 loads + same-geometry SIMD GEMM + F32 merge + in-place BF16 bias",
+      "q4": "tile decode + SIMD GEMM + F32 merge + in-place BF16 bias",
+      "mps_resident": "prepared resident F32 matrix MPS projection + in-place BF16 bias",
+      "mps_expand": "Q4 helper F16 decode widened to F32 + MPS projection + in-place BF16 bias"
+    },
+    "excluded": "setup/input preparation/qualification/poisoning/comparators/packing; profiler-off run requested",
+    "maximum_threadgroup_bytes": 32768,
+    "device_query": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/device-limits-v1.out",
+      "sha256": "de2aaa921505b2e021eddc70606099447676b9c48c59b410e7555376bbbfa2b5",
+      "nbytes": 56
+    },
+    "countercase": "K64 doubles dynamic shared memory from 16 to 32 KiB, which may erase the handoff benefit; occupancy causality was not measured."
+  },
+  "dod": {
+    "build": "Both guarded release builds exit 0; frozen selected sources, binaries and linked objects reauthenticated.",
+    "dense_before_q4": "Dense forward v1 and its byte replay PASS before Q4 v2 candidate execution.",
+    "native": "Both final opposite-initial-order runs exit 0. All four candidates pass finite atol=rtol=2e-5 and zero bit differences, raw and biased, versus B64 and identical-operand MPS.",
+    "replay": "Three real postterminal byte replays PASS; final v2 recomputes 42 same-operand + 3 saved-BF16 comparisons, 204 raw comparator words with injected controls, authentic/cyclic rows, root isolation, schedule, launch/source bindings and guard telemetry.",
+    "negative_checks": "25 v1 and 28 v2 checker tests PASS; 11 pre-Metal admission negatives PASS with existing artifacts preserved.",
+    "hygiene": "Scoped Crystal format check and git diff --check exit 0. No generic Landmark graph validator/template exists in this checkout; JSON and retained-artifact integrity are checked directly.",
+    "rollback": "Remove the opt-in Make target and two companion examples plus directly related docs/evidence; no production behavior changes."
+  },
+  "results": {
+    "status": "PASS for diagnostic execution and candidate bit identity; FAIL for proposed K64 speedup",
+    "gpu_median_ms_by_run": {
+      "kpanel-forward-v1": {
+        "dense.k32": 4.753609375256929,
+        "dense.k64": 5.167845051801123,
+        "packed.k32": 5.354694010293315,
+        "packed.k64": 5.532903645871556,
+        "mps.resident": 4.52884114565677,
+        "mps.expand": 4.7089062504710455
+      },
+      "kpanel-reverse-v1": {
+        "dense.k32": 4.53887499998018,
+        "dense.k64": 4.874652343460184,
+        "packed.k32": 4.943338541579578,
+        "packed.k64": 5.192057291878882,
+        "mps.resident": 4.246432291438396,
+        "mps.expand": 4.446666666353849
+      }
+    },
+    "paired_rounds": {
+      "dense.k64.over.dense.k32": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.0865695711408567,
+        "min_ratio": 1.0391683019918336,
+        "max_ratio": 1.1183996979066801,
+        "time_reduction_pct_by_run": {
+          "kpanel-forward-v1": -8.714129492851018,
+          "kpanel-reverse-v1": -7.397809886402906
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.0919147566645067
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.0859454118000924
+          }
+        }
+      },
+      "packed.k64.over.packed.k32": {
+        "paired_rounds": 12,
+        "wins": 0,
+        "median_ratio": 1.051182325762996,
+        "min_ratio": 1.0274543666965275,
+        "max_ratio": 1.0783473599878246,
+        "time_reduction_pct_by_run": {
+          "kpanel-forward-v1": -3.32810119935274,
+          "kpanel-reverse-v1": -5.031392210087815
+        },
+        "by_relative_order": {
+          "candidate_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.0551621505382434
+          },
+          "control_first": {
+            "rounds": 6,
+            "wins": 0,
+            "median_ratio": 1.048388119326566
+          }
+        }
+      }
+    },
+    "all_28_final_banks_equal_between_orders": true,
+    "all_24_dense_v1_banks_equal_to_final_v2": true,
+    "all_20_prior_dense_control_banks_pinned": true,
+    "legacy_g2_vs_mps": {
+      "name": "packed.g2.bias.vs.mps.resident.bias",
+      "elements": 2621440,
+      "failures": 949,
+      "raw_bit_differences": 2551794,
+      "max_abs": 0.000247955322265625,
+      "rmse": 1.8546094096519274e-05,
+      "relative_l2": 1.41129386918319e-06,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "original_bf16_quality_control": {
+      "name": "packed.g1.bias.vs.original_bf16_saved_upstream_rows",
+      "elements": 2621440,
+      "failures": 2621164,
+      "raw_bit_differences": 2621440,
+      "max_abs": 3.2914271354675293,
+      "rmse": 0.6173250074231923,
+      "relative_l2": 0.04703424499104567,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "candidate_gate_scope": "Identical rounded operands; no waiver of original-BF16 quantization error.",
+    "production_promoted": false
+  },
+  "execution": {
+    "samples_per_final_run": 48,
+    "roots": 97,
+    "asynchronous_continuations": 96,
+    "timed_root_overlap_seconds": 0,
+    "terminal_waits": 1,
+    "terminal_readbacks": 1,
+    "preterminal_waits": 0,
+    "preterminal_readbacks": 0,
+    "tracked_encode_time_buffer_allocations": 0,
+    "all_math_and_input_replication_on_gpu": true,
+    "named_bytes": 868056672,
+    "allocation_identity_scope": "Separate output-bank allocations source-reviewed; report hashes/names alone do not prove physical allocation identity."
+  },
+  "guard": {
+    "accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "native_cap_mib": 2048,
+    "native_timeout_sec": 120,
+    "max_swap_growth_mib": 64,
+    "build_cap_mib": 4096,
+    "build_timeout_sec": 600,
+    "cpu_checker_cap_mib": 1024,
+    "sampled_results": {
+      "kpanel-forward-v1": {
+        "sampled_peak_group_mib": 1715.126693725586,
+        "sampled_min_headroom_gib": 24.555801391601562,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      "kpanel-reverse-v1": {
+        "sampled_peak_group_mib": 1434.3608169555664,
+        "sampled_min_headroom_gib": 25.46112060546875,
+        "sampled_max_swap_growth_bytes": 0
+      }
+    },
+    "limitations": "Samples do not bound true peaks; file cache reclaimability is estimated; named counters exclude MPS private allocations."
+  },
+  "lineage": {
+    "upstream_fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "weight_offset": 61441024,
+      "weight_bytes": 9437184,
+      "bias_offset": 61436928
+    },
+    "baseline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/reports/dense-m1280-forward-v1.json",
+      "sha256": "af8d416961c1a7a982b5e67826422d911974a0ae510ca4db2f3b9208295caee3",
+      "m1280_hashes_checked": 20
+    },
+    "kernel_sources_v2": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "benchmark_sha256": "c904ac8240981695bde8c7904bc47f0182bba3a36e4a596ea32f6e28ff925adf",
+      "dense_sha256": "99ca4953cd8c494a330d3f891edf2db39799a3dd185105eb6a263b55e90fbfd5",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158",
+      "kpanel_sha256": "0304fee3a1025da22694a048e974661c296e4422dd2dc3bae3a0b98b43acaf39"
+    },
+    "receipts": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/native-v1-receipt.json",
+        "sha256": "e5012b9c77c06d47985a04d18c940b7484b49c798ceca38a2a329bebdd14e45d",
+        "nbytes": 3017
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/native-v2-receipt.json",
+        "sha256": "39d06d2286e29b6a4d753424015ae26da55011e218a3155283a2ff762620af76",
+        "nbytes": 3017
+      }
+    ],
+    "selected_sources_per_lineage": 29,
+    "linked_objects_per_lineage": 10,
+    "closure_integrity": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/closure-integrity-v1.json",
+      "sha256": "f68100262c2aa0a11a5548c901685dcb7827b02563a67d233ce6f89e0643bfe7",
+      "nbytes": 41352
+    },
+    "integrity_scope": "Both frozen source snapshots/binaries/object receipts and all 29 current v2 selected sources; not a hermetic build or driver attestation. The large original source checkpoint was not rehashed."
+  },
+  "primary_artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/dense-forward-v1.json",
+      "sha256": "856790d6d99b8798a0d9faa962481855d36237370debf085bb212f7c26d2f96d",
+      "nbytes": 51424
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-forward-v1.json",
+      "sha256": "04a6b61cd907e02ad2f06cbb40e24fdd0481b2fc9ab308c19a21528658e26a62",
+      "nbytes": 69598
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-reverse-v1.json",
+      "sha256": "e0044820e6488797fe2de28899a78a5e44397b6f5e056eb28fe9a1ed3103b726",
+      "nbytes": 69649
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/verify-dense-v1.json",
+      "sha256": "413f925f3220302f0fb6f454bba030d0fb78ab9ecdcab5737e724c2a8449929e",
+      "nbytes": 47065
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/verify-forward-v2.json",
+      "sha256": "fb514cb964cbb8db9352cdff2a00142aff9a853fb6fd631ba7d6391ec8ba81bc",
+      "nbytes": 60358
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/verify-reverse-v2.json",
+      "sha256": "07e925c2a302c3f8ff3f1cbfb88894b4f29febffaa0d1679c58baeb222c35c0d",
+      "nbytes": 60355
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/aggregate-v1.json",
+      "sha256": "9d544f1b70c44e639312c5aa2ca2f30f717faacf12066c2a657648f8f50cba7e",
+      "nbytes": 6572
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/admission-v1.json",
+      "sha256": "39cbc9cabce5e5d6fc708915005680306fd8dbb00a0b7014e34c6c753b8b63e2",
+      "nbytes": 1252
+    }
+  ],
+  "checkers": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v1.py",
+      "sha256": "8e93aa523a016064bc16e27bd4f46b300618ddacb24fe3270711eccf897378dd",
+      "nbytes": 61863
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/test_verify_kpanel_v1.py",
+      "sha256": "e480205a24b0b63d9e266dc0d9a00ccbfa1a16822724051b46d46af32bc1f037",
+      "nbytes": 24116
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v2.py",
+      "sha256": "5c772f5b42d8728903466260052bb8fc84a3569e7f4e51d0046dd8065d913d88",
+      "nbytes": 63206
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/test_verify_kpanel_v2.py",
+      "sha256": "3da43aa2042e78c4325e0251654256c9efbc89eafb81209882f673acc3c53624",
+      "nbytes": 28367
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/admission_v1.py",
+      "sha256": "aa2acfe2fbd3117ebf6056c2961837eaece1c25a653d4a6de7cf6ce1e5c86394",
+      "nbytes": 2497
+    }
+  ],
+  "executed_commands": {
+    "build-dense-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "4096",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "600",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/build-dense-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "make",
+      "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1",
+      "hy_nomas_q4_kpanel_benchmark"
+    ],
+    "dense-forward-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "2048",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/dense-forward-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/build/hy_nomas_q4_kpanel_benchmark-v1",
+      "--report",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/dense-forward-v1.json",
+      "--rows",
+      "1280",
+      "--repeats",
+      "16"
+    ],
+    "verify-dense-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "1024",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/verify-dense-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v1.py",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/dense-forward-v1.json"
+    ],
+    "build-kpanel-v2": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "4096",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "600",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/build-kpanel-v2.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "make",
+      "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1",
+      "hy_nomas_q4_kpanel_benchmark"
+    ],
+    "kpanel-forward-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "2048",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/kpanel-forward-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/build/hy_nomas_q4_kpanel_benchmark-v2",
+      "--report",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-forward-v1.json",
+      "--rows",
+      "1280",
+      "--repeats",
+      "16"
+    ],
+    "kpanel-reverse-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "2048",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/kpanel-reverse-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/build/hy_nomas_q4_kpanel_benchmark-v2",
+      "--report",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-reverse-v1.json",
+      "--rows",
+      "1280",
+      "--repeats",
+      "16",
+      "--reverse-first"
+    ],
+    "verify-forward-v2": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "1024",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/verify-forward-v2.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v2.py",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-forward-v1.json"
+    ],
+    "verify-reverse-v2": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "1024",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/verify-reverse-v2.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v2.py",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-reverse-v1.json"
+    ],
+    "tests-v2": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "1024",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/tests-v2.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source",
+      "-p",
+      "test_verify_kpanel_v2.py",
+      "-v"
+    ],
+    "admission-v1": [
+      "python3",
+      "-B",
+      "examples/support/wan_memory_guard.py",
+      "--memory-accounting",
+      "file-cache",
+      "--runtime-floor-pct",
+      "10",
+      "--max-footprint-mib",
+      "1024",
+      "--max-swap-growth-mib",
+      "64",
+      "--timeout-sec",
+      "120",
+      "--log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/logs/admission-v1.guard.jsonl",
+      "--",
+      "env",
+      "TMPDIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp",
+      "CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/crystal-cache",
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/admission_v1.py"
+    ]
+  },
+  "artifact_root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026",
+  "adversary": {
+    "verdict": "ROBUST within the stated diagnostic; no material blocker",
+    "provenance": "Correlated Mini-Quad source/math, replay-checker and performance reviews; not independent replication.",
+    "attacks": [
+      "K64 panel-writer coverage and ordered K8 MMA preservation",
+      "Both relative arm orders and within-round ratios despite run-context drift",
+      "Missing comparisons, altered source/geometry/root, row-64 corruption with rewritten hashes, widened tolerance, forged pass/timing summaries",
+      "Original-BF16 gate failure and repeated-row versus real full-prefix scope"
+    ]
+  },
+  "residuals": [
+    "No occupancy or decoder-stall attribution.",
+    "Two run-median ranges are not confidence intervals.",
+    "M1280 repeats 23 saved real rows; no new full-prefix activation distribution.",
+    "No full block, model, capture or generation; no video throughput inference.",
+    "Original Q4/BF16 quality and G2 numerical gates remain failed."
+  ],
+  "next_falsifier": "Compare unchanged K32 with 16 versus 32 KiB reserved shared memory to test reservation cost without changing panel width or reduction order.",
+  "decay_trigger": "Changed selected source, fixture/cache, geometry/schedule, precision/ownership, compiler/SDK/OS/device/MPS or missing external artifacts.",
+  "refresh": "Rebuild/freeze with fresh report paths under the same guard, rerun dense qualification and both final orders, then byte replay and seeded checker/admission tests.",
+  "allowed_paths": [
+    "Makefile",
+    "examples/hy_nomas_q4_kpanel_benchmark.cr",
+    "examples/support/hy_nomas_q4_kpanel_benchmark.cr",
+    "docs/hy-nomas-q4-reduction-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/2026-10-26-hy-nomas-q4-kpanel.json"
+  ]
+}

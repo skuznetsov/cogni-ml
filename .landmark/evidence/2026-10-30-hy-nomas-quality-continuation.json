@@ -1,0 +1,197 @@
+{
+  "schema": "cogni_ml.hy_nomas_quality_continuation_evidence/v1",
+  "created_at": "2026-10-30T16:40:51.889952+00:00",
+  "base_revision": "0757d5682be0c521927b035de3fb6cbcc07ea17e",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Authenticated same-latent adapter comparison, matched four-step prompt exports, and bounded native 20-second shared-scene continuation/export integrity. Semantic trajectory quality remains VULNERABLE and full upstream continuation parity is open.",
+    "adversary_verdict": "ROBUST for structural export, identity and sampled resource checks; VULNERABLE for the requested trajectory",
+    "review_correlation": "Same-lineage Mini-Quad source, run and selected-frame review; user supplied full-motion trajectory correction. Not independent upstream execution.",
+    "decay_trigger": "Refresh on scoped source/input/weight/precision/geometry/backend/device/toolchain/guard change or evidence loss. Timing also decays with cache, order, host load and thermal state."
+  },
+  "boundaries": {
+    "rollback": "Use the existing single-segment generator without the experimental sequence CLI; default eight-step BF16 path remains. Revert the atomic continuation commit for code rollback.",
+    "excluded": [
+      "full upstream neural continuation parity",
+      "stock upstream CPU RNG parity",
+      "CUDA/FlexAttention parity",
+      "action-tag masks or per-segment directorial control",
+      "semantic motion correctness",
+      "causal speedup",
+      "between-poll memory bounds"
+    ]
+  },
+  "source": {
+    "upstream_root": "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024",
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "cpt_sha256": "acf827bb7feb84c9046618737146544843a3f50c3500a3b16925dadeb6c5bdee",
+    "frozen_identity": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty/identity.json",
+    "frozen_identity_sha256": "b5e81f829e5526c2bd73e6bc363cb8d08d822d15b2238abbcbe5cc1d5cc419f3",
+    "frozen_binary_sha256": "72d429dbafbe21cf7055b880d4e2f75a6eceeba987fe53ba3608b01e88e96a37",
+    "source_files": 45,
+    "post_run_mechanical_formatting": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/formatting-lineage.json",
+    "formatted_binary": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/build-formatted/hy_nomas_sequence_generate",
+    "formatted_binary_sha256": "eead8dd5d2f441acaf82f36c6940cec408b7bfdfb7a79b28e20976e03635164d",
+    "formatting_scope": "Five files equal crystal tool format applied to frozen source; remaining forty files unchanged. No model rerun is inferred from formatting or rebuild."
+  },
+  "numerical_comparison": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "same_latent_pixelumm": {
+      "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-same-latent.json",
+      "merged_raw_pixels_max_error": 0,
+      "first_unblended_window_max_error": 0,
+      "exact_bf16_source_weight_checks": 468,
+      "adapter_scope": "Pinned upstream BF16 equations with gathered spatial-tile F32 QK/softmax/PV on MPS, before display conversion."
+    },
+    "synthetic_probe_logs": [
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/global-assembly/probe.log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/history-attention-fixed/probe.log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/continuation-history-final/probe.log",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/timeline-prefix/probe.log"
+    ],
+    "full_upstream_video_parity": false,
+    "next_falsifier": "Run upstream and native AR segment two on an identical real common prefix, conditioning and noise; compare cache-writer, history/intermediates and output before attributing reverse motion to model, prompt or native continuation."
+  },
+  "matched_prompts": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/prompts-4-fixed",
+    "controlled": "Seed, initial noise, geometry, solver and decoder unchanged; only simple versus structured conditioning changes. Simple reproduces frozen native control exactly. Saved upstream Qwen state26, not native live text encoding.",
+    "observation": "Sampled structured-prompt stills show clearer rails and street clearance; no full-motion quality ordering inferred."
+  },
+  "continuation": {
+    "segments": 4,
+    "steps_per_segment": 4,
+    "latent_frames": 120,
+    "pixel_frames": 480,
+    "width": 512,
+    "height": 288,
+    "fps": 24,
+    "duration_seconds": 20,
+    "global_decoder_windows": 23,
+    "prompt_policy": "One authenticated shared scene, no actions, 342 valid text tokens. CLI rejects malformed, multi-scene and action-bearing prompts before Metal allocation.",
+    "history_boundary": "Native layer-specific F32 post-RoPE K/V, all valid previous video/text rows; upstream stores BF16 history.",
+    "cache_writer": "Separate noisy forward after denoise; sigma 0.206897, t 206.897; not a t0 writer.",
+    "rng_boundary": "Authenticated fixed MPS-generated banks; not stock upstream CPU BF16 RNG stream.",
+    "metrics": {
+      "dit_encode_allocations": 0,
+      "dit_encode_readbacks": 0,
+      "dit_preterminal_waits": 0,
+      "dit_segments": 34370,
+      "dit_waits": 1,
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 25761,
+      "decoder_waits": 1
+    },
+    "instrumentation_scope": "Tracked MetalBuffer operations only; opaque MPS resources and terminal exports are outside encode counters.",
+    "validation": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty/validation.json",
+    "validation_sha256": "fcae2f490de19c4166548e41aa12c35bb6fb2bb7d3a9ca9bf75335657367ad57",
+    "unused_latent_tail_unchanged": true,
+    "all_frames_finite_nonconstant": true,
+    "visual_observation": "User reports the same tram exits the frame, then reverses along its previous path back to the middle. No identity-loss or opposite-track inference. Root cause unresolved.",
+    "visual_quality_verdict": "VULNERABLE",
+    "no_default_promotion": true
+  },
+  "guard": {
+    "returncode": 0,
+    "samples": 1422,
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_gib": 35,
+    "max_swap_growth_mib": 64,
+    "timeout_seconds": 1200,
+    "sampled_peak_footprint_gib": 33.67644962668419,
+    "sampled_min_headroom_gib": 11.781875610351562,
+    "sampled_swap_growth_bytes": 9762243,
+    "limitations": "Sampled guard does not bound between-poll spikes; file-backed reclaimability is an estimate"
+  },
+  "timing": {
+    "guarded_seconds": 742.0247737909667,
+    "seconds_per_video_second": 37.10123868954834,
+    "phases": {
+      "preflight_seconds": 2.961491375,
+      "dit_setup_seconds": 19.880958583,
+      "dit_wall_seconds": 194.901283583,
+      "dit_gpu_seconds": 184.82442936470034,
+      "decoder_setup_seconds": 23.859559084,
+      "decoder_wall_seconds": 497.485204542,
+      "decoder_gpu_seconds": 497.40863371046726,
+      "request_seconds": 740.968254541
+    },
+    "scope": "One uncontrolled request; includes admission/weight setup/inference/raw exports; excludes saved Qwen fixture preparation and MP4 encoding"
+  },
+  "artifacts": {
+    "evidence_root": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030",
+    "evidence_index": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/evidence-index.json",
+    "evidence_index_sha256": "927f3debba9eecd1ce15ec67ca919079e896f89be20d484fb824e301366d2689",
+    "video": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty/tram-continuous-20s-4-steps.mp4",
+      "sha256": "6b811b8990cd7a9bed7e59cb744e5f889c6a4df7379296331bcfba6a68191a56",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 512,
+            "height": 288,
+            "avg_frame_rate": "24/1",
+            "duration": "20.000000",
+            "nb_frames": "480",
+            "nb_read_frames": "480"
+          }
+        ]
+      }
+    },
+    "adversary": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty/correlated-adversary.json"
+  },
+  "verification": {
+    "observed_commands": [
+      {
+        "argv": [
+          "python3",
+          "-B",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/validate-sequence-twenty.py"
+        ],
+        "exit_code": 0,
+        "signal": "Authenticated 45 source files, binary and inputs; 16 ordered steps, three cache writers, 23 ordered windows, all 480 frames and sampled guard gates. Validator refuses overwrite of completed evidence."
+      },
+      {
+        "argv": [
+          "make",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/build-formatted",
+          "hy_nomas_sequence_generate"
+        ],
+        "exit_code": 0,
+        "signal": "Release rebuild after mechanical formatting; historical binary preserved."
+      }
+    ],
+    "focused_crystal_examples": 71,
+    "crystal_failures": 0,
+    "python_tests": 32,
+    "python_skipped": 1,
+    "python_failures": 0,
+    "format_check_passed": true,
+    "structural_validation_is_not_numerical_or_perceptual_proof": true,
+    "post_format_checks": [
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-crystal-formatted-command.json",
+        "command_record_sha256": "202a0da58f659179fbcd7bf20f65122c7af2eea44dbe1206a3543e8b92c30f14",
+        "log": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-crystal-formatted.log",
+        "log_sha256": "436c80fd2ba5b8c9da8a4b09410493839d9d40a32b7f67645887f9f6c0a91da7"
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-python-formatted-command.json",
+        "command_record_sha256": "0863f35ecca8229b413948674c3aba6e827c397724de19120ec343cea3ab28fe",
+        "log": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-python-formatted.log",
+        "log_sha256": "e60afd3dd913b594c70f275902d06c2bea2150f7b01b293ade27ad40fd3ad7be"
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-format-formatted-command.json",
+        "command_record_sha256": "6310708f4f5e1c9f89860e3d5b0a332561a11db15a45a566f8a821a280487eaa",
+        "log": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/tests-format-formatted.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
+}

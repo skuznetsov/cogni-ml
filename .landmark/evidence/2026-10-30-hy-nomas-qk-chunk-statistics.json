@@ -1,0 +1,333 @@
+{
+  "schema": "cogni_ml.hy_nomas_qk_chunk_statistics_evidence/v1",
+  "date": "2026-10-30",
+  "claim": "The saved 768x416 terminal-latent PixelUMM replay matches the authenticated gathered local-tile source-MPS raw and display outputs bitwise after source-shaped Q/K statistics chunking.",
+  "source_state": {
+    "base_commit": "34f64d17459a5dabb7d2ac01e99cb245bf64f052",
+    "changed_source": {
+      "path": "src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "sha256": "d0b1d9e1b870052019dcdf5473026f919f1de2b604f6768030dfc8e7daf044db"
+    },
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "upstream_module": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024/hymm/models/vae/pixelumm_decoder/model.py",
+      "sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
+    }
+  },
+  "failure_and_discriminator": {
+    "baseline_prefix4": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-native-v1/prefix4-native-ffn-f32-report-v2.json",
+      "sha256": "c2a314763c40526cc020de1e9e1db48d674993b38d03b11dd319d40ecbddd392"
+    },
+    "faithful_k_reference": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/k-tail-native-v1/k-stage-reference-v1.json",
+      "sha256": "e3f49ff230352ab9bf4673abaf05d0098eea11c29cdd519f99603b3503104e06"
+    },
+    "baseline_isolated_k": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/k-tail-native-v1/k-stage-native-report-v1.json",
+      "sha256": "9415dcb10fae076de1dd1241860e637db18ee9bc3691162f43f105360b86db45"
+    },
+    "tail_localization": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/k-tail-native-v1/k-stage-bitwise-localization-v1.json",
+      "sha256": "251bf6970826e7cc1b09e1b0a7e8767ce972281ff6f7e8033ee8a30d634386f6"
+    },
+    "observation": "Block 2 has 1,085 differing F32 K statistics words, one ULP apart, only in the final 192 tokens; prepared K has three different BF16 words and two tolerance failures. Prefix block 2 output has 530 failures; block 3 output has 531,082 failures.",
+    "single_tail_intervention": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/k-tail-stat-override-v1/k-tail-stat-override-report-v1.json",
+      "sha256": "e7807e2e00afb524205c1d711823c7a4bab3a3675f82c037bda07b9235172360"
+    },
+    "discriminator_result": "Replacing only the final 192-token K statistics makes all seven retained K/output stages bitwise equal; inverse/gain/RoPE remain unchanged."
+  },
+  "implementation": {
+    "input_cap_f32_bytes": 16777216,
+    "q_chunk_tokens": 1024,
+    "k_chunk_tokens": 4096,
+    "head_dim": 128,
+    "strategy": "Prepare immutable packed input/output offset aliases once; share executable for full chunks; retain graph/view/buffer owners through drain. Whole-J inverse/gain/RoPE unchanged.",
+    "compatibility": "Chunked plans fail closed before graph construction on macOS<15; single-chunk plans retain macOS14 support.",
+    "rollback": "Revert this atomic change to restore whole-J statistics; doing so reopens the recorded numerical failure."
+  },
+  "qualification": {
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "build_plan": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/final-build-plan-v3.json",
+      "sha256": "bdb746c1e7fff12b03b4167b0e6f74b93a5792f03a3d9123b542e7fa80124a19"
+    },
+    "build_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/final-build-receipt-v3.json",
+      "sha256": "4cc492d1463b3ed515d37ef00740eaecb8e330b779c1225c7d8ada896ad4d732"
+    },
+    "cpu_command": [
+      "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+      "-B",
+      "spec/hy_nomas_pixelumm_reference_test.py"
+    ],
+    "cpu_tests": {
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/reference-cpu-tests-receipt-v3.json",
+        "sha256": "674a7f414eb4f5e660590f99d213cbc74db901a8e49158a7033393151c5f0dca"
+      },
+      "passed": 27
+    },
+    "block2_launch": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/launch-block2-v3.json",
+      "sha256": "348e19ed1415a4659c3acbde888c36629b8aba15f81edfde814c81f73f3b3690"
+    },
+    "block2": {
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/qk-chunk-block2-report-v3.json",
+        "sha256": "7df45006abd6de0ec4bc814ce97ca2016538582b95f76138007d27f69fa29b9a"
+      },
+      "requests": 2,
+      "all_retained_stages_bitwise_equal": true,
+      "waits_per_request": 1,
+      "tracked_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "guard": {
+        "record": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/block2-guard-v3.jsonl",
+          "sha256": "adeb1635632ad54d9fc5cf7df7f1c2b23df2f8ca8064ba25362682a4f04c8695"
+        },
+        "cap_bytes": 8589934592,
+        "reserve_pct": 10,
+        "deadline_seconds": 300,
+        "swap_growth_stop_bytes": 67108864,
+        "sampled_peak_bytes": 5293426608,
+        "minimum_cache_aware_headroom_bytes": 38878527488,
+        "maximum_swap_growth_bytes": 0,
+        "exit_code": 0
+      }
+    },
+    "prefix4_launch": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/launch-prefix4-v3.json",
+      "sha256": "169de4b498b8708c48a682208a497e89fb59487118e6949eb530d36bf9002e8b"
+    },
+    "prefix4": {
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/qk-chunk-prefix4-report-v3.json",
+        "sha256": "e7123e849d5ab210f6b6756c8e39a8c1b6d9d391d5c21b4d3e19a3ab6aa6cb88"
+      },
+      "requests": 2,
+      "all_retained_stages_bitwise_equal": true,
+      "waits_per_request": 1,
+      "tracked_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "guard": {
+        "record": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/prefix4-guard-v3.jsonl",
+          "sha256": "8e3a9f1c21d2dd8f4614b648fc8c76a83062eae01cd7e16c2c72f69a9d1e06fb"
+        },
+        "cap_bytes": 8589934592,
+        "reserve_pct": 10,
+        "deadline_seconds": 300,
+        "swap_growth_stop_bytes": 67108864,
+        "sampled_peak_bytes": 6970592328,
+        "minimum_cache_aware_headroom_bytes": 37129601024,
+        "maximum_swap_growth_bytes": 0,
+        "exit_code": 0
+      }
+    },
+    "full_replay": {
+      "entry": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/examples/hy_nomas_terminal_decode_replay.cr",
+        "sha256": "b5bb032389ec39413c6e1b9f8e72527a429e4cabbf2e8bfb75202ce6abdf8bec"
+      },
+      "build_plan": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/build-plan-v1.json",
+        "sha256": "199760b495a70e3f84d01d179dfc08abac8de8f0b73649ab5addb288e92bb409"
+      },
+      "build_receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/build-receipt-v1.json",
+        "sha256": "25a8ce754270978b091b5d1f73574666c7891c299ff6c806305cbbf27f67304e"
+      },
+      "preflight_receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/preflight-receipt-v1.json",
+        "sha256": "a140c1f9fcee36302299587f0aca8ec45e8db6908515160b9190fb51a9f14c79"
+      },
+      "launch": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/native-final-launch-v1.json",
+        "sha256": "c8f9e300280d3e5eda4b962d09cce0d1c7e21ee3dd5b5ed5f6af32a18ee2dc8a"
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/native-final-completion-v1.json",
+        "sha256": "3ab74e8749ac7e5dd42db9c2b50a63a75fb4562619984d4df6824dc0ed8b6334"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/native-final-v1/receipt.json",
+        "sha256": "c6aab1a6db092cbf491d455bce7a34332a459b9328e33688ccbd7e2a0a4f4baa"
+      },
+      "comparison": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/full-decoder-comparison-v1.json",
+        "sha256": "e54db5e16fb2641d2ad9199497c1019e357ec59ff47504bf1dc44613df61472b"
+      },
+      "comparison_script": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/compare_saved_source_v1.py",
+        "sha256": "92587d32a9c95487d0adbc4dff610574ef4ee9b799ab258033e4ad373deab838"
+      },
+      "comparison_launch": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/comparison-launch-v1.json",
+        "sha256": "33d29e6db9e5be0d9e96d25d953345622d35628ef7435a82d85dabd04c12b480"
+      },
+      "comparison_completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/comparison-completion-v1.json",
+        "sha256": "bd907ba2dd883acbc7558fc3e1fbd7d7d0a0b612bef2d002123a9865058b3e20"
+      },
+      "geometry": [
+        768,
+        416
+      ],
+      "frames": 120,
+      "blocks": 36,
+      "head": true,
+      "window_starts": [
+        0,
+        5,
+        10,
+        15,
+        20
+      ],
+      "two_output_banks_and_shared_scratch": true,
+      "output_values_per_pair": 115015680,
+      "raw_and_display_bitwise_equal": true,
+      "raw_sha256": "2ac353513b9edf96400b1faea5c78315dfa6e280e21675eaa3a29f1cf7df5f36",
+      "display_sha256": "62eb29fdcca215d69d29bb143d46b78223000ede35363336e1b8b98cca7a061f",
+      "metrics": {
+        "decoder_encode_allocations": 0,
+        "decoder_encode_readbacks": 0,
+        "decoder_preterminal_waits": 0,
+        "decoder_segments": 11731,
+        "decoder_waits": 1
+      },
+      "guard": {
+        "record": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/decoder-replay-prep-v1/native-final-guard-v1.jsonl",
+          "sha256": "26ef254a14a31afdd375f18298a5f57a5fa13aa59b5d50ea6305cf4ed1613ff3"
+        },
+        "cap_bytes": 27917287424,
+        "reserve_pct": 10,
+        "deadline_seconds": 1200,
+        "swap_growth_stop_bytes": 67108864,
+        "sampled_peak_bytes": 21704437496,
+        "minimum_cache_aware_headroom_bytes": 18527911936,
+        "maximum_swap_growth_bytes": 0,
+        "exit_code": 0
+      },
+      "unpaired_decoder_seconds": 154.80601325
+    },
+    "default_geometry_block0": {
+      "scope": "Default 512x288 J5760 synthetic single-block regression, not real-conditioned default decoder or gaze-pair output.",
+      "reference_launch": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/reference-launch.json",
+        "sha256": "cee7873159aa8e98acb9604a52e55c6bc1538750358553182d2b2b6aefa0a294"
+      },
+      "reference_completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/reference-completion.json",
+        "sha256": "178dcd4343c6fcad34dff805c0a8a5e3a2d473daf4d56e7e1da710a3b542fa16"
+      },
+      "reference": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/reference/block0-j5760-current-qk.json",
+        "sha256": "5cacff91b7208f771cc4b7a987eca3ac47a8c0a0900e8ecc007359c09ed532f4"
+      },
+      "input_weight_identity": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/input-weight-identity.json",
+        "sha256": "24bf0b29e1afb3cac1ad1850cccc0a106db06569e63a203d874b5362fd89e650"
+      },
+      "reference_guard": {
+        "record": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/reference-guard.jsonl",
+          "sha256": "eac0b76696fc42d50da3e1eb63da19ca3d7980579834701e961a2dafdd660866"
+        },
+        "cap_bytes": 8589934592,
+        "reserve_pct": 10,
+        "deadline_seconds": 600,
+        "swap_growth_stop_bytes": 67108864,
+        "sampled_peak_bytes": 4785653704,
+        "minimum_cache_aware_headroom_bytes": 39949746176,
+        "maximum_swap_growth_bytes": 0,
+        "exit_code": 0
+      },
+      "build_plan": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/block0-build-plan.json",
+        "sha256": "c89632758348f0041271419ca87cd86a6e9795a1cab907d641eadda809f1b1c6"
+      },
+      "build_receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/block0-build-receipt.json",
+        "sha256": "cb225d6f9ba691fd550c3ebcb271bbd54ac6184060545756daff85dff0311cb2"
+      },
+      "launch": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/native-launch-v2.json",
+        "sha256": "a453eee30f62a1291e787375059d1e2f45b4c192e5fe44b1570f662c9f45cfb6"
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/native-completion-v2.json",
+        "sha256": "7f60d9e6a44272c5db34bfb218f8bb14caace85e23723bfeeb53eb0917897ddb"
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/native-report-v2.json",
+        "sha256": "4abbedb43c67245afb5442a55ec9430cf2ad79eee12d3d4652fc88b4dc6440d3"
+      },
+      "guard": {
+        "record": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-terminal-stem-20261030/qk-chunk-native-v1/default-geometry-regression-v1/native-guard-v2.jsonl",
+          "sha256": "f783da3b7776097b94a1a881e20a73f5677bc225ec2b71a49e88daac38819137"
+        },
+        "cap_bytes": 8589934592,
+        "reserve_pct": 10,
+        "deadline_seconds": 300,
+        "swap_growth_stop_bytes": 67108864,
+        "sampled_peak_bytes": 4870704152,
+        "minimum_cache_aware_headroom_bytes": 40108130304,
+        "maximum_swap_growth_bytes": 0,
+        "exit_code": 0
+      },
+      "all_26_stages_bitwise_equal_in_gate_and_repeat": true,
+      "waits_per_request": 1,
+      "tracked_encode_allocations": 0,
+      "preterminal_activation_reads": 0,
+      "diagnostic_reads_after_wait_per_request": 26,
+      "provenance_negative": "The block2-pinned external binary rejected this block0 fixture before GPU setup. The unchanged repository block0 entry was then built against the same qualified v3 native object; no provenance guard was weakened."
+    }
+  },
+  "latest_video_question": {
+    "media": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/exports/comparison-side-by-side-10s.mp4",
+      "sha256": "296657c28c799dd919e7f5b9eaa654a00161d9a41a1b1700d8e32589e7af2116"
+    },
+    "manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/exports/comparison-manifest.json",
+      "sha256": "ccfc41420ac560aa2aca7da8e1e6122105f56f428d8f0f7a2fb212bdf260d343"
+    },
+    "baseline_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/arms/baseline/output/receipt.json",
+      "sha256": "1de5c3f37cc887111564ca5f68c3420c27f66f632d3e96f433ec6cec976795d6"
+    },
+    "treatment_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/arms/fixed-gaze-treatment/output/receipt.json",
+      "sha256": "b82a3ecc29f91a5f5277766af8ccc2ce6d7a620c07788fba6a3367431115295f"
+    },
+    "diffusion_steps_per_five_second_segment_each": 4,
+    "pixelumm_steps_each": 1,
+    "left": "native baseline",
+    "right": "native combined forward-gaze/head-motion/no-glance/no-smile prompt treatment",
+    "user_observation": "The eyes on the right look noticeably more natural in motion.",
+    "scope": "Both arms predate this Q/K fix. This is a combined prompt treatment, not an isolated gaze test or native-versus-upstream decoder comparison."
+  },
+  "adversary": {
+    "same_lineage_not_independent": true,
+    "source_alias_review": "ROBUST for current source alias geometry/retention and final 36-block two-bank/five-window evidence; static anchors are pixel_qk_statistics_steps, production Decoder workspace and per-window encode loop. No blocker found.",
+    "completion_lineage_review": "ROBUST for launch/completion/source-report/origin-preview/latent/input/cache/noise lineage, raw/display semantics and sampled guard. Source-MPS adapter only; not gaze-pair or perceptual qualification.",
+    "default_geometry_review": "ROBUST for the synthetic block0 J5760 gate: current-helper reference, exact old/new input and weight identities, unchanged repository entry, pinned v3 native object, all26 stages bitwise in gate and repeat, sampled guard. Not real conditioning, later blocks or full decoder."
+  },
+  "limits": [
+    "Source oracle is Torch 2.6 MPS with gathered local-tile attention, not stock CUDA/FlexAttention.",
+    "Full output equality plus prefix4 and isolated K gates do not qualify every intermediate in all 36 blocks, other inputs, devices or geometries.",
+    "No new DiT/scene generation or perceptual quality qualification; eye and motion defects remain open.",
+    "Tracked encode counters exclude opaque MPS allocations; guard sampling cannot prevent between-poll spikes. File-backed memory is estimated reclaimability.",
+    "Timing is unpaired and supports no speedup claim."
+  ],
+  "decay": "Requalify after source/reference adapter, model/cache, latent/noise, dtype, geometry, runtime/backend/device changes or artifact loss; re-admit memory for each run.",
+  "next_signal": "Review identical saved latent/noise decoded after this numerical correction for perceptual change; treat a real-conditioned default-size replay and motion boundaries separately."
+}

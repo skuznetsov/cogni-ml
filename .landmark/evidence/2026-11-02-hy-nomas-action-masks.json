@@ -1,0 +1,284 @@
+{
+  "schema": "cogni_ml.hy_nomas_action_masks_evidence/v1",
+  "date": "2026-11-02",
+  "claim_scope": "Opt-in one-subject/action reference mask passes scoped source-range F32 oracle; neither paired take produces the requested Alex head turn; full-model BF16 gate fails.",
+  "parent_revision": "8029e1a0ada9356bfe7c0023dbb6595b1a24c39b",
+  "risk": "CAUTION: prompt/cache/attention visibility",
+  "rollback": "Omit paired --reference-action-mask and --reference-action-mask-sha; previous untimed separate-action path remains.",
+  "local_artifacts": "/opt/mldata_ssd/cogni-ml/rolewright-action-masks-20261102.2hpyx7c6",
+  "lineage": {
+    "source_files": {
+      "Makefile": "7a330d3d319bbabcd863070594fbca9128fbd32fbcaf24d3d6344b07f9727220",
+      "examples/hy_nomas_sequence_generate.cr": "d7b89795ae7fcfbc71ae310b747be43b6bd2288bf47c39e4bf775492588be498",
+      "examples/support/hy_nomas_sequence.cr": "ee5efb22e42af7f26c398d0e375ccbc8a14e09734b142cb85bd3c2c5b0fb9f53",
+      "src/ml/video/hy_nomas_action_conditioning.cr": "de0060d031834eca36199ee9dbfd1f7896386d04b8781cc7baf4d9fbb468f566",
+      "src/ml/video/hy_nomas_reference_action.cr": "5d5909864846158d73ca7323268b3dcd6a400073d182ea377bbecf0751f42cb2",
+      "src/ml/video/hy_nomas_continuation_history.cr": "522974f40435abb0a4605d3d6ee48bc239b06444cb3b668a0b04bb200652be4a",
+      "src/ml/video/hy_nomas_history_attention.cr": "c9f5e574da2dcc8a65ebac0abb1c27eba5696c630d7d61c547ce912dd2c6e961",
+      "src/ml/video/hy_nomas_history_attention_bridge.mm": "5dd67792abba2dd7a9be071fd0954202ff386532e80f5b35bd56cd2611a42411",
+      "examples/support/hy_nomas_action_conditioning.py": "658fccfacfd40aaeef08cfc2b0555a50409872f8ffc3c9529539778b6f04eb72",
+      "examples/hy_nomas_action_attention_probe.cr": "bc5823bd1b0bc7f6197df5a14beda999e5980b8f059db05880b14878e08aa64e",
+      "examples/support/hy_nomas_action_attention_probe.cr": "b1287b8c49d9fc7bbb25f12d02d80001c335f59a1add06f4ebcf97874964460f",
+      "spec/hy_nomas_continuation_history_spec.cr": "dd06746d42a8366ec8bb77e2d2aa4251fbac7d599252368670011dc580ab48e1",
+      "spec/hy_nomas_reference_action_spec.cr": "88c5faf8f7a1ea5022422dda13cd3f08b6a73967915f47eac5c5edc796d5e93b",
+      "spec/hy_nomas_action_conditioning_spec.cr": "c7f3b6d54a991987f0737c2e32f9bd6f18d7080e435f7d94efc261a905dc857e",
+      "spec/hy_nomas_action_conditioning_spec.py": "2dcf62a906be2ef0a68313311a00941859a4bbf89806171614d9e8c334734b72",
+      "spec/hy_nomas_history_action_mask_spec.cr": "5fc063df6be679f07f75c98ab3971ac87380bfef2d6e366ea1091bfaa97d072d",
+      "spec/hy_nomas_action_attention_reference_spec.py": "6418916d83d0e4a166b4e0321e98bfe2d23cf5052e43324547fb3fee06267410",
+      "spec/support/hy_nomas_action_attention_reference.py": "dad61aa3be9dbdbca750b24fd1d6158c0969041fc34e42a91e3b9fe09119e575",
+      "spec/hy_nomas_structured_reference_control_spec.py": "b11c0198104d49b8cf448ab910bf9d66b0cf3b11f6f6afe292ebe2a27af0f6b3",
+      "spec/support/hy_nomas_structured_reference_control.py": "dad978a67a749177cc8b3ae981a6b6af5e83fec682602822a13f5030b5a7d329"
+    },
+    "upstream_prompt_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "upstream_model_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "tested_full_request_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/build/hy_nomas_sequence_generate",
+      "sha256": "02afd54d62c8964aa7552fabdab13112b3c22c13fd2c723dc1cc302a85b1362e",
+      "build_stage": "build-v2",
+      "source_note": "The model run uses the build-v2 source. Subsequent Crystal edits before final build are formatter-only."
+    },
+    "final_formatted_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/build/hy_nomas_sequence_generate",
+      "sha256": "1076bdbd40cad2d62b8d918587b6de8345d9d37a5e499b5b291ef571d4346911",
+      "scope": "build, plan-only, CLI negatives and native GPU mask probe; full request preceded formatter-only edits"
+    },
+    "decode_binary": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo/build/hy_nomas_decode_latent",
+      "sha256": "99385cc63bc536c02553ea5fe32ffff8d8aeff95407f89e12540376e62282f80"
+    },
+    "control_torch_version": "2.8.0"
+  },
+  "observed_checks": [
+    {
+      "command": "make spec_hy_nomas_reference_handoff",
+      "result": "101 examples, 0 failures, 0 errors"
+    },
+    {
+      "command": "python -B -m unittest spec.hy_nomas_action_conditioning_spec spec.hy_nomas_structured_reference_control_spec spec.hy_nomas_action_attention_reference_spec -v",
+      "result": "15 tests, OK"
+    },
+    {
+      "command": "crystal spec -D cpu_only spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_segment_prompt_edit_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr",
+      "result": "18 examples, 0 failures, 0 errors"
+    },
+    {
+      "artifact": "compiled-mask-admission-checks.json",
+      "result": "3 compiled negative admissions reject before Metal"
+    },
+    {
+      "artifact": "mask-probe-final.json",
+      "result": "259-query tile-tail source F32 oracle; masked/legacy max absolute error 7.62939453125e-6, zero failures under absolute-only 2e-5; discriminating sentinel; lifecycle guards pass"
+    },
+    {
+      "artifacts": [
+        "build-final.result.json",
+        "native-plan-final.result.json",
+        "mask-probe-final.result.json"
+      ],
+      "result": "exit 0"
+    }
+  ],
+  "gpu_probe": {
+    "geometry": {
+      "history_rows": 3,
+      "query_rows": 259,
+      "masked_current_rows": 259,
+      "legacy_current_rows": 257,
+      "heads": 2,
+      "head_dim": 4,
+      "source_range_count": 25,
+      "masked_graph_calls": 2,
+      "legacy_graph_calls": 2,
+      "masked_workspace_bytes": 303524,
+      "legacy_workspace_bytes": 33024,
+      "masked_max_score_bytes": 536576,
+      "legacy_max_score_bytes": 532480
+    },
+    "comparisons": [
+      {
+        "name": "native source-range mask vs pinned CPU F32 oracle",
+        "max_abs": 7.62939453125e-06,
+        "failures": 0,
+        "first_bad_index": null,
+        "finite": true
+      },
+      {
+        "name": "unlabelled legacy control vs pinned CPU F32 oracle",
+        "max_abs": 7.62939453125e-06,
+        "failures": 0,
+        "first_bad_index": null,
+        "finite": true
+      }
+    ],
+    "max_masked_vs_legacy_active_output_delta": 25.32388401031494,
+    "named_buffer_allocations_during_encode": 0,
+    "encode_readbacks_before_terminal_wait": 0,
+    "waits_before_terminal_wait": 0,
+    "terminal_wait_count": 1,
+    "diagnostic_readbacks_after_wait": 2,
+    "passed": true
+  },
+  "guard_policy": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_process_footprint_gib": 25.5,
+    "max_swap_growth_mib": 64
+  },
+  "guarded_runs": {
+    "native": {
+      "peak_sampled_footprint_gib": 25.36222719401121,
+      "min_sampled_headroom_gib": 15.27276611328125,
+      "swap_growth_bytes": 0,
+      "returncode": 0,
+      "wall_seconds": 533.2599233749788
+    },
+    "upstream-v3": {
+      "peak_sampled_footprint_gib": 19.600038319826126,
+      "min_sampled_headroom_gib": 23.669876098632812,
+      "swap_growth_bytes": 0,
+      "returncode": 0,
+      "wall_seconds": 60.096349625033326
+    },
+    "source-decode-v2": {
+      "peak_sampled_footprint_gib": 18.407558977603912,
+      "min_sampled_headroom_gib": 19.3887939453125,
+      "swap_growth_bytes": 0,
+      "returncode": 0,
+      "wall_seconds": 161.21774550003465
+    }
+  },
+  "terminal_numerical_gate": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "first_error_localized": false,
+    "native_latent_sha256": "171a75c8881bbc82cd3de2eb31997369b8009550e27930e939f0cc4a321001aa",
+    "source_latent_sha256": "ec25eb2ca79de685b358f5ed1ec32f3f8b6de3604b749d7e83eb4cd04cdceefc",
+    "native_precision": "F32 intermediates/history with BF16 weights",
+    "source_precision": "BF16 intermediates/history and weights; pinned MPS SDPA adaptation",
+    "T0": {
+      "values": 138240,
+      "max_abs_error": 0.0,
+      "rms_error": 0.0,
+      "mae": 0.0,
+      "mismatches": 0,
+      "byte_identical": true
+    },
+    "T1": {
+      "values": 138240,
+      "max_abs_error": 0.51953125,
+      "rms_error": 0.022405263319767246,
+      "mae": 0.01693538041026504,
+      "mismatches": 121206,
+      "byte_identical": false
+    },
+    "passed": false
+  },
+  "paired_provenance": {
+    "artifact": "source-decode-pairing.json",
+    "sha256": "717a3a59ee8f60bd4cd4a62713b5b8f23199d7d1f998d4732bdbfcde7b7497ab"
+  },
+  "visual_result": {
+    "method": "root inspected 25 ordered native and 25 ordered source generated-T1 frames",
+    "native_sheet": "native-generated-25-frames.png",
+    "source_sheet": "source-generated-25-frames.png",
+    "native": "No substantial Alex head turn; scene remains essentially still",
+    "source": "No substantial Alex head turn; scene remains essentially still",
+    "head_turn_observed": false,
+    "common_decoder": "native PixelUMM in both; source DiT is pinned BF16 Torch MPS adaptation",
+    "full_upstream_video_parity": false
+  },
+  "media": {
+    "alex-head-turn-native-5s.mp4": {
+      "sha256": "455dd11295c5f099d1cd038c47ce3f06a9b85db02d6a652aa14d39bcc0aa7efe",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 512,
+            "height": 288,
+            "r_frame_rate": "24/1",
+            "nb_frames": "120"
+          }
+        ],
+        "format": {
+          "duration": "5.000000"
+        }
+      },
+      "display": "generated T1 frames [120,240), technical T0 excluded"
+    },
+    "alex-head-turn-source-5s.mp4": {
+      "sha256": "f32750e4025e5528763c70de979f54d16049a6c06830dcd0c666a601561520b0",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 512,
+            "height": 288,
+            "r_frame_rate": "24/1",
+            "nb_frames": "120"
+          }
+        ],
+        "format": {
+          "duration": "5.000000"
+        }
+      },
+      "display": "generated T1 frames [120,240), technical T0 excluded"
+    },
+    "alex-native-vs-source-5s.mp4": {
+      "sha256": "0ed197127f339697d774425848219ef4b54f594d5a5ab2d86997d73c7d194ff8",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1024,
+            "height": 288,
+            "r_frame_rate": "24/1",
+            "nb_frames": "120"
+          }
+        ],
+        "format": {
+          "duration": "5.000000"
+        }
+      },
+      "display": "generated T1 frames [120,240), technical T0 excluded"
+    }
+  },
+  "adversary": {
+    "scope": "correlated read-only mini-Quad plus root executed probes and visual falsifiers",
+    "mask_admission_verdict": "ROBUST",
+    "head_turn_verdict": "BROKEN",
+    "offset_review": "source raw endpoint 260 clamps to valid 152; head 57 already subtracts crop_start 108; no second crop subtraction",
+    "next_falsifier": "T0 cache writer/history and first T1 forward at source BF16 boundaries on identical inputs; common decoder remains unexcluded"
+  },
+  "artifacts": {
+    "action-profile.json": "1aa97a6a83dd1418d5726f2c1a7d01281c22ce41c552790bc31f84aa963e3f1b",
+    "compiled-mask-admission-checks.json": "db3a729c98841d44e099680da8b3ed43665c90ca3d405ceafe37e8cea7f0d00f",
+    "mask-probe-final.json": "2f6671a548644f7009c4c1a8f11579126da27296e2385e9f657b63df1403f5a5",
+    "terminal-comparison.json": "4e29de0e2cb8bf43312f3542faaf5fb5223a0c3b72af1a5c3c04bf3d0b56e174",
+    "source-decode-pairing.json": "717a3a59ee8f60bd4cd4a62713b5b8f23199d7d1f998d4732bdbfcde7b7497ab",
+    "paired-final-review.json": "5b3cab08b8fab0d7c8cd6b7974dd9c1d13ccda2ec25ab846a9f846b5b0e5be6b",
+    "results/receipt.json": "3cbc12a9f07156488ecc9068b4604736077df3dc9cc70a8c7d17a0f52e0e5cde",
+    "source-results/control.json": "097cd31256e20c65851ba1b07bf2a761b33bf4768a7e517eb804e6555e66f961",
+    "source-results/decoded-v2/receipt.json": "9942b325e95040f929f953e8d11f30485f066d95e2d4b9664ed204e06eda4690",
+    "verification-crystal.log": "079f087b64d3a1e53537d0fee3fbf470a077a78d50d820a0e027cf5788483496",
+    "verification-python-final.log": "dd2686d0a7a37e2b1405c426652fa460f2ecff5cd16961b06ad8d1d7460e97d3"
+  },
+  "retained_failed_attempts": {
+    "upstream": "endpoint-note literal mismatch before forwards",
+    "upstream_v2": "recursive factory rebinding before forwards; fixed with captured original factory and regression",
+    "source_decode": "required existing empty output directory absent; fixed invocation only"
+  },
+  "limitations": [
+    "Native full DiT intermediates/history remain F32; source control BF16 MPS replaces Magi/Flash.",
+    "The same native PixelUMM is used on both sides; no decoder parity or sole cause conclusion.",
+    "No head-turn fix, complete script, speedup or full-model numerical parity.",
+    "Historical action tails, multiple subjects/actions and longer masked reference timelines are not admitted.",
+    "Tracked native counters exclude opaque MPS internals; memory samples do not bound between-poll peaks.",
+    "Artifacts are local-only; digests cannot recover deleted files."
+  ],
+  "decay_trigger": "Source, binary, input, mask, tokenizer, weights, geometry, precision/cache semantics, backend/compiler/runtime/device change or artifact loss.",
+  "refresh": "Rerun focused admissions and authenticated guarded paired probes; retain failed gates at unchanged tolerances."
+}

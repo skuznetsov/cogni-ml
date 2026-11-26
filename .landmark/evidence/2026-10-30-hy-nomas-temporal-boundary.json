@@ -1,0 +1,164 @@
+{
+  "schema": "cogni_ml.hy_nomas_temporal_boundary_evidence/v1",
+  "created_at": "2026-10-30T20:56:40.797120+00:00",
+  "base_revision": "99b34269664759c93fe51a2e6167d5d02070f0b3",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Selected Echo frames120:140 reproduce saved native F32 display pixels with the pinned upstream BF16-equation MPS adapter, identical saved latents and decoder noise. This is a bounded decoder parity result, not a temporal-quality fix or full upstream continuation parity.",
+    "adversary_verdict": "ROBUST for selected final display parity; VULNERABLE for a causal explanation or motion-quality fix. Frame119, frame140 onward, other seams and raw pre-display tensors remain unchecked.",
+    "correlation": "Same-lineage source and artifact review; host-side terminal-export check uses the same saved tensors. No independent stock CUDA/FlexAttention pipeline execution.",
+    "decay_trigger": "Refresh on source/input/weights/geometry/precision/backend/device/toolchain or display/blend policy change, or evidence loss. Every model rerun needs fresh cache-aware memory admission."
+  },
+  "diagnosis": {
+    "observations": [
+      "Echo ROI flow slows near 5/10/15s in raw display frames and MP4; the onset is gradual and can precede the nominal edge.",
+      "All480 MP4 timestamps are regularly spaced at24fps within1e-5s; repeat_pict is zero. This does not establish smooth player rendering.",
+      "The decoder runs one global23-window schedule; it does not reset per5s segment."
+    ],
+    "limitations": [
+      "One clip and screen-space ROI flow; texture, occlusion and very low motion affect estimates.",
+      "No eye tracking, physical camera-speed estimate or causal attribution.",
+      "Frames100:120, later two5s boundaries and pre-display raw stages are not covered by the new neural comparison."
+    ],
+    "source_contract_candidate": "Native experimental shared-scene continuation includes/appends current text rows for every5s chunk. Optional upstream one-scene chunk_ar caches text once; this semantic difference is source-confirmed, not demonstrated as the slowdown cause.",
+    "next_falsifier": "Compare the second chunk on the same real clean prefix, conditioning, epsilon and RoPE using upstream one-scene cache_txt=false. Compare denoise inputs, history/cache writer and hidden/output stages before a cache-policy change.",
+    "prompt_correction": "External draft explicitly adds multicolored glazed paving tiles and distinct colored lanterns. Original prompt/video preserved; draft has not been encoded or generated."
+  },
+  "numerical_comparison": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "adapter": "Pinned upstream GenLayer equations with gathered spatial-tile F32 QK/softmax/PV on MPS; pinned upstream _TemporalBlender and explicit BF16 display boundaries. Not the unmodified stock full-video pipeline.",
+    "seam": {
+      "seam_frame": 120,
+      "latent_boundary": 30,
+      "latent_starts": [
+        25,
+        30
+      ],
+      "pixel_starts": [
+        100,
+        120
+      ],
+      "noise_frame_range": [
+        100,
+        160
+      ],
+      "compare_frame_range": [
+        120,
+        140
+      ],
+      "local_compare_frame_range": [
+        20,
+        40
+      ]
+    },
+    "representation": {
+      "representation": "display F32 [0,1]",
+      "native_source": "saved sequence pixels.f32le after BF16-rounded multiply/add and clamp",
+      "upstream_transform": "BF16-rounded multiply by 0.5, BF16-rounded add 0.5, clamp [0,1]",
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "compared_global_frames": [
+        120,
+        140
+      ],
+      "compared_shape": [
+        1,
+        3,
+        20,
+        288,
+        512
+      ]
+    },
+    "metrics": {
+      "max_abs_error": 0.0,
+      "mean_abs_error": 0.0,
+      "any_value_outside_tolerance": false,
+      "all_values_finite": true,
+      "all_source_weights_match_bf16_cache": true,
+      "result": "match"
+    },
+    "weight_word_checks": 468,
+    "compared_values": 8847360,
+    "independent_terminal_export_check": "CPU numpy.array_equal over all8847360 saved upstream display F32 elements versus native NCTHW[:,:,120:140]; finite and equal.",
+    "full_upstream_continuation_parity": false
+  },
+  "resource_guard": {
+    "returncode": 0,
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_gib": 28.5,
+    "max_swap_growth_mib": 64,
+    "timeout_seconds": 1200,
+    "sampled_peak_footprint_gib": 4.463167205452919,
+    "sampled_min_headroom_gib": 22.965667724609375,
+    "sampled_swap_growth_bytes": 0,
+    "limitation": "Sampled guard cannot bound between-poll spikes; file-backed reclaimability is an estimate."
+  },
+  "verification": {
+    "observed_commands": [
+      {
+        "command": "python3 -B -m unittest discover -s spec -p hy_nomas_decoder*test.py -v",
+        "exit_code": 0,
+        "signal": "18 CPU tests passed; geometry, identity rejection, NCTHW slicing, memory estimate and discriminating staged BF16 rounding."
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/results/sequence-echo-20s/diagnostics-decoder/launch-120.json",
+        "exit_code": 0,
+        "signal": "Guarded two-window oracle matched all selected display pixels;468 exact GPU BF16 weight checks passed."
+      }
+    ],
+    "launch_source_sha256": {
+      "spec/support/hy_nomas_decoder_boundary.py": "a51f1999fd8284111c6548681e9e69d1ae1522281923911b1f0793bddd2c3dd2",
+      "spec/support/hy_nomas_decoder_same_latent.py": "e8a037caaa2bc75a47e620cd6f4258434922a0f4d1081f30b48396f742fbab35",
+      "spec/support/hy_nomas_pixelumm_reference.py": "000495df85227b0a85c8429a06db20b7649de23103479e975e0a82ddd62dcf81",
+      "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    },
+    "launch_sources_unchanged_after_run": true,
+    "production_source_edits": false,
+    "new_production_synchronizations": false,
+    "model_scope": "Two decoder windows only; no DiT, Qwen or full generation. Explicit result synchronization occurs once at the terminal comparison boundary; no assertion about opaque MPS internal waits."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/results/sequence-echo-20s/diagnostics-decoder/decoder-boundary-120.json",
+      "sha256": "35a4dd0251dbcfa0ae82dd60e9f99300350ecaca695b959deb87ec71f266a707"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/results/sequence-echo-20s/diagnostics-decoder/launch-120.json",
+      "sha256": "038808f78a08a862664e65b388e309317677016df62eeb599238d5dae606fd72"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/results/sequence-echo-20s/diagnostics-decoder/guard-120.jsonl",
+      "sha256": "933c5ebaadccead1f76b90e871d85cea287cc8a53567da0f6c9d9aaeb710d1bc"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/results/sequence-echo-20s/diagnostics-decoder/run-120.log",
+      "sha256": "fa6c69da19badc68bd868d950df0cb9f3a294dadd98470cf38198f85544a0a62"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-contract/contract-audit.json",
+      "sha256": "0fdf6b04b02c492a5349c6a2740a148307335e8f5d63182cc362fedf2e7845a4"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-contract/latent-continuity.json",
+      "sha256": "77581ce622b0d4a282183dc392bd9ca4f42fcc8ee59228df449ff8b670993b14"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-temporal/temporal-summary.json",
+      "sha256": "f9fc2e0bb5a19c33a4dd28808dc11bb361316004c7eea5a17e7795985f6ac8b3"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-temporal/far-right-adversary-summary.json",
+      "sha256": "3bc8156f2f1fdf7814dd9559bf233021caa58e5a1b1edbf8ca6d224fa0fe1f6c"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-temporal/analyze_temporal.py",
+      "sha256": "2f27718813463dbc14df5d0a38f0cb259ef06fceaf9b10ac7e9173f6785c7f57"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030/diagnostics-temporal/adversary_far_right.py",
+      "sha256": "cfcc242db4d303beb43f758b2ed5e61126fac4a5bd6fd4734948ce7935cd03c2"
+    }
+  ],
+  "rollback": "Remove the opt-in diagnostic helper/test and evidence entry; production behavior and existing artifacts are unchanged."
+}

@@ -1,0 +1,585 @@
+{
+  "schema": "cogni_ml.hy_nomas_q4_reduction_evidence",
+  "date": "2026-10-25",
+  "base_commit": "2a2db6b7f74f10e324a087392bf5fa81523a8a76",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "For the authenticated M23/K8192/N2048 block-0 text FF projection, decoding agrees at every F16 coefficient and a dense clone reproduces actual direct Q4 bits; the unchanged 17 direct-versus-MPS tolerance failures remain in the long-K numerical accumulation path.",
+    "scope": "One saved activation/projection; direct Q4 production parity remains failed. MPS internal mechanism, uniform accuracy, speedup, full block and generation are not qualified."
+  },
+  "boundaries": {
+    "risk": "CAUTION: diagnostic GPU lifetimes, derived SIMD control and immutable evidence publication",
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "examples/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction.metal",
+      ".landmark/evidence/2026-10-25-hy-nomas-q4-reduction.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "examples/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction.metal",
+      ".landmark/evidence/2026-10-25-hy-nomas-q4-reduction.json"
+    ],
+    "rollback": "Leave the opt-in diagnostic unused or revert this atomic diagnostic feature; production kernels/defaults do not change.",
+    "standing_authority": "GPU neural math/reconstruction; one terminal wait/readback; no encode allocations or early reads; finite2e-5;10% cache-aware reserve; bounded process/swap/deadline; no full generation."
+  },
+  "adversary_verdict": "ROBUST for scoped diagnostic attribution, not an identification of MPS reduction order or an accuracy qualification",
+  "trust": {
+    "F": "Runtime assertions plus authenticated byte comparisons; no formal correctness proof.",
+    "G": "Selected real projection and input, with tested K32/256/2048/4096/6144/8192 geometries.",
+    "R": "Two guarded native runs reproduce all16 common bank hashes; root and correlated Mini-Quad independently recompute preserved terminal bytes."
+  },
+  "observations": {
+    "decode": {
+      "elements": 16777216,
+      "bit_differences": 0,
+      "nonfinite_canonical": 0,
+      "nonfinite_helper": 0,
+      "first_difference": null,
+      "low_nibble_differences": 0,
+      "high_nibble_differences": 0,
+      "self_control_differences": 0,
+      "injected_single_bit_differences": 1,
+      "compared_blocks": 65536,
+      "all_coefficients_bitwise_equal": true
+    },
+    "comparisons": [
+      {
+        "name": "direct.raw.vs.dense.raw",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "direct.bias.vs.dense.bias",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.canonical.raw.vs.mps.helper.raw",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.canonical.bias.vs.mps.helper.bias",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "direct.raw.vs.mps.helper.raw",
+        "elements": 47104,
+        "failures": 17,
+        "raw_bit_differences": 45856,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544596809314236e-05,
+        "relative_l2": 1.4122012323540016e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "direct.bias.vs.mps.helper.bias",
+        "elements": 47104,
+        "failures": 17,
+        "raw_bit_differences": 45853,
+        "max_abs": 0.000247955322265625,
+        "rmse": 1.8544793163295328e-05,
+        "relative_l2": 1.4113482393796142e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "direct.raw.vs.compensated.raw",
+        "elements": 47104,
+        "failures": 24,
+        "raw_bit_differences": 46113,
+        "max_abs": 0.000202178955078125,
+        "rmse": 1.9213547353602066e-05,
+        "relative_l2": 1.4631428883202654e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.helper.raw.vs.compensated.raw",
+        "elements": 47104,
+        "failures": 15,
+        "raw_bit_differences": 45636,
+        "max_abs": 0.000110626220703125,
+        "rmse": 1.174443436654089e-05,
+        "relative_l2": 8.943577833130794e-07,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "direct.bias.vs.compensated.bias",
+        "elements": 47104,
+        "failures": 24,
+        "raw_bit_differences": 46112,
+        "max_abs": 0.000202178955078125,
+        "rmse": 1.9213646949118724e-05,
+        "relative_l2": 1.4622512228922724e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "mps.helper.bias.vs.compensated.bias",
+        "elements": 47104,
+        "failures": 16,
+        "raw_bit_differences": 45629,
+        "max_abs": 0.000110626220703125,
+        "rmse": 1.1744477250636318e-05,
+        "relative_l2": 8.938113762291819e-07,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "prefix_comparisons": [
+      {
+        "name": "dense.k32.vs.mps.k32",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "dense.k256.vs.mps.k256",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "dense.k2048.vs.mps.k2048",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "dense.k4096.vs.mps.k4096",
+        "elements": 47104,
+        "failures": 0,
+        "raw_bit_differences": 0,
+        "max_abs": 0.0,
+        "rmse": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "gate_passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "name": "dense.k6144.vs.mps.k6144",
+        "elements": 47104,
+        "failures": 5,
+        "raw_bit_differences": 45713,
+        "max_abs": 0.000148773193359375,
+        "rmse": 1.3342614679582402e-05,
+        "relative_l2": 1.2331832260730371e-06,
+        "finite": true,
+        "gate_passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "failure_indices": [
+      253,
+      1407,
+      5660,
+      5668,
+      6504,
+      11195,
+      11299,
+      13921,
+      15883,
+      18254,
+      22758,
+      23612,
+      28802,
+      29066,
+      35843,
+      37071,
+      40565
+    ],
+    "before_after_bias_failure_indices_equal": true,
+    "execution": {
+      "terminal_wait_count": 1,
+      "command_segments": 1,
+      "encode_named_allocations": 0,
+      "preterminal_readbacks": 0,
+      "terminal_packed_readbacks": 1,
+      "named_bytes": 229455088,
+      "named_buffers": {
+        "cache.q4_payload": 85058560,
+        "input.f32": 753664,
+        "input.h16": 376832,
+        "input.rounded_f32": 753664,
+        "input.mps_prefix": 753664,
+        "weight.canonical": 33554432,
+        "weight.helper": 33554432,
+        "mps.weight_stage": 67108864,
+        "bias.bf16": 4096,
+        "decode.stats": 120,
+        "output.direct.raw": 188416,
+        "output.direct.bias": 188416,
+        "output.dense.raw": 188416,
+        "output.dense.bias": 188416,
+        "output.mps.canonical.raw": 188416,
+        "output.mps.canonical.bias": 188416,
+        "output.mps.helper.raw": 188416,
+        "output.mps.helper.bias": 188416,
+        "output.compensated.raw": 188416,
+        "output.compensated.bias": 188416,
+        "output.dense.k32": 188416,
+        "output.mps.k32": 188416,
+        "output.dense.k256": 188416,
+        "output.mps.k256": 188416,
+        "output.dense.k2048": 188416,
+        "output.mps.k2048": 188416,
+        "output.dense.k4096": 188416,
+        "output.mps.k4096": 188416,
+        "output.dense.k6144": 188416,
+        "output.mps.k6144": 188416,
+        "output.packed": 3768440
+      },
+      "setup_seconds": 0.085952916,
+      "encode_seconds": 0.001250458,
+      "combined_gpu_seconds": 0.025719958335685078,
+      "combined_timing_is_not_a_kernel_benchmark": true,
+      "neural_math_and_reconstruction_on_gpu": true
+    },
+    "saved_original_bf16_lossy_comparison": {
+      "name": "direct.bias.vs.original_bf16_saved_upstream",
+      "elements": 47104,
+      "failures": 47099,
+      "raw_bit_differences": 47104,
+      "max_abs": 3.2914271354675293,
+      "rmse": 0.6173029242778442,
+      "relative_l2": 0.04703757411399845,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "lineage": {
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "source_sha256": "73819bcf3b82b090116dd1a1748795de95eef703c304e7443963d00ea8aa4d70",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "payload_bytes": 85058560,
+      "selected_weight_offset": 61441024,
+      "selected_bias_offset": 61436928
+    },
+    "kernel_sources": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "derived_sha256": "efbb69a87c84dd438d6af321c8059e1dc6e28d3906d178f9160f3394e2d0c380",
+      "diagnostic_sha256": "93fcf27814b4494534ef17902c6569b23b0f236a937f0174a644ebf10c6156f2"
+    },
+    "native_identity_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/source/native-v2-receipt.json",
+      "nbytes": 2948,
+      "sha256": "a0b3bdad667311fd6bdf98eaeca02f2fb7d291a6d732db91ff959eecbc370866",
+      "availability": "local external SSD"
+    },
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/source/native-v2.json",
+      "nbytes": 3309,
+      "sha256": "2272d05c1557484902dec690cd4b8a0a00583569f8aa692cb4112dc319d377ee",
+      "availability": "local external SSD"
+    },
+    "preserved_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/build/hy_nomas_q4_reduction_probe-v2",
+      "sha256": "994991f18b8b9d7b535dac0f9efe1679141150027ac908956ab445a8c35e74c2",
+      "nbytes": 1702104
+    },
+    "limitation": "Post-run selected-source/binary/object identity capture, not a hermetic build or GPU-driver attestation."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/probe-v1.json",
+      "nbytes": 16773,
+      "sha256": "d23a4eb92c69eb04ffb45738478f5b09c92969b8b50aa9ef988043474d3580c7",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/probe-v2.json",
+      "nbytes": 18955,
+      "sha256": "7d09512e91c3c84966c2c46141fb4236361b49e6986b22affe1669c9d3f3f26e",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/probe-v2.json.f32le",
+      "nbytes": 3768440,
+      "sha256": "bbe709ef2cb509ad2005cf29cf65b632791e9f68d9aa694282893bec77c8004c",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/terminal-verification-v2.json",
+      "nbytes": 236,
+      "sha256": "087bdfbccb5223a6ffe212e92e9e14fe173a867bba39d3481616e2335915f7dc",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports/admission-checks-v1.json",
+      "nbytes": 580,
+      "sha256": "dff638dd321d55b5cca7af9c2d65ce6bb5696269041a18de686bf969a36ae47d",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/source/verify_terminal_v2.py",
+      "nbytes": 3823,
+      "sha256": "02fa68a70597634fdd5712b72932c5edc153550ce7f16968c88c91816dabc473",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/tmp/run_guarded.py",
+      "nbytes": 1162,
+      "sha256": "8635477ca01f0b36b900e738dbb4bddbe8d3f7f9b6d2c9f035346ed83108a11f",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/build-v3.argv.json",
+      "nbytes": 642,
+      "sha256": "e60941d940ec994237bc1620f90afe13ac39b96f2256f3f7a3d4846b402beba3",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/build-v3.out",
+      "nbytes": 1209,
+      "sha256": "7f11df4441fbd8b131b0692e7531858b28164e06cc5aef3476aeafca0466f59f",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/build-v3.guard.jsonl",
+      "nbytes": 5339,
+      "sha256": "1582b4f5e19014c7bdc6b6fcb1ba1042f5dd6efd3f85739e2672a79716a30364",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/probe-v2.argv.json",
+      "nbytes": 714,
+      "sha256": "1998060d5fea784261ea8c8eec944ee8432271df1bf2be37eb02668dfcc39e6c",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/probe-v2.out",
+      "nbytes": 421,
+      "sha256": "a159132698b4b4f2882fd365b2b66a0d8a8aa54b0a16cc0ea17eacabbb4cebc8",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/probe-v2.guard.jsonl",
+      "nbytes": 1655,
+      "sha256": "91eb338f4eb25985ca604b013a0696aea75fde4acdf2a578d9a125d20a07f639",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/reject-budget-v1.argv.json",
+      "nbytes": 758,
+      "sha256": "ffe2f857ba48677d4a255ca0feeb1b5d1064311e4f5d1c6762560fc3fef00714",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/reject-budget-v1.out",
+      "nbytes": 676,
+      "sha256": "a633f70f52015e2530a497ed51a70fb0a24c9118cb5550e90a00c1ec1bc27106",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/reject-replace-v1.argv.json",
+      "nbytes": 721,
+      "sha256": "26683ae98c7682c24020a97ef81b90e68d36a472bfe0ec007214effa504631cf",
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/logs/reject-replace-v1.out",
+      "nbytes": 643,
+      "sha256": "a7818f43b6a735914a7cfd40cb3a4b964c371b1587a1c6c2ff684f3587bd45f4",
+      "availability": "local external SSD"
+    }
+  ],
+  "guards": {
+    "probe_v1": {
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 33341.694458541,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "exit": {
+        "event": "finished",
+        "monotonic": 33342.75630975,
+        "returncode": 0
+      },
+      "minimum_sampled_cache_aware_headroom_bytes": 46298382336,
+      "max_sampled_swap_growth_bytes": 0,
+      "sampled_group_footprint_bytes": 97829536,
+      "limitation": "Short-run samples miss active Metal residency; this does not establish peak memory."
+    },
+    "probe_v2": {
+      "limits": {
+        "event": "limits",
+        "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+        "headroom_formula": "printed free + file-backed (includes speculative)",
+        "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+        "max_footprint_bytes": 2147483648,
+        "max_swap_growth_bytes": 67108864,
+        "memory_accounting": "file-cache",
+        "monotonic": 33571.990207166,
+        "runtime_floor_pct": 10,
+        "runtime_floor_pct_exact": "10",
+        "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+        "timeout_sec": 120
+      },
+      "exit": {
+        "event": "finished",
+        "monotonic": 33572.535454375,
+        "returncode": 0
+      },
+      "minimum_sampled_cache_aware_headroom_bytes": 38989561856,
+      "max_sampled_swap_growth_bytes": 0,
+      "sampled_group_footprint_bytes": 81992,
+      "limitation": "Short-run samples miss active Metal residency; this does not establish peak memory."
+    }
+  },
+  "verification": {
+    "observed_build": "build-v3 exit0",
+    "observed_native": "probe-v1 and probe-v2 exit0 with original17 failures reproduced",
+    "terminal_recomputation": {
+      "passed": true,
+      "comparison_summaries_recomputed": 15,
+      "raw_and_biased_failures": 17,
+      "shared_v1_bank_hashes_unchanged": 16,
+      "decoder_words_match": true,
+      "guard_samples_pass": true,
+      "peak_memory_not_established": true
+    },
+    "admission_negatives": {
+      "checks": [
+        {
+          "name": "reject-budget-v1",
+          "expected_exit": 1,
+          "observed_exit": 1,
+          "expected_diagnostic": "named residency exceeds caller cap before Metal allocation",
+          "metal_initialization_absent": true,
+          "passed": true
+        },
+        {
+          "name": "reject-replace-v1",
+          "expected_exit": 1,
+          "observed_exit": 1,
+          "expected_diagnostic": "Refusing to replace existing report",
+          "metal_initialization_absent": true,
+          "passed": true
+        }
+      ],
+      "existing_report_unchanged": true,
+      "low_budget_report_absent": true
+    },
+    "format_diff_checks": "Scoped Crystal format and git diff --check passed; repeated before commit.",
+    "packet_shape": "Existing skill template and scripts/validate-landmark-graph.sh are absent in this checkout and skill directory. JSON parse and exact-path/artifact-digest checks used instead; these do not establish numerical truth."
+  },
+  "residual_risks": [
+    "MPS-private accumulation order, precision, fusion and kernel selection are not established.",
+    "K-prefix probes change MPS dispatch geometry and are not snapshots inside the full-K kernel.",
+    "Helper/dense controls share Qwen MMA; compensated sum is diagnostic, not correctly rounded proof.",
+    "Original-BF16 quantization quality remains a distinct failed gate.",
+    "Periodic memory telemetry can miss peaks; named bytes exclude MPS and driver-private allocations.",
+    "No production kernel promotion, performance speedup, full block or generation claim."
+  ],
+  "next_falsifier": "Test alternative partial-sum grouping on identical full-K operands, then require fresh upstream gates before promotion.",
+  "decay_triggers": [
+    "source/cache/fixture loss or changed bytes",
+    "geometry/dtype/precision/quantizer changes",
+    "ownership/encode/transfer changes",
+    "compiler/SDK/OS/device/MPS runtime changes"
+  ],
+  "links": {
+    "frontier": "docs/hy-nomas-q4-reduction-frontier.md",
+    "ledger": "LANDMARKS.md",
+    "previous_frontier": "docs/hy-nomas-q4-dit-frontier.md"
+  }
+}

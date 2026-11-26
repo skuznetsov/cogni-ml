@@ -1,0 +1,409 @@
+{
+  "format": "Local compact evidence index; no official packet-validator claim",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "Native Hy-Nomas text-only prompt preparation, embedding, opt-in fed-RMS 26-block Qwen2.5 prefix and final GPU conditioning crop match a fresh pinned official MPS BF16 capture on the tram prompt.",
+    "raw_hidden_boundaries": 27,
+    "raw_bf16_words": 134313984,
+    "raw_word_differences": 0,
+    "tolerance_failures": 0,
+    "crop_bf16_words": 4587520,
+    "crop_mask_entries": 1280,
+    "scope": "One natural prompt, raw 1388 tokens with crop_start 108 and output 1280 tokens; serial immutable borrowed buffers",
+    "excluded": [
+      "all-input or multimodal/batched parity",
+      "integrated text-projection/DiT handoff",
+      "full Hy-Nomas or complete 28-layer Qwen model instantiation",
+      "Transformers 4.57.1 or CUDA reduction equivalence",
+      "52 separately captured RMS intermediate sites",
+      "production default promotion",
+      "hermetic companion-object build",
+      "speedup or video throughput",
+      "full generation"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/gguf/qwen25_hy_nomas_prompt.cr",
+      "src/ml/gguf/qwen25_hy_nomas_conditioning.cr",
+      "src/ml/gguf/qwen35_tokenizer.cr",
+      "examples/qwen25_hy_nomas_prompt.cr",
+      "examples/qwen25_pretrained_prefix.cr",
+      "examples/support/qwen25_prefix_probe.cr",
+      "examples/support/qwen25_pretrained_reference.py",
+      "examples/support/qwen25_hy_nomas_prompt_reference.py",
+      "spec/qwen25_conditioning_spec.cr",
+      "spec/qwen25_hy_nomas_prompt_spec.cr",
+      "spec/qwen25_hy_nomas_prompt_reference_spec.py",
+      "spec/qwen25_prefix_probe_spec.cr",
+      "spec/qwen25_pretrained_reference_spec.py",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "docs/hy-nomas-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-natural-prompt.json"
+    ],
+    "changed_paths": [
+      "src/ml/gguf/qwen25_hy_nomas_prompt.cr",
+      "src/ml/gguf/qwen25_hy_nomas_conditioning.cr",
+      "src/ml/gguf/qwen35_tokenizer.cr",
+      "examples/qwen25_hy_nomas_prompt.cr",
+      "examples/qwen25_pretrained_prefix.cr",
+      "examples/support/qwen25_prefix_probe.cr",
+      "examples/support/qwen25_pretrained_reference.py",
+      "examples/support/qwen25_hy_nomas_prompt_reference.py",
+      "spec/qwen25_conditioning_spec.cr",
+      "spec/qwen25_hy_nomas_prompt_spec.cr",
+      "spec/qwen25_hy_nomas_prompt_reference_spec.py",
+      "spec/qwen25_prefix_probe_spec.cr",
+      "spec/qwen25_pretrained_reference_spec.py",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "docs/hy-nomas-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-25-qwen25-natural-prompt.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "base_commit": "54bdb6c01ce96e466e53b87638ddafa2e099b159",
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/natural-prompt-receipt-v1.json",
+      "nbytes": 33423,
+      "sha256": "83ac0db11dd391e09d6c3db072a694f93d7320c199ddb1e180b44a4be0f75291"
+    },
+    "review": {
+      "path": "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/natural-prompt-review-v1.json",
+      "nbytes": 5420,
+      "sha256": "65200254a127491016ff42d009062e55d14ec05e4a63705d820b4a37c7f14e7e"
+    },
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_hy_nomas_prompt.cr",
+        "nbytes": 21439,
+        "sha256": "25dff538317b5c0b450d020a43934886288e7a9d623d12ddbb0dd0af0b2538a7"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_hy_nomas_conditioning.cr",
+        "nbytes": 6062,
+        "sha256": "34bc4c55ff1c56993196be7deed879a46acfb9780280387a9a734ca62bdc9d08"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen35_tokenizer.cr",
+        "nbytes": 11444,
+        "sha256": "dd8ef23216948c81970cce61fe34f6017bd402be0789015408d269e448f3e926"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_hy_nomas_prompt.cr",
+        "nbytes": 6769,
+        "sha256": "763075caca77a640d5226ae3f7b77f6d0625cf3ee24e724b1469714f9a1e790e"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_pretrained_prefix.cr",
+        "nbytes": 14350,
+        "sha256": "be1aa52767612c2ac07bd78843bee3071dbb481cf584d1fc0cfaa83e3f77f705"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_prefix_probe.cr",
+        "nbytes": 19550,
+        "sha256": "0f958d66ffb59de01434f10b2b04bbb4a9afd2aab9fe6015e25cf88c1907cc84"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_pretrained_reference.py",
+        "nbytes": 57768,
+        "sha256": "3735cb5b4d5f5c82f33f530a5bf318929c5355dfe45d2be13044520571fff2ad"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_hy_nomas_prompt_reference.py",
+        "nbytes": 31301,
+        "sha256": "5826149831fde551d4ac51e32564bf4d66d1a3542a7ffc14237e29a8436d3a7e"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_conditioning_spec.cr",
+        "nbytes": 2306,
+        "sha256": "828e33aed66fcaf25cb3397cb701cd7ba9e0b251abc18108cd4472f90debba11"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_hy_nomas_prompt_spec.cr",
+        "nbytes": 6202,
+        "sha256": "bf7ada1512c31324989250c7d853916391485c9eb64675cc2b185516079efb2c"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_hy_nomas_prompt_reference_spec.py",
+        "nbytes": 12445,
+        "sha256": "b5cb922fdac9e9adde64bb8fa71f20cf1b16dc86e7ea9dfc4cec047ab864c99d"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_prefix_probe_spec.cr",
+        "nbytes": 22066,
+        "sha256": "d6c2d05c38f9585896b3f6a2c579b2a41de060f480ab681d6427fcbc57123f65"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/qwen25_pretrained_reference_spec.py",
+        "nbytes": 22611,
+        "sha256": "95415f9e1294983d41b6d438976344190bcedf065ba684072592cc695173c309"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 69847,
+        "sha256": "20e09e66c377785dfcdbc5a7aa26fbfe6a65d09064d6eda7e594f770db4d0fb6"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-native-frontier.md",
+        "nbytes": 86484,
+        "sha256": "a342ced107676cded3bbecdd4073205ded1b7908eeedbf0eb8ffc1ce9a089906"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4543031,
+        "sha256": "51dc9246b17f1d34c75aa99eb50fafe60140a7d6a61c763b4fd3734d7c8ed74f"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_hy_nomas.cr",
+        "nbytes": 24030,
+        "sha256": "fd4cd8da426bad257b6528c653d4aba31bdf3be168e82c8f1a5ba02d1027bfb0"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_mps_bridge.mm",
+        "nbytes": 131358,
+        "sha256": "cb36804bbd87a7216f0783f1ada9c2ff6a33b4ffb6877b30843858dac66833d0"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_vl_weights.cr",
+        "nbytes": 27022,
+        "sha256": "7b48f7f302ea9c61593ce4ba9a4cbb480f5e75d89468702bb9a899cb736eb040"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/gguf/qwen25_vl_embedding.cr",
+        "nbytes": 9828,
+        "sha256": "3e79a39defafc934b29003141abd607c2ada12f3c303cb34724ee96ba30b7d97"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_mps_command_chain.cr",
+        "nbytes": 22968,
+        "sha256": "b606cc0645a54e95c008be3c615adadd29fe97d6804347147737ab25d473b645"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_mps_command_chain.mm",
+        "nbytes": 63544,
+        "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_hy_nomas_reference.py",
+        "nbytes": 59135,
+        "sha256": "b94bb593bd15d30fcb7ba91d29fcdbe4bdac9464389092bb8e574b0e8eff6abe"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "nbytes": 37589,
+        "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+      }
+    ],
+    "availability": "Local SSD; invalidate on artifact loss or digest mismatch"
+  },
+  "verification": {
+    "dod_commands": {
+      "oracle": [
+        "python3",
+        "-B",
+        "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "15360",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "600",
+        "--log",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/oracle-prefix-natural-tram-v1.guard.jsonl",
+        "--",
+        "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python",
+        "-B",
+        "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/qwen25_pretrained_reference.py",
+        "--checkpoint-root",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/model",
+        "--checkpoint-receipt",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/checkpoint-download.json",
+        "--output",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/prefix-natural-tram-v1.json",
+        "--hy-nomas-prompt-file",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/natural-tram-v1.txt",
+        "--hy-nomas-root",
+        "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024"
+      ],
+      "native": [
+        "python3",
+        "-B",
+        "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "15360",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "600",
+        "--log",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-prefix-natural-tram-v1.guard.jsonl",
+        "--",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/build/natural-prompt-root-v1/qwen25_pretrained_prefix",
+        "--checkpoint-root",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/model",
+        "--reference",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/prefix-natural-tram-v1.json",
+        "--reference-sha256",
+        "eb64e5c31bc2178436b2b7dd411af45dea7fa43a8e3ff37a146bc411fac03ba1",
+        "--report",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/native-prefix-natural-tram-v1.report.json",
+        "--max-named-bytes",
+        "13958643712",
+        "--rms-power-fed",
+        "--hy-nomas-prompt-file",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/natural-tram-v1.txt"
+      ]
+    },
+    "cpu": {
+      "crystal_examples": 56,
+      "failures": 0,
+      "errors": 0,
+      "pending": 3,
+      "pending_reason": "Existing external llama-tokenize-dependent comparison cases",
+      "python_tests": 20,
+      "native_reference_differentials": 7,
+      "fields_per_differential": 18,
+      "standard_nonblank_cases": 5,
+      "test_only_empty_semantics_cases": 2,
+      "helper_rejection_cases": 2,
+      "empty_policy": "Ordinary fixture helper rejects blank files. Two isolated reader-guard-bypassed tests check the original upstream empty/whitespace semantics.",
+      "long_input_tokens": 1914,
+      "right_truncated_tokens": 1388
+    },
+    "execution": {
+      "tokens": 1388,
+      "prefix_layers": 26,
+      "rms_power_fed": true,
+      "rms_fed_block_count": 26,
+      "rms_statistics_sites_using_fed_exponent": 52,
+      "rms_exponent_named_bytes": 104,
+      "named_bytes": 12738809672,
+      "shared_workspace_bytes": 596245936,
+      "shared_stage_scratch_bytes": 337567152,
+      "retained_hidden_output_bytes": 258678784,
+      "gather_bytes": {
+        "compact_rows": 559104,
+        "remapped_ids": 5552,
+        "output": 9949184,
+        "total": 10513840
+      },
+      "conditioning_bytes": {
+        "raw_mask": 5552,
+        "hidden": 9175040,
+        "mask": 5120,
+        "total": 9185712
+      },
+      "named_allocations_during_encode": 0,
+      "terminal_wait_count": 1,
+      "early_release_rejected": true,
+      "conditioning_early_release_rejected": true,
+      "diagnostic_readbacks_after_terminal_wait": 29,
+      "activation_readbacks_before_terminal_wait": 0,
+      "encode_seconds": 2.039113084,
+      "terminal_wait_seconds": 0.964657375,
+      "gpu_elapsed_seconds": 2.7961460454389453,
+      "command_segments": 183,
+      "tolerance": {
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      "conditioning_comparison": {
+        "tokens": 1280,
+        "crop_start": 108,
+        "elements": 4587520,
+        "failures": 0,
+        "max_abs": 0.0,
+        "different_bf16_words": 0,
+        "mask_failures": 0
+      }
+    },
+    "guard": {
+      "oracle": {
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 16106127360,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 4608993.775154166,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 600
+        },
+        "sample_count": 92,
+        "sampled_peak_bytes": 14714783832,
+        "minimum_headroom_bytes": 12254314496,
+        "minimum_pressure_free_pct": 55,
+        "observed_swap_growth_bytes": 0,
+        "finished_returncode": 0
+      },
+      "native": {
+        "limits": {
+          "event": "limits",
+          "file_cache_limitation": "file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
+          "headroom_formula": "printed free + file-backed (includes speculative)",
+          "limitation": "sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape",
+          "max_footprint_bytes": 16106127360,
+          "max_swap_growth_bytes": 67108864,
+          "memory_accounting": "file-cache",
+          "monotonic": 4609221.652962,
+          "runtime_floor_pct": 10,
+          "runtime_floor_pct_exact": "10",
+          "startup_rule": "memory_pressure -Q >= 10% and selected headroom >= 10% physical + footprint budget",
+          "timeout_sec": 600
+        },
+        "sample_count": 51,
+        "sampled_peak_bytes": 13744023416,
+        "minimum_headroom_bytes": 18184142848,
+        "minimum_pressure_free_pct": 63,
+        "observed_swap_growth_bytes": 0,
+        "finished_returncode": 0
+      }
+    },
+    "structural_validation": "Local JSON, path-scope, dereferenced SHA256, source-freeze and report-boundary assertions; not an official packet validation or independent attestation."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "correlated_review": true,
+    "scope": "One tram natural prompt, raw S1388, 27 retained hidden boundaries and final S1280 GPU crop under the serial caller contract",
+    "limits": [
+      "Same-lineage review is correlated; the numerical anchor is the pinned upstream capture",
+      "Borrowed source/destination handles must remain valid and immutable until drain",
+      "Same-chain source production is a caller precondition, not certified by buffer handles",
+      "Generic void blit ABI is unchanged; two pinned companion objects have opaque source ancestry",
+      "No all-input, multimodal, batching, full-model, default-promotion or speedup claim"
+    ]
+  },
+  "refresh": {
+    "decay_triggers": [
+      "scoped source",
+      "prompt/tokenizer/template/checkpoint changes",
+      "precision or geometry",
+      "compiler/SDK/OS/device",
+      "scheduling or buffer lifetime changes",
+      "artifact loss or hash mismatch"
+    ],
+    "operation": "Reauthenticate source/assets/selected checkpoint tensors and oracle provenance, rebuild changed native code, repeat CPU differentials and the sequential guarded fresh oracle/native natural-prompt gate.",
+    "failure_policy": "Reopen dependent qualifications, retain first mismatch, keep path opt-in and do not widen tolerance."
+  },
+  "rollback": "Omit --hy-nomas-prompt-file and keep legacy tokenizer/RMS defaults; new prompt/crop remains opt-in.",
+  "next_falsifier": "Load the actual Hy-Nomas text projection weights, consume resident conditioning in a bounded native DiT block, and compare intermediates with upstream; no full generation.",
+  "links": {
+    "frontier": "docs/qwen25-hy-nomas-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}

@@ -1,0 +1,291 @@
+{
+  "boundaries": {
+    "allowed_paths": [
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-generation-frontier.md",
+      "examples/hy_nomas_continuation_history_probe.cr",
+      "examples/hy_nomas_resume_probe.cr",
+      "examples/hy_nomas_sequence_resume_probe.cr",
+      "examples/support/hy_nomas_continuation_history_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_timeline_ops_spec.cr",
+      "spec/hy_nomas_resume_bundle_spec.cr",
+      "spec/hy_nomas_sequence_resume_reference_test.py",
+      "spec/support/hy_nomas_sequence_resume_reference.py",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "src/ml/video/hy_nomas_resume_bundle.cr",
+      ".landmark/evidence/2026-10-31-hy-nomas-segment-restart.json"
+    ],
+    "changed_paths": [
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-generation-frontier.md",
+      "examples/hy_nomas_continuation_history_probe.cr",
+      "examples/hy_nomas_resume_probe.cr",
+      "examples/hy_nomas_sequence_resume_probe.cr",
+      "examples/support/hy_nomas_continuation_history_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_timeline_ops_spec.cr",
+      "spec/hy_nomas_resume_bundle_spec.cr",
+      "spec/hy_nomas_sequence_resume_reference_test.py",
+      "spec/support/hy_nomas_sequence_resume_reference.py",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "src/ml/video/hy_nomas_timeline_ops.cr",
+      "src/ml/video/hy_nomas_resume_bundle.cr",
+      ".landmark/evidence/2026-10-31-hy-nomas-segment-restart.json"
+    ],
+    "raw_artifacts": [
+      {
+        "availability": "local_only",
+        "note": "External artifacts are not committed or backed up by this packet; hashes detect changes, not guarantee recovery.",
+        "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc"
+      }
+    ]
+  },
+  "claim": "The same-binary native BF16 DiT save-after-A and fresh-process restore/B reproduces every B Euler update and the full timeline bitwise against uninterrupted A-to-B, with unchanged tolerance and guards.",
+  "claim_level": "VERIFIED within declared scope",
+  "created_at": "2026-11-01T02:33:34.908619+00:00",
+  "date": "2026-10-31",
+  "decay_triggers": [
+    "Source/binary/weights/input/noise/policy/geometry/backend/device change requires fresh qualification.",
+    "Deleted or changed external artifacts must be regenerated before consuming their results."
+  ],
+  "evidence": [
+    {
+      "bytes": 5175,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/execution-identity.json",
+      "sha256": "b9596079b37c3fecf5289b2762fbfa61a6846d8d6da255f973af032eb1e77494"
+    },
+    {
+      "bytes": 4938,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/qualification-summary.json",
+      "sha256": "83230363749be117987ec10b7a8632b0e62be50edffb824293837e44f53c8442"
+    },
+    {
+      "bytes": 6271,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/resume-reference-v2.json",
+      "sha256": "85dc97e8d436709e98de3eb1802503590f2c979c768f9a2594e9506eb059d94c"
+    },
+    {
+      "bytes": 21897,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/logs/commands.json",
+      "sha256": "92dcdf30649599435b9f623a45abbca0a9923fa5f5ce645c8c0147213a6c4a8f"
+    },
+    {
+      "bytes": 2646,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/control-run/native.json",
+      "sha256": "4fde0f8d910f258ff592124e0c2be8f840c16d66c50089708fdd2e6f31c751f9"
+    },
+    {
+      "bytes": 10100,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/upstream-run/reference.json",
+      "sha256": "fb7f68051898dc8f5ac4e8d22ec848a7f8c0d114490ea1127c9612d1cf1636ef"
+    },
+    {
+      "bytes": 772,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/save/save.json",
+      "sha256": "88342d5850ba2307e38191a9aee0dc0723de81d31b54ad5f66fc48b654c4ad5b"
+    },
+    {
+      "bytes": 1241,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/resume-admitted/resume.json",
+      "sha256": "925b23702614fa4dc6f0386c45ea5e508b7f2dc7f09d01cc21d71e26f2a2f179"
+    },
+    {
+      "bytes": 1259,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/negative-zero-admitted/resume.json",
+      "sha256": "849b3e1d708baa6e144ad0a7dc2208869c81eaaeeb174be65766afd2993343f5"
+    },
+    {
+      "bytes": 1260,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/negative-mutated-kv-admitted/resume.json",
+      "sha256": "3c35cf8d9e9051efd7bf108ad0416b021d6ddc4ca3597d5129e0a0619fcade38"
+    },
+    {
+      "bytes": 1259,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/negative-mutated-qkv-admitted/resume.json",
+      "sha256": "4eccab90f8cae2f319a7d4091c89003005e95aa95abd560d6836f242acb914f0"
+    },
+    {
+      "bytes": 2896,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/control/receipt.json",
+      "sha256": "967d673980a203e7ef3d1408e5d76aa2b5048d3c524ce2208e5855abb38f5ad8"
+    },
+    {
+      "bytes": 2255,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/save/receipt.json",
+      "sha256": "446711cf1b54acdd3aba52de44649f4c08769b65af1de572bfab83425448c5f7"
+    },
+    {
+      "bytes": 2988,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/resume/receipt.json",
+      "sha256": "0783e692e5755cc2f15d6fb2867cd5542bf7564b01d2ec5cc1a6a894c70a0e17"
+    },
+    {
+      "bytes": 798,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/logs/control-command.json",
+      "sha256": "c36dc955c5568ea0ccc79b54b896743876317322cc03cd8ed72730ff265fa160"
+    },
+    {
+      "bytes": 789,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/logs/save-command.json",
+      "sha256": "82371b9c85e2fdcc602dbdee69b820c7df7ee37c3fa0ef0e0b6140344a48485c"
+    },
+    {
+      "bytes": 995,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/logs/resume-command.json",
+      "sha256": "eb1f220c593bd41700aa2b70f916358b9e129c51678e1e7f9c5f43178f079b35"
+    },
+    {
+      "bytes": 1351,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/final-crystal-spec.log",
+      "sha256": "baaa10de442450f9fb7cb18950d8aba19fa3308c7e920f387eea63915c8b7d1b"
+    },
+    {
+      "bytes": 308,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/final-python-resume-tests.log",
+      "sha256": "417b9b084757a8760b616826bcfd42644b8e87397abafd9ab08614f24edd7635"
+    },
+    {
+      "bytes": 102,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/final-python-upstream-tests.log",
+      "sha256": "931ee622acb24d582aa0e2442389b49137ce32c07e9412d1969bff1cbd11a562"
+    }
+  ],
+  "falsifiers": {
+    "cpu": "Focused tests reject corrupted/truncated files, wrong identity/inventory, changed admitted file, unsafe/repeated schedule restore, malformed/tampered/nonfinite comparison artifacts and unbounded checkpoint reads.",
+    "excluded_attempts": "small-v1 and pre-streaming real resume-reference.json are superseded. small-v2/logs/commands.json explicitly excludes the mistaken standalone-history control/oracle and its failed resume.",
+    "synthetic_gpu": {
+      "negative-mutated-kv-admitted": {
+        "diverged_elements": 5832,
+        "max_absolute_error": 1.8758414946496487
+      },
+      "negative-mutated-qkv-admitted": {
+        "diverged_elements": 12,
+        "max_absolute_error": 1.0918078385293484
+      },
+      "negative-zero-admitted": {
+        "diverged_elements": 5832,
+        "max_absolute_error": 0.021913187578320503
+      }
+    }
+  },
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-generation-frontier.md",
+    "landmark": "LM-HY-NOMAS-SEGMENT-RESTART-2026-10-31"
+  },
+  "next_falsifier": "Edit A, invalidate dependent continuation, and compare regeneration from the earliest valid boundary.",
+  "observed": {
+    "a_prefix_bitwise_equal": true,
+    "b_steps": 4,
+    "bitwise_equal": true,
+    "checkpoint_file_bytes": 4319223820,
+    "checkpoint_records": 109,
+    "checkpoint_sha256": "fa4d3fb966562d62ea50939729089270450c8b0181c2c2becb0b173949e3a0e4",
+    "elements_per_b_step": 138240,
+    "real_guards": {
+      "control": {
+        "max_footprint_bytes": 26619671272,
+        "min_headroom_bytes": 19940491264,
+        "returncode": 0,
+        "samples": 149,
+        "swap_growth_bytes": 0
+      },
+      "resume": {
+        "max_footprint_bytes": 26355957528,
+        "min_headroom_bytes": 22118514688,
+        "returncode": 0,
+        "samples": 104,
+        "swap_growth_bytes": 0
+      },
+      "save": {
+        "max_footprint_bytes": 26144010960,
+        "min_headroom_bytes": 20012957696,
+        "returncode": 0,
+        "samples": 108,
+        "swap_growth_bytes": 0
+      }
+    },
+    "real_metrics": {
+      "control": {
+        "command_segments": 14326,
+        "encode_allocations": 0,
+        "encode_readbacks": 0,
+        "preterminal_waits": 0,
+        "terminal_waits": 1
+      },
+      "resume": {
+        "command_segments": 8647,
+        "encode_allocations": 0,
+        "encode_readbacks": 0,
+        "preterminal_waits": 0,
+        "terminal_waits": 1
+      },
+      "save": {
+        "command_segments": 5680,
+        "encode_allocations": 0,
+        "encode_readbacks": 0,
+        "preterminal_waits": 0,
+        "terminal_waits": 1
+      }
+    },
+    "timeline_elements": 829440,
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "packet_validation_scope": "Repository-style curated JSON summary. No graph-validator pass is claimed: the repository has no such script, and the cached legacy validator requires numeric trust thresholds superseded by v13.7 descriptive coordinates. JSON syntax, referenced identities, guards and comparison facts were checked directly.",
+  "refresh": "Rebuild and repeat small upstream/negative controls and the guarded continuous/save/fresh-resume real matrix on identical inputs; compare every B-step and timeline value at unchanged tolerance.",
+  "residual_risk": [
+    "Executable pathname hashing does not attest an already loaded image. Hot replacement during a run is unsupported; use the same unchanged binary.",
+    "Full real-DiT upstream continuation, cross-build/device migration, crash/power-loss recovery, Studio integration and edited-A regeneration are unqualified.",
+    "Memory observations are sampled; MetalBuffer counters exclude opaque MPS resources. Bounded setup/terminal host file I/O is outside GPU encode; no CPU tensor computation or duplicate GPU state bank is introduced.",
+    "Saving fixed finite timeline/history does not bound growing continuation memory or provide arbitrary-duration extension."
+  ],
+  "rollback": "Remove opt-in resume entry points; retain uninterrupted sequence control.",
+  "scope": "Two segments, four steps each, 54 BF16 DiT layers, F32 continuation K/V, identical authenticated inputs/noise, once-per-scene text cache; same host and unchanged executable. No decoder, Studio or complete video generation.",
+  "source": {
+    "execution_identity": {
+      "bytes": 5175,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/execution-identity.json",
+      "sha256": "b9596079b37c3fecf5289b2762fbfa61a6846d8d6da255f973af032eb1e77494"
+    },
+    "parent_head": "5f48f2346180ad0af0eeccf12068cff78d68d030",
+    "producer": "codex"
+  },
+  "upstream": {
+    "attention_output_values": 9072,
+    "cache_helper_sha256": "53fdb67aaa967b9195f17c1d829feb12cd1e17dfa21a4e5bc0a8492790f8f0c3",
+    "final_cache_values": 2160,
+    "maximum_absolute_error": 0,
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "scope": "Synthetic F32 MPS adapter of pinned cache-attention function; not full real-DiT BF16/CUDA parity.",
+    "source_sha256": "acf827bb7feb84c9046618737146544843a3f50c3500a3b16925dadeb6c5bdee"
+  },
+  "verification": {
+    "adversary_verdict": "ROBUST",
+    "dod_commands": [
+      "make BUILD_DIR=<external-build> hy_nomas_resume_probe hy_nomas_sequence_resume_probe",
+      "make BUILD_DIR=<external-build> spec_hy_nomas_resume",
+      "python3 -B spec/hy_nomas_sequence_resume_reference_test.py",
+      "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python -B spec/hy_nomas_continuation_reference_test.py",
+      "Exact guarded small commands: /opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/small-v2/logs/commands.json",
+      "Exact guarded real commands: /opt/mldata_ssd/cogni-ml/hy-nomas-resume-20261031.yG4rVc/real-v1/logs/{control,save,resume}-command.json",
+      "python3 -B spec/support/hy_nomas_sequence_resume_reference.py --control-dir <real-v1/control> --save-dir <real-v1/save> --resume-dir <real-v1/resume> --output <fresh-report>",
+      "crystal tool format --check <changed Crystal files>",
+      "git diff --check"
+    ],
+    "dod_signal": "28 Crystal examples and 15 Python tests pass; admitted guarded subprocesses exit 0; all real B-step/timeline values and A prefix are bitwise equal; synthetic upstream and negative controls pass.",
+    "review_scope": "Same-lineage review of state completeness, freshness, restore failure poisoning, aliases and fixed-executable identity. Root separately checked byte comparisons, guards and current source/binary identities. Correlated review, not independent rerun.",
+    "trust_coordinates": {
+      "F": "Explicit finite numerical comparisons, byte identities and lifecycle checks; no proof for arbitrary continuation.",
+      "G": "Only the declared geometry, inputs, policy, four-step schedule, host and executable.",
+      "R": "One real three-process matrix, repeated synthetic qualification, negative controls and focused CPU tests; no statistical reliability estimate."
+    }
+  }
+}
