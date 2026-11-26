@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from diffusion_gemma_output_cert_atlas import group_rows, read_cert, truthy
+
 
 SUMMARY_KIND = "diffusion_gemma_mixed_route_plan_summary_v1"
 WINDOW_KIND = "diffusion_gemma_mixed_route_plan_window_v1"
@@ -62,6 +64,56 @@ def observed_cost(row: dict[str, Any]) -> float:
     if "observed_variant_ms" in row:
         return as_float(row, "observed_variant_ms")
     return selected_cost(row)
+
+
+def parse_child_output_cert_log(child_log: str) -> str:
+    if not child_log:
+        return ""
+    path = Path(child_log)
+    if not path.is_file():
+        return ""
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line.startswith("output_cert_log="):
+                continue
+            return line.split("=", 1)[1]
+    return ""
+
+
+def foreign_cert_status(row: dict[str, Any]) -> dict[str, Any]:
+    key = window_key(row)
+    prompt_token, canvas_token = key.split(":", 1)
+    child_log = str(row.get("child_log", "") or "")
+    cert_log = parse_child_output_cert_log(child_log)
+    result: dict[str, Any] = {
+        "foreign_cert_status": "missing_output_cert_log",
+        "foreign_cert_log": cert_log,
+        "foreign_cert_argmax_matches": math.nan,
+        "foreign_cert_rows": math.nan,
+    }
+    if not child_log or not Path(child_log).is_file():
+        result["foreign_cert_status"] = "missing_child_log"
+        return result
+    if not cert_log or not Path(cert_log).is_file():
+        return result
+
+    rows, _, _ = read_cert(Path(cert_log))
+    window_rows = group_rows(rows).get((prompt_token, canvas_token), [])
+    if not window_rows:
+        result["foreign_cert_status"] = "missing_cert_window"
+        result["foreign_cert_log"] = cert_log
+        return result
+    argmax_matches = sum(1 for cert_row in window_rows if truthy(cert_row.get("argmax_match", "")))
+    result.update(
+        {
+            "foreign_cert_status": "argmax_match" if argmax_matches == len(window_rows) else "argmax_fail",
+            "foreign_cert_log": cert_log,
+            "foreign_cert_argmax_matches": float(argmax_matches),
+            "foreign_cert_rows": float(len(window_rows)),
+        }
+    )
+    return result
 
 
 def load_windows(path: Path) -> dict[str, dict[str, Any]]:
@@ -124,7 +176,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[st
     return summary, windows, by_key
 
 
-def compare(selected_path: Path, foreign_path: Path, min_foreign_speedup: float) -> list[dict[str, Any]]:
+def compare(selected_path: Path, foreign_path: Path, min_foreign_speedup: float, inspect_foreign_cert: bool = False) -> list[dict[str, Any]]:
     selected = load_windows(selected_path)
     foreign = load_windows(foreign_path)
     common = sorted(set(selected) & set(foreign), key=lambda key: tuple(map(int, key.split(":"))))
@@ -145,27 +197,45 @@ def compare(selected_path: Path, foreign_path: Path, min_foreign_speedup: float)
             winner = "selected"
         else:
             winner = "tie"
-        rows.append(
-            {
-                "window": key,
-                "winner": winner,
-                "foreign_vs_selected": ratio,
-                "delta_ms": delta,
-                "selected_ms": selected_ms,
-                "foreign_ms": foreign_ms,
-                "min_foreign_speedup": min_foreign_speedup,
-                "threshold_pass": ratio >= min_foreign_speedup,
-                "selected_route": selected_row.get("selected_route", ""),
-                "foreign_route": foreign_row.get("selected_route", ""),
-                "selected_status": selected_row.get("status", ""),
-                "foreign_status": foreign_row.get("status", ""),
-                "selected_reason": selected_row.get("reason", ""),
-                "foreign_reason": foreign_row.get("reason", ""),
-                "selected_observed_ms": observed_cost(selected_row),
-                "foreign_observed_ms": observed_cost(foreign_row),
-            }
-        )
+        out = {
+            "window": key,
+            "winner": winner,
+            "foreign_vs_selected": ratio,
+            "delta_ms": delta,
+            "selected_ms": selected_ms,
+            "foreign_ms": foreign_ms,
+            "min_foreign_speedup": min_foreign_speedup,
+            "threshold_pass": ratio >= min_foreign_speedup,
+            "selected_route": selected_row.get("selected_route", ""),
+            "foreign_route": foreign_row.get("selected_route", ""),
+            "selected_status": selected_row.get("status", ""),
+            "foreign_status": foreign_row.get("status", ""),
+            "selected_reason": selected_row.get("reason", ""),
+            "foreign_reason": foreign_row.get("reason", ""),
+            "selected_observed_ms": observed_cost(selected_row),
+            "foreign_observed_ms": observed_cost(foreign_row),
+            "foreign_cert_status": "",
+            "foreign_cert_log": "",
+            "foreign_cert_argmax_matches": math.nan,
+            "foreign_cert_rows": math.nan,
+        }
+        if inspect_foreign_cert:
+            out.update(foreign_cert_status(foreign_row))
+        rows.append(out)
     return rows
+
+
+def foreign_cert_failures(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        promotable = (
+            row.get("selected_route") == "base_exact" and
+            row.get("foreign_route") == "variant_fast" and
+            bool(row.get("threshold_pass"))
+        )
+        if promotable and row.get("foreign_cert_status") != "argmax_match":
+            failures.append(row)
+    return failures
 
 
 def normalize_window(row: dict[str, Any]) -> dict[str, Any]:
@@ -292,6 +362,10 @@ def aggregate(rows: list[dict[str, Any]], min_foreign_speedup: float) -> dict[st
         "foreign_reason": "",
         "selected_observed_ms": math.nan,
         "foreign_observed_ms": math.nan,
+        "foreign_cert_status": "",
+        "foreign_cert_log": "",
+        "foreign_cert_argmax_matches": math.nan,
+        "foreign_cert_rows": math.nan,
     }
 
 
@@ -312,6 +386,10 @@ FIELDS = [
     "foreign_reason",
     "selected_observed_ms",
     "foreign_observed_ms",
+    "foreign_cert_status",
+    "foreign_cert_log",
+    "foreign_cert_argmax_matches",
+    "foreign_cert_rows",
 ]
 
 
@@ -351,7 +429,7 @@ def print_text(rows: list[dict[str, Any]], selected_path: Path, foreign_path: Pa
     for row in rows:
         print(
             "    %s winner=%s foreign_vs_selected=%s threshold_pass=%s "
-            "selected=%sms(%s/%s) foreign=%sms(%s/%s) delta_ms=%s"
+            "selected=%sms(%s/%s) foreign=%sms(%s/%s) delta_ms=%s cert=%s"
             % (
                 row["window"],
                 row["winner"],
@@ -364,6 +442,7 @@ def print_text(rows: list[dict[str, Any]], selected_path: Path, foreign_path: Pa
                 row["foreign_route"],
                 row["foreign_status"],
                 fmt(float(row["delta_ms"])),
+                row.get("foreign_cert_status", "") or "not_checked",
             )
         )
 
@@ -374,13 +453,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--foreign-route-plan", required=True, type=Path)
     parser.add_argument("--min-foreign-speedup", type=float, default=1.0)
     parser.add_argument("--require-foreign", "--require-foreign-pass", dest="require_foreign", action="store_true")
+    parser.add_argument("--require-foreign-cert", action="store_true", help="require argmax output-cert evidence for threshold-passing foreign promotions")
     parser.add_argument("--promoted-route-plan-out", type=Path, help="write selected plan with threshold-passing base_exact windows replaced by foreign variant_fast rows")
     parser.add_argument("--tsv", action="store_true")
     args = parser.parse_args(argv)
     if not math.isfinite(args.min_foreign_speedup) or args.min_foreign_speedup <= 0.0:
         die("--min-foreign-speedup must be a positive finite number")
 
-    rows = compare(args.selected_route_plan, args.foreign_route_plan, args.min_foreign_speedup)
+    rows = compare(args.selected_route_plan, args.foreign_route_plan, args.min_foreign_speedup, inspect_foreign_cert=args.require_foreign_cert)
     summary = aggregate(rows, args.min_foreign_speedup)
     output_rows = [summary] + rows
     if args.tsv:
@@ -394,6 +474,16 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 4
+    if args.require_foreign_cert:
+        cert_failures = foreign_cert_failures(rows)
+        if cert_failures:
+            details = ", ".join(
+                "%s status=%s cert=%s"
+                % (row["window"], row.get("foreign_cert_status", ""), row.get("foreign_cert_log", ""))
+                for row in cert_failures
+            )
+            print(f"fallback compare rejected: foreign certificate guard failed: {details}", file=sys.stderr)
+            return 4
     if args.promoted_route_plan_out:
         promoted_count = write_promoted_route_plan(
             args.selected_route_plan,
