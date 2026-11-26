@@ -8,6 +8,7 @@ TARGETS = {
   "nomic_backend"      => "src/ml/models/nomic_bert/metal/backend.cr",
   "qwen35"             => "src/ml/models/qwen35/metal/engine.cr",
   "qwen35_projections" => "src/ml/models/qwen35/metal/projections.cr",
+  "qwen35_attention"   => "src/ml/models/qwen35/metal/attention.cr",
   "qwen35_output_head" => "src/ml/models/qwen35/metal/output_head.cr",
   "gemma4"             => "src/ml/models/gemma4/metal/engine.cr",
   "compute_graph"      => "src/ml/metal/compute_graph.cr",
@@ -18,6 +19,7 @@ MODEL_SOURCES = {
   "qwen35" => [
     TARGETS["qwen35"],
     TARGETS["qwen35_projections"],
+    TARGETS["qwen35_attention"],
     TARGETS["qwen35_output_head"],
   ],
   "gemma4" => [TARGETS["gemma4"]],
