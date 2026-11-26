@@ -11,6 +11,12 @@ require "./inkling2_metal_view"
 {% end %}
 
 module ML::GGUF
+  module Inkling2ControllerBF16Storage
+    def self.exact_word?(bits : UInt32) : Bool
+      (bits & 0x0000_FFFF_u32) == 0
+    end
+  end
+
   {% if flag?(:darwin) && !flag?(:cpu_only) %}
     # Encode-only projection and MoE helpers for an inference-wide Metal
     # command buffer. The GGUF mmap remains owned by its GGUFFile/Weights.
@@ -42,10 +48,16 @@ module ML::GGUF
       @base : UInt64
       @file_size : UInt64
       @model : ML::MetalBuffer
+      @controller_bf16_buffer : ML::MetalBuffer? = nil
+      @controller_bf16_offsets = {} of UInt64 => UInt64
+      @controller_bf16_packed_matrices = 0_i32
+      @controller_bf16_packed_words = 0_i64
+      @controller_bf16_projected_matrices = 0_i64
       @closed : Bool = false
 
       def initialize(gguf : GGUFFile, *, @prefill_expert_tile_routes : Int32 = EXPERT_TILE_ROUTES,
-                     @prefill_indirect_dispatch : Bool = false)
+                     @prefill_indirect_dispatch : Bool = false,
+                     controller_weights : Array(QuantWeight) = [] of QuantWeight)
         unless {EXPERT_TILE_ROUTES, WIDE_EXPERT_TILE_ROUTES, M64_EXPERT_TILE_ROUTES}.includes?(@prefill_expert_tile_routes)
           raise ArgumentError.new("Inkling 2 prefill expert tile must have 16, 32, or 64 routes")
         end
@@ -56,6 +68,123 @@ module ML::GGUF
         page = Inkling2ResidentSystem.getpagesize.to_i64
         length = ((@file_size.to_i64 + page - 1) // page) * page
         @model = ML::MetalBuffer.wrap_no_copy(base.as(Void*), length)
+        if ENV["INKLING2_LOOP_CONTROLLER_BF16_STORAGE"]? == "1"
+          begin
+            prepare_controller_bf16_storage(controller_weights)
+          rescue ex
+            @controller_bf16_buffer.try(&.release)
+            @controller_bf16_buffer = nil
+            @model.release
+            raise ex
+          end
+        end
+      end
+
+      def controller_bf16_storage_stats
+        {packed_matrices: @controller_bf16_packed_matrices,
+         packed_words: @controller_bf16_packed_words,
+         projected_matrices: @controller_bf16_projected_matrices}
+      end
+
+      def controller_bf16_weight_supported?(weight : QuantWeight) : Bool
+        @controller_bf16_buffer != nil && weight.type.f32? &&
+          @controller_bf16_offsets.has_key?(weight.raw.to_unsafe.address.to_u64)
+      end
+
+      # Decode-only controller matvec. The storage buffer contains exact
+      # BF16 words; widening recreates the original Float32 bits in the Metal
+      # kernel before multiplication.
+      def project_controller_bf16(encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
+                                   input : Inkling2View, output : Inkling2View, rows : Int32) : Bool
+        ensure_open!
+        return false unless controller_bf16_weight_supported?(weight)
+        return false unless rows.in?(1..MAX_DECODE_BLOCK_ROWS)
+
+        elements_in = checked_product(rows.to_i64, weight.in_dim.to_i64, "BF16 controller input")
+        elements_out = checked_product(rows.to_i64, weight.out_dim.to_i64, "BF16 controller output")
+        return false unless view_fits?(input, elements_in) && view_fits?(output, elements_out)
+        return false if view_overlaps?(input, elements_in, output, elements_out)
+
+        buffer = @controller_bf16_buffer.not_nil!
+        offset = controller_bf16_offset(weight).to_i64 * sizeof(UInt16)
+        return false unless offset % sizeof(Float32) == 0
+        name = rows == 1 ? "inkling2_resident_simd_mv_bf16_f32" : "inkling2_resident_gemm_bf16"
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        encoder.set_buffer(buffer, 0, offset: offset)
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_value(weight.in_dim.to_u32, 3)
+        encoder.set_value(weight.out_dim.to_u32, 4)
+        encoder.set_value(rows.to_u32, 5)
+        if rows == 1
+          encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, 1, 1}, {128, 1, 1})
+        else
+          encoder.dispatch_threadgroups(
+            {(weight.out_dim + BATCH_TILE - 1) // BATCH_TILE, (rows + BATCH_TILE - 1) // BATCH_TILE, 1},
+            {128, 1, 1},
+          )
+        end
+        @controller_bf16_projected_matrices += 1
+        true
+      end
+
+      def project_controller_bf16_triplet(encoder : ML::Metal::ComputeEncoder,
+                                          weights : {QuantWeight, QuantWeight, QuantWeight},
+                                          input : Inkling2View, output : Inkling2View) : Bool
+        ensure_open!
+        return false unless controller_bf16_weight_supported?(weights[0]) &&
+                            controller_bf16_weight_supported?(weights[1]) &&
+                            controller_bf16_weight_supported?(weights[2])
+        first = weights[0]
+        return false unless weights.all? { |weight| weight.in_dim == first.in_dim && weight.out_dim == first.out_dim }
+        return false unless view_fits?(input, 3_i64 * first.in_dim) && view_fits?(output, 3_i64 * first.out_dim)
+
+        offsets = StaticArray(UInt64, 3).new { |index| controller_bf16_offset(weights[index]) }
+        return false unless offsets[0] % 2 == 0 && offsets[1] % 2 == 0 && offsets[2] % 2 == 0
+        buffer = @controller_bf16_buffer.not_nil!
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile("inkling2_resident_bf16_projection_triplet", SOURCE))
+        encoder.set_buffer(buffer, 0)
+        encoder.set_buffer(input.buffer, 1, offset: input.offset)
+        encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 3, 3)
+        encoder.set_value(first.in_dim.to_u32, 4)
+        encoder.set_value(first.out_dim.to_u32, 5)
+        encoder.dispatch_threadgroups({(first.out_dim + 3) // 4, 3, 1}, {128, 1, 1})
+        @controller_bf16_projected_matrices += 3
+        true
+      end
+
+      def project_controller_bf16_control_pair(encoder : ML::Metal::ComputeEncoder,
+                                               weights : {QuantWeight, QuantWeight},
+                                               rank : Inkling2View, input : Inkling2View,
+                                               message : Inkling2View, output : Inkling2View,
+                                               output_dim : Int32) : Bool
+        ensure_open!
+        return false unless controller_bf16_weight_supported?(weights[0]) &&
+                            controller_bf16_weight_supported?(weights[1])
+        first = weights[0]
+        return false unless weights.all? { |weight| weight.in_dim == first.in_dim && weight.out_dim == output_dim }
+        return false unless view_fits?(rank, first.in_dim) && view_fits?(input, output_dim) &&
+                            view_fits?(message, output_dim) && view_fits?(output, output_dim)
+        return false if view_overlaps?(output, output_dim, rank, first.in_dim) ||
+                        view_overlaps?(output, output_dim, input, output_dim) ||
+                        view_overlaps?(output, output_dim, message, output_dim)
+
+        offsets = StaticArray(UInt64, 2).new { |index| controller_bf16_offset(weights[index]) }
+        return false unless offsets[0] % 2 == 0 && offsets[1] % 2 == 0
+        buffer = @controller_bf16_buffer.not_nil!
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile("inkling2_resident_bf16_control_pair", SOURCE))
+        encoder.set_buffer(buffer, 0)
+        encoder.set_buffer(rank.buffer, 1, offset: rank.offset)
+        encoder.set_buffer(input.buffer, 2, offset: input.offset)
+        encoder.set_buffer(message.buffer, 3, offset: message.offset)
+        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(offsets.to_unsafe.as(Void*), sizeof(UInt64) * 2, 5)
+        encoder.set_value(first.in_dim.to_u32, 6)
+        encoder.set_value(output_dim.to_u32, 7)
+        encoder.dispatch_threadgroups({(output_dim + 3) // 4, 1, 1}, {128, 1, 1})
+        @controller_bf16_projected_matrices += 2
+        true
       end
 
       # Return a zero-copy view into the GGUF-backed Metal buffer.
@@ -385,6 +514,8 @@ module ML::GGUF
       def close : Nil
         return if @closed
         @closed = true
+        @controller_bf16_buffer.try(&.release)
+        @controller_bf16_buffer = nil
         @model.release
       end
 
@@ -793,6 +924,54 @@ module ML::GGUF
           raise ArgumentError.new("Inkling 2 resident tensor is outside the mapped GGUF")
         end
         (address - @base).to_i64
+      end
+
+      private def prepare_controller_bf16_storage(weights : Array(QuantWeight)) : Nil
+        candidates = weights.select do |weight|
+          next false unless weight.type.f32? && weight.in_dim > 0 && weight.out_dim > 0
+          words = checked_product(weight.in_dim.to_i64, weight.out_dim.to_i64, "BF16 controller words")
+          weight.raw.size.to_i64 == checked_product(words, sizeof(Float32).to_i64, "BF16 controller bytes")
+        end
+        maximum_words = candidates.sum do |weight|
+          checked_product(weight.in_dim.to_i64, weight.out_dim.to_i64, "BF16 controller words")
+        end + candidates.size.to_i64
+        return if maximum_words == 0
+        buffer_bytes = checked_product(maximum_words, sizeof(UInt16).to_i64, "BF16 controller storage bytes")
+        buffer = ML::MetalBuffer.new(buffer_bytes, ML::StorageMode::Shared)
+        destination = buffer.contents.as(UInt16*)
+        packed_words = 0_i64
+
+        begin
+          candidates.each do |weight|
+            packed_words = (packed_words + 1) & ~1_i64
+            count = checked_product(weight.in_dim.to_i64, weight.out_dim.to_i64, "BF16 controller words")
+            source = weight.raw.to_unsafe.as(UInt32*)
+            exact = true
+            count.times do |index|
+              bits = source[index]
+              unless Inkling2ControllerBF16Storage.exact_word?(bits)
+                exact = false
+                break
+              end
+              destination[packed_words + index] = (bits >> 16).to_u16
+            end
+            next unless exact
+
+            @controller_bf16_offsets[weight.raw.to_unsafe.address.to_u64] = packed_words.to_u64
+            @controller_bf16_packed_matrices += 1
+            @controller_bf16_packed_words += count
+            packed_words += count
+          end
+        rescue ex
+          buffer.release
+          raise ex
+        end
+
+        @controller_bf16_buffer = buffer
+      end
+
+      private def controller_bf16_offset(weight : QuantWeight) : UInt64
+        @controller_bf16_offsets[weight.raw.to_unsafe.address.to_u64]
       end
 
       private def ensure_open! : Nil

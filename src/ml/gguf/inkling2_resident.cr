@@ -54,13 +54,15 @@ module ML::GGUF
       getter width : Int32
       getter elements : Int32
       getter? decode_block : Bool
+      getter? controller_decode : Bool
       getter current : Inkling2View
       getter next_state : Inkling2View
       getter blocks : Inkling2View
       property block_count : Int32 = 0
 
       def initialize(@encoder, @scratch : Inkling2ResidentScratch, @start, @rows, @width, block_slots : Int32,
-                     @decode_block : Bool)
+                     @decode_block : Bool, @controller_decode : Bool = false)
+        @controller_decode ||= @decode_block
         @elements = @rows * @width
         @current = hidden
         @next_state = hidden
@@ -146,20 +148,41 @@ module ML::GGUF
                                        else
                                          raise ArgumentError.new("INKLING2_MOE_PREFILL_ROUTES must be 16, 16_indirect, 32, or 64")
                                        end
+      controller_weights = [] of QuantWeight
+      if ENV["INKLING2_LOOP_CONTROLLER_BF16_STORAGE"]? == "1"
+        @weights.layers.each do |layer|
+          layer.controller.try do |controller|
+            controller_weights.concat(controller.down)
+            controller_weights.concat(controller.gain)
+            controller_weights.concat(controller.forget)
+          end
+        end
+      end
       @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: tile_routes,
-        prefill_indirect_dispatch: indirect_dispatch)
-      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
+        prefill_indirect_dispatch: indirect_dispatch, controller_weights: controller_weights)
+      buffers = begin
+        prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
+      rescue ex
+        @visits.each(&.close)
+        @draft_epilogue_visits.each(&.close)
+        @shared.each(&.release)
+        @depth_checkpoint.try(&.release)
+        @scratch.close
+        @linear.close
+        raise ex
+      end
+      @constants, @ids, @logits = buffers
     end
 
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
       @ids.contents.as(Int32*).value = token
-      evaluate(position, 1, with_logits)
+      evaluate(position, 1, with_logits, controller_decode: true)
     end
 
     def forward_greedy(token : Int32, position : Int32) : Int32
       @ids.contents.as(Int32*).value = token
       output = greedy_ids_buffer
-      submit_tile(position, 1, output, greedy: true)
+      submit_tile(position, 1, output, greedy: true, controller_decode: true)
       output.contents.as(Int32*).value
     end
 
@@ -169,7 +192,7 @@ module ML::GGUF
       tokens.each_with_index { |token, row| ids[row] = token }
       vocab = @config.vocab_size
       logits = @block_logits ||= allocate_shared(tokens.size.to_i64 * vocab * sizeof(Float32))
-      submit_tile(position, tokens.size, logits, decode_block: true)
+      submit_tile(position, tokens.size, logits, decode_block: true, controller_decode: true)
       read_block_logits(logits)
     end
 
@@ -178,7 +201,7 @@ module ML::GGUF
       ids = @ids.contents.as(Int32*)
       tokens.each_with_index { |token, row| ids[row] = token }
       output = greedy_ids_buffer
-      submit_tile(position, tokens.size, output, decode_block: true, greedy: true)
+      submit_tile(position, tokens.size, output, decode_block: true, greedy: true, controller_decode: true)
       data = output.contents.as(Int32*)
       StaticArray(Int32, 4).new { |row| data[row] }
     end
@@ -331,6 +354,10 @@ module ML::GGUF
       @linear.close
     end
 
+    def controller_bf16_storage_stats
+      @linear.controller_bf16_storage_stats
+    end
+
     private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32, rollback_rows : Int32,
                                 prefill_mode : Inkling2ResidentAttention::PrefillMode)
       physical_visits.each do |physical|
@@ -419,8 +446,9 @@ module ML::GGUF
       Inkling2View.new(@constants, @float_offsets[array.object_id])
     end
 
-    private def evaluate(position : Int32, rows : Int32, with_logits : Bool) : Array(Float32)?
-      submit_tile(position, rows, with_logits ? @logits : nil)
+    private def evaluate(position : Int32, rows : Int32, with_logits : Bool, *,
+                         controller_decode : Bool = false) : Array(Float32)?
+      submit_tile(position, rows, with_logits ? @logits : nil, controller_decode: controller_decode)
       @logits.read(@config.vocab_size) if with_logits
     end
 
@@ -437,7 +465,8 @@ module ML::GGUF
     private def encode_depth_draft_row(encoder : ML::Metal::ComputeEncoder, position : Int32,
                                        checkpoint_row : Int32, with_logits : Bool) : Nil
       rows = 1
-      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, false)
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, false,
+        controller_decode: true)
       prelude = tile.hidden
       banks = StaticArray[
         @scratch.take(@core_blocks * tile.elements),
@@ -525,13 +554,14 @@ module ML::GGUF
     end
 
     private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *,
-                            decode_block : Bool = false, greedy : Bool = false) : Nil
+                            decode_block : Bool = false, greedy : Bool = false,
+                            controller_decode : Bool = false) : Nil
       if @depth_speculation
         ensure_ordinary_mode!
         raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
       end
       submit_command do |encoder|
-        encode_tile(encoder, position, rows, logits, decode_block, greedy)
+        encode_tile(encoder, position, rows, logits, decode_block, greedy, controller_decode)
       end
       @depth_frontier = position + rows if @depth_speculation
     end
@@ -558,8 +588,10 @@ module ML::GGUF
     end
 
     private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32,
-                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool) : Nil
-      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
+                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool,
+                            controller_decode : Bool) : Nil
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block,
+        controller_decode)
       prelude = tile.hidden if @passes > 1
       banks = StaticArray[@scratch.take(@core_blocks * tile.elements), @scratch.take(@core_blocks * tile.elements)] if @passes > 1
 
@@ -829,6 +861,22 @@ module ML::GGUF
       result
     end
 
+    private def project_controller(tile : Tile, weight : QuantWeight, input : Inkling2View) : Inkling2View
+      result = @scratch.take(weight.out_dim * tile.rows)
+      if tile.controller_decode? && controller_bf16_storage_selected?(weight) &&
+         @linear.project_controller_bf16(tile.encoder, weight, input, result, tile.rows)
+        return result
+      end
+      @linear.project(tile.encoder, weight, input, result, tile.rows, decode_block: tile.decode_block?)
+      result
+    end
+
+    # Same-binary probe hook. Storage remains opt-in and this predicate only
+    # selects exact packed controller matrices on decode tiles.
+    private def controller_bf16_storage_selected?(weight : QuantWeight) : Bool
+      @linear.controller_bf16_weight_supported?(weight)
+    end
+
     # Override this predicate in a same-binary probe to compare fused scalar
     # controller evaluation with the reference projection-plus-epilogue path.
     private def decode_fused_control? : Bool
@@ -888,7 +936,15 @@ module ML::GGUF
             features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
         end
       end
-      @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
+      if tile.controller_decode? &&
+         controller_bf16_storage_selected?(downs[0]) &&
+         controller_bf16_storage_selected?(downs[1]) &&
+         controller_bf16_storage_selected?(downs[2]) &&
+         @linear.project_controller_bf16_triplet(tile.encoder, downs, features, ranks)
+        # The exact BF16 storage view widens back to the original F32 bits.
+      else
+        @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
+      end
       apply_mark = @scratch.mark
       inputs.each_with_index do |input, index|
         apply_control(tile, controller, index, input, messages.slice(index * tile.elements),
@@ -905,7 +961,7 @@ module ML::GGUF
       mark = @scratch.mark
       features = @scratch.take(2 * tile.elements)
       MathOps.rms_concat(tile.encoder, input, message, features, tile.width, tile.rows, DEPTH_EPS)
-      rank = project(tile, controller.down[index], features)
+      rank = project_controller(tile, controller.down[index], features)
       apply_control(tile, controller, index, input, message, rank, result)
       @scratch.rewind(mark)
       result
@@ -916,15 +972,24 @@ module ML::GGUF
                               rank : Inkling2View, result : Inkling2View) : Nil
       unless tile.decode_block?
         fused_control = tile.rows == 1 ? decode_fused_control? : prefill_fused_control?
-        if fused_control &&
-           @linear.project_f32_control_pair(tile.encoder, {controller.gain[index], controller.forget[index]},
-             rank, input, message, result, tile.width, rows: tile.rows)
-          return
+        if fused_control
+          gain = controller.gain[index]
+          forget = controller.forget[index]
+          if tile.controller_decode? && controller_bf16_storage_selected?(gain) &&
+             controller_bf16_storage_selected?(forget) &&
+             @linear.project_controller_bf16_control_pair(tile.encoder, {gain, forget},
+               rank, input, message, result, tile.width)
+            return
+          end
+          if @linear.project_f32_control_pair(tile.encoder, {gain, forget},
+               rank, input, message, result, tile.width, rows: tile.rows)
+            return
+          end
         end
       end
 
-      gain = project(tile, controller.gain[index], rank)
-      forget = project(tile, controller.forget[index], rank)
+      gain = project_controller(tile, controller.gain[index], rank)
+      forget = project_controller(tile, controller.forget[index], rank)
       MathOps.controls(tile.encoder, input, message, gain, forget, result, tile.elements)
     end
   end

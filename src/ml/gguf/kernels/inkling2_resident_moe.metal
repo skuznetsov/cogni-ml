@@ -3,6 +3,59 @@
 
 constant uint INKLING2_RESIDENT_TILE = 4;
 
+static inline float inkling2_bf16_storage_widen(ushort value) {
+    return as_type<float>((uint)value << 16);
+}
+
+kernel void inkling2_resident_simd_mv_bf16_f32(
+    device const ushort* w       [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint first_row = (tgpig.x * 4 + sgitg);
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    device const float* y_base = x + n * in_dim;
+    float sum = 0.0f;
+    for (uint col = tiisg; col < in_dim; col += 32) {
+        sum += inkling2_bf16_storage_widen(w[first_row * in_dim + col]) * y_base[col];
+    }
+    const float total = simd_sum(sum);
+    if (tiisg == 0) output[n * out_dim + first_row] = total;
+}
+
+// Exact BF16 storage companion to the F32 controller triplet. It keeps the
+// F32 multiply, lane traversal, accumulation and SIMD reduction unchanged.
+kernel void inkling2_resident_bf16_projection_triplet(
+    device const ushort* model          [[buffer(0)]],
+    device const float* input          [[buffer(1)]],
+    device       float* output         [[buffer(2)]],
+    constant     ulong* weight_offsets [[buffer(3)]],
+    constant     uint&  in_dim         [[buffer(4)]],
+    constant     uint&  out_dim        [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    const uint row = group.x * 4 + simd;
+    if (row >= out_dim) return;
+    device const ushort* weights = model + weight_offsets[group.y];
+    device const float* x = input + (size_t)group.y * in_dim;
+    float sum = 0.0f;
+    for (uint col = lane; col < in_dim; col += 32) {
+        sum += inkling2_bf16_storage_widen(weights[row * in_dim + col]) * x[col];
+    }
+    const float total = simd_sum(sum);
+    if (lane == 0) output[(size_t)group.y * out_dim + row] = total;
+}
+
 // Independent projections occupy the y dimension. Keep the lane's column
 // traversal and SIMD reduction identical to simd_mv_f32_f32.
 kernel void inkling2_resident_f32_projection_triplet(
@@ -56,6 +109,44 @@ kernel void inkling2_resident_f32_control_pair(
         const float rank_value = rank[col];
         gain_sum += gain_weights[weight_base + col] * rank_value;
         forget_sum += forget_weights[weight_base + col] * rank_value;
+    }
+
+    const float gain_value = simd_sum(gain_sum);
+    const float forget_value = simd_sum(forget_sum);
+    if (lane == 0) {
+        const float source = input[row];
+        const float forgotten = tanh(forget_value) * source;
+        const float gained = tanh(gain_value) * message[row];
+        output[row] = source - forgotten + gained;
+    }
+}
+
+// Scalar decode storage-only companion; all arithmetic remains F32.
+kernel void inkling2_resident_bf16_control_pair(
+    device const ushort* model          [[buffer(0)]],
+    device const float* rank           [[buffer(1)]],
+    device const float* input          [[buffer(2)]],
+    device const float* message        [[buffer(3)]],
+    device       float* output         [[buffer(4)]],
+    constant ulong* weight_offsets    [[buffer(5)]],
+    constant uint&  in_dim             [[buffer(6)]],
+    constant uint&  out_dim            [[buffer(7)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    const uint row = group.x * 4 + (uint)simd;
+    if (row >= out_dim) return;
+
+    device const ushort* gain_weights = model + weight_offsets[0];
+    device const ushort* forget_weights = model + weight_offsets[1];
+    const size_t weight_base = (size_t)row * in_dim;
+    float gain_sum = 0.0f;
+    float forget_sum = 0.0f;
+    for (uint col = (uint)lane; col < in_dim; col += 32) {
+        const float rank_value = rank[col];
+        gain_sum += inkling2_bf16_storage_widen(gain_weights[weight_base + col]) * rank_value;
+        forget_sum += inkling2_bf16_storage_widen(forget_weights[weight_base + col]) * rank_value;
     }
 
     const float gain_value = simd_sum(gain_sum);
@@ -246,6 +337,49 @@ kernel void inkling2_resident_gemm_f32(
     float4 sums = float4(0.0f);
     for (uint col = tiisg; col < in_dim; col += 32) {
         const float weight = w_row[col];
+        float4 values = float4(0.0f);
+        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
+            const uint batch_row = first_batch + b;
+            if (batch_row < batch) {
+                values[b] = x[(size_t)batch_row * (size_t)in_dim + col];
+            }
+        }
+        sums += values * weight;
+    }
+
+    const float4 totals = float4(simd_sum(sums.x), simd_sum(sums.y),
+                                 simd_sum(sums.z), simd_sum(sums.w));
+    if (tiisg == 0) {
+        for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
+            const uint batch_row = first_batch + b;
+            if (batch_row < batch) {
+                output[(size_t)batch_row * (size_t)out_dim + row] = totals[b];
+            }
+        }
+    }
+}
+
+// Batched storage-only companion to the resident F32 projection. The
+// accumulator shape, input traversal and reduction order are identical.
+kernel void inkling2_resident_gemm_bf16(
+    device const ushort* w         [[buffer(0)]],
+    device const float*   x         [[buffer(1)]],
+    device       float*   output    [[buffer(2)]],
+    constant     uint&    in_dim    [[buffer(3)]],
+    constant     uint&    out_dim   [[buffer(4)]],
+    constant     uint&    batch     [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint row = tgpig.x * INKLING2_RESIDENT_TILE + (uint)sgitg;
+    const uint first_batch = tgpig.y * INKLING2_RESIDENT_TILE;
+    if (row >= out_dim) return;
+
+    const device ushort* w_row = w + (size_t)row * (size_t)in_dim;
+    float4 sums = float4(0.0f);
+    for (uint col = tiisg; col < in_dim; col += 32) {
+        const float weight = inkling2_bf16_storage_widen(w_row[col]);
         float4 values = float4(0.0f);
         for (uint b = 0; b < INKLING2_RESIDENT_TILE; ++b) {
             const uint batch_row = first_batch + b;
