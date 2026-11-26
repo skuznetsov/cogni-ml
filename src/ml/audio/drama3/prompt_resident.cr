@@ -3,7 +3,7 @@ require "./resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
   module ML::Audio::Drama3
-    RESIDENT_PROMPT_SOURCE = {{ read_file("#{__DIR__}/kernels/prompt_resident.metal") }}
+    RESIDENT_PROMPT_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/prompt_resident.metal") }}
 
     # The flat row-major prompt buffer stays in the same resident context as its
     # encoder codes and the model. Audio rows occupy the plan's marked span.

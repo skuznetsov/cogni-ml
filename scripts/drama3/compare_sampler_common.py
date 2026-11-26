@@ -605,9 +605,9 @@ def build_fixture(native_trace: Path, upstream_trace: Path, *, steps: Iterable[i
             "model_files": native["model_files"],
             "upstream_source_hashes": upstream["source_hashes"],
             "sampler_source": sampler_meta,
-            "native_sampler_source": "src/ml/audio/drama3/kernels/resident.metal::dr3_sample",
+            "native_sampler_source": "src/ml/metal/kernels/drama3/resident.metal::dr3_sample",
         "native_sampler_source_sha256": hashlib.sha256(
-            (ROOT / "src/ml/audio/drama3/kernels/resident.metal").read_bytes()
+            (ROOT / "src/ml/metal/kernels/drama3/resident.metal").read_bytes()
         ).hexdigest(),
             "seeded_rng_parity_claimed": False,
             "native_random_tape": random_tape,
@@ -1278,7 +1278,7 @@ def _validate_probe_lineage(probe: dict[str, Any], fixture: dict[str, Any]) -> N
     provenance = fixture.get("provenance")
     _require(isinstance(provenance, dict), "fixture.provenance: expected object")
     expected_sampler_sha = hashlib.sha256(
-        (ROOT / "src/ml/audio/drama3/kernels/resident.metal").read_bytes()
+        (ROOT / "src/ml/metal/kernels/drama3/resident.metal").read_bytes()
     ).hexdigest()
     expected_diagnostic_sha = hashlib.sha256(
         (ROOT / "examples/support/drama3_sampler_compare.metal").read_bytes()

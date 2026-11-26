@@ -6,7 +6,7 @@ module ML::Audio::Drama3
   # The CPU only schedules commands. Activations, routing decisions, and both
   # temporal attention states remain in device allocations between rows.
   class BackboneResident
-    SOURCE = {{ read_file("#{__DIR__}/kernels/backbone_resident.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/backbone_resident.metal") }}
     MAX_CAPACITY = 4096
     getter config : BackboneConfig, position = 0
     getter capacity : Int32, maximum_capacity : Int32

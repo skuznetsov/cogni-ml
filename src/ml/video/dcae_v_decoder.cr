@@ -214,7 +214,7 @@ module ML::Video
   end
 
   module DCAEVDecoder
-    SOURCE = {{ read_file("#{__DIR__}/kernels/dcae_v_decoder.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/dcae_v/dcae_v_decoder.metal") }}
     WIDTHS = [128, 256, 512, 512, 1024, 1024, 1024]
     DEPTHS = [0, 5, 10, 4, 4, 4, 4]
     private record CacheSpec, name : String, channels : Int32, height : Int32, width : Int32

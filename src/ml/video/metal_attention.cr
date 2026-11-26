@@ -2,7 +2,7 @@ require "./metal_ops"
 require "./metal_mps_command_chain"
 
 module ML::Video::MetalOps
-  TILED_ATTENTION_SOURCE = {{ read_file("#{__DIR__}/kernels/attention_tiled.metal") }}
+  TILED_ATTENTION_SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/video/attention_tiled.metal") }}
 
   def self.tiled_attention_pipeline(head_dim : Int32) : ML::Metal::ComputePipeline
     unless {64, 128}.includes?(head_dim)

@@ -265,7 +265,7 @@ module ML::Video
   # additionally own raw staging until the caller's final command completes.
   # Original BF16 tensors copy directly into final buffers at setup.
   class PreparedWeights
-    SOURCE = {{ read_file("#{__DIR__}/kernels/weight_decode.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/shared/weight_decode.metal") }}
     @raw : ML::MetalBuffer?
     @destinations = [] of ML::MetalBuffer
     @entries : Array(PlannedWeight)

@@ -12,7 +12,7 @@ module ML::Video
 
     record Step, sigma : Float32, timestep : Float32, dt : Float32
 
-    SOURCE = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_euler.metal") }}
+    SOURCE = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_euler.metal") }}
 
     @@timestep_pipeline : ML::Metal::ComputePipeline?
     @@update_pipeline : ML::Metal::ComputePipeline?

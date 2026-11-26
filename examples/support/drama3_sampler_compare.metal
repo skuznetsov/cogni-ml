@@ -1,5 +1,5 @@
 // Fixed-logit sampler diagnostics only. Production sampling remains in
-// src/ml/audio/drama3/kernels/resident.metal.
+// src/ml/metal/kernels/drama3/resident.metal.
 #include <metal_stdlib>
 using namespace metal;
 

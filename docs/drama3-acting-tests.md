@@ -162,7 +162,7 @@ Both admit 768 frames, approximately 35.7 seconds, with capacities 925 and 957.
 The actual native ceiling is the resident backbone guard and the full-attention
 kernel's `threadgroup float scores[1024]`, in
 `src/ml/audio/drama3/backbone_resident.cr` and
-`src/ml/audio/drama3/kernels/backbone_resident.metal`. Raising only the CLI
+`src/ml/metal/kernels/drama3/backbone_resident.metal`. Raising only the CLI
 guard would not make larger contexts safe. Beyond 1024 requires an attention
 scratch/algorithm change and matching resident guards, followed by numeric,
 capacity and upstream checks. Simply dropping old KV rows would change the

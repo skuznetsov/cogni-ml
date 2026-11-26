@@ -7,7 +7,7 @@ module ML::Video::HyNomasMPSPointwise
   MODULATE_KERNEL = "hy_nomas_modulate_uncontracted_f32"
   RESIDUAL_KERNEL = "hy_nomas_residual_uncontracted_f32"
   ROPE_KERNEL     = "hy_nomas_rope_uncontracted_f32"
-  SOURCE          = {{ read_file("#{__DIR__}/kernels/hy_nomas_mps_pointwise.metal") }}
+  SOURCE          = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_mps_pointwise.metal") }}
 
   # Setup-prepared fixed feature width. Rows remain dynamic within the block's
   # configured image/text geometry; encode only validates and dispatches.

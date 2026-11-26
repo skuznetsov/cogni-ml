@@ -6,8 +6,8 @@ require "./resident_host_encoder"
 require "../../metal/compute_graph"
 
 module ML::Audio::Drama3::Resident
-  SOURCE = {{ read_file("#{__DIR__}/kernels/resident.metal") }}
-  MLX_Q4_SOURCE = {{ read_file("#{__DIR__}/kernels/mlx_q4.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/resident.metal") }}
+  MLX_Q4_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/mlx_q4.metal") }}
 
   private class BufferOwner
     getter host_profile = HostProfile.new(ENV["DRAMA3_HOST_PROFILE"]? == "1")

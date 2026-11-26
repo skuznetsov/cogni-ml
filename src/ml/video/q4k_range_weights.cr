@@ -7,7 +7,7 @@ module ML::Video::Q4KRangeWeights
   STATUS_WORDS     =     1
   STATUS_ERROR     = 1_u32
 
-  SOURCE = {{ read_file("#{__DIR__}/kernels/q4k_range_weights.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/q4k_range_weights.metal") }}
 
   @@pack_pipeline : ML::Metal::ComputePipeline?
 

@@ -10,7 +10,7 @@ module ML::Video::PackedWeightDecode
   QBIT_P5_BLOCK_BYTES = 168
   QBIT_LUT_ELEMENTS   = 256
 
-  SOURCE = {{ read_file("#{__DIR__}/kernels/packed_weight_decode.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/video/packed_weight_decode.metal") }}
 
   @@q4_k_pipeline : ML::Metal::ComputePipeline?
   @@qbit_pipeline : ML::Metal::ComputePipeline?

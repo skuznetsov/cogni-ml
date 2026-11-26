@@ -2,7 +2,7 @@ require "./metal_ops"
 require "./metal_mps_command_chain"
 
 module ML::Video::MetalLinearTiled
-  SOURCE = {{ read_file("#{__DIR__}/kernels/linear_tiled.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/video/linear_tiled.metal") }}
 
   ROW_TILE =  8
   THREADS  = 32

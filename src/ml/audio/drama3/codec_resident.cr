@@ -6,7 +6,7 @@ module ML::Audio::Drama3
   # Device-side DAC decoder. Activations stay in Resident::Buffer allocations;
   # the only host copies are explicit trace reads or the caller's terminal read.
   class CodecResident
-    SOURCE = {{ read_file("#{__DIR__}/kernels/codec_resident.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/codec_resident.metal") }}
 
     private struct Activation
       getter rows : Int32

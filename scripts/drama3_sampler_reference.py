@@ -665,7 +665,7 @@ def create_outputs(reference_out: Path, run_out: Path) -> None:
     fixture = {
         "format": "drama3-sampler-fixture-v1",
         "provenance": {
-            "oracle": "native-style scalar FP32 port of src/ml/audio/drama3/kernels/resident.metal::dr3_sample",
+            "oracle": "native-style scalar FP32 port of src/ml/metal/kernels/drama3/resident.metal::dr3_sample",
             "upstream_sampler": "AST-extracted exact sample_top_k_top_p function, CPU execution only",
             "upstream_revision": revision,
             "upstream_source": str(UPSTREAM_SOURCE),

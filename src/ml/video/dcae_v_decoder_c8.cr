@@ -2,7 +2,7 @@ require "./metal_ops"
 require "./metal_mps_command_chain"
 
 module ML::Video::DCAEVDecoderC8
-  SOURCE = {{ read_file("#{__DIR__}/kernels/dcae_v_decoder_c8.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/dcae_v/dcae_v_decoder_c8.metal") }}
 
   CHANNELS = 512
   FRAMES   =  40

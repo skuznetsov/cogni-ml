@@ -39,7 +39,7 @@ NATIVE_SOURCE_FILES = (
 )
 SOURCE_ATTENTION_SOURCE_FILES = (
     "src/ml/video/hy_nomas_vector_attention.cr",
-    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+    "src/ml/metal/kernels/hy_nomas/hy_nomas_vector_attention.metal",
 )
 ATOL, RTOL = prelude.ATOL, prelude.RTOL
 BLOCK_CONTROL_FIELD = "block_boundaries_bf16_control"

@@ -150,8 +150,8 @@ def _implementations():
              REPO / "examples/support/hy_nomas_query_correspondence_probe.cr",
              REPO / "src/ml/video/hy_nomas_mps_pointwise.cr",
              REPO / "src/ml/video/hy_nomas_block.cr",
-             REPO / "src/ml/video/kernels/hy_nomas_mps_pointwise.metal",
-             REPO / "src/ml/video/kernels/hy_nomas_block.metal")
+             REPO / "src/ml/metal/kernels/hy_nomas/hy_nomas_mps_pointwise.metal",
+             REPO / "src/ml/metal/kernels/hy_nomas/hy_nomas_block.metal")
     return {str(path): ref.file_sha256(path) for path in paths}
 
 
@@ -362,8 +362,8 @@ def qualify(plan_path, digest, report):
                     raise ValueError("native encode/drain execution contract mismatch")
                 sources = doc.get("native_sources", {})
                 expected_sources = {
-                    "production_uncontracted_rope_sha256": ref.file_sha256(REPO / "src/ml/video/kernels/hy_nomas_mps_pointwise.metal"),
-                    "production_bf16_roundtrip_helper_sha256": ref.file_sha256(REPO / "src/ml/video/kernels/hy_nomas_block.metal"),
+                    "production_uncontracted_rope_sha256": ref.file_sha256(REPO / "src/ml/metal/kernels/hy_nomas/hy_nomas_mps_pointwise.metal"),
+                    "production_bf16_roundtrip_helper_sha256": ref.file_sha256(REPO / "src/ml/metal/kernels/hy_nomas/hy_nomas_block.metal"),
                     "rope_kernel": "hy_nomas_rope_uncontracted_f32",
                     "bf16_roundtrip_helper": "hy_nomas_bf16_roundtrip_f32"}
                 if any(sources.get(k) != v for k, v in expected_sources.items()):

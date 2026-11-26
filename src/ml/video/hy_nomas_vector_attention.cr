@@ -6,7 +6,7 @@ require "./metal_mps_command_chain"
 module ML::Video
   class HyNomasVectorAttentionPlan
     KERNEL = "hy_nomas_vector_attention_bf16"
-    SOURCE = {{ read_file("#{__DIR__}/kernels/hy_nomas_vector_attention.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_vector_attention.metal") }}
 
     @pipeline : ML::Metal::ComputePipeline
     @output_offset : Int64

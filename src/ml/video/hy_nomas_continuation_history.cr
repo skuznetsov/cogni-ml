@@ -9,11 +9,11 @@ require "./metal_ops"
 module ML::Video
   module HyNomasContinuationHistoryKernels
     APPEND_KERNEL = "hy_nomas_continuation_history_append_f32"
-    SOURCE        = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_continuation_history.metal") }}
+    SOURCE        = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_continuation_history.metal") }}
 
     {% if flag?(:hy_nomas_history_probe) %}
       FILL_KERNEL  = "hy_nomas_continuation_history_fill_f32"
-      FILL_SOURCE  = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_continuation_history_probe.metal") }}
+      FILL_SOURCE  = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_continuation_history_probe.metal") }}
     {% end %}
 
     class AppendPlan

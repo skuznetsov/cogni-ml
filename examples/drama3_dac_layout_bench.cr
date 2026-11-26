@@ -269,7 +269,7 @@ require "../src/ml/audio/drama3/codec_resident"
           compare_metal_compiled_sha256: Digest::SHA256.hexdigest(SOURCE),
           compare_metal_file_sha256: sha_file(File.join(__DIR__, "support/drama3_dac_layout_compare.metal")),
           codec_resident_cr_sha256: sha_file(File.join(__DIR__, "../src/ml/audio/drama3/codec_resident.cr")),
-          codec_resident_metal_sha256: sha_file(File.join(__DIR__, "../src/ml/audio/drama3/kernels/codec_resident.metal")),
+          codec_resident_metal_sha256: sha_file(File.join(__DIR__, "../src/ml/metal/kernels/drama3/codec_resident.metal")),
         },
         environment: {backend: "metal", graph_depth: 2, dac_scratch: false, profilers: false,
                       timing_order: TIMING_ORDER, expected_commands_per_decode: EXPECTED_COMMANDS_PER_DECODE},

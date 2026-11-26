@@ -2,7 +2,7 @@ require "./resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
 module ML::Audio::Drama3::Resident
-  BATCH_SOURCE = {{ read_file("#{__DIR__}/kernels/resident_batch.metal") }}
+  BATCH_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/resident_batch.metal") }}
 
   # Row batches stay resident and use the same scalar kernels/reduction order
   # as their single-row counterparts. The batch axis is always the outermost

@@ -8,7 +8,7 @@ module ML::Audio::Drama3
     extend self
 
     {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
-      CODEC_SOURCE = {{ read_file("#{__DIR__}/kernels/codec.metal") }}
+      CODEC_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/codec.metal") }}
       MAX_CACHED_WEIGHT_BYTES = 128_i64 * 1024 * 1024
       MAX_CACHED_WEIGHT_ENTRIES = 128
 

@@ -32,7 +32,7 @@ module ML::Audio::Drama3
         Platform.gs_max_buffer_length
       end
 
-      AFFINE_SOURCE = {{ read_file("#{__DIR__}/kernels/affine.metal") }}
+      AFFINE_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/affine.metal") }}
 
       # Retain the mmap owner for the entire GPU view lifetime. Resident callers
       # must keep the wrapper alive until their existing terminal boundary.

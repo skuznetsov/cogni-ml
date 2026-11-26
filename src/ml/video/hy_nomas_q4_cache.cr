@@ -767,7 +767,7 @@ module ML::Video::HyNomasQ4Cache
     end
   end
 
-  SOURCE = {{ read_file("#{__DIR__}/kernels/hy_nomas_q4_cache.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_q4_cache.metal") }}
   @@q4_pipeline : ML::Metal::ComputePipeline?
   @@copy_pipeline : ML::Metal::ComputePipeline?
 

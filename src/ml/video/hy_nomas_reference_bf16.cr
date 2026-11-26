@@ -6,8 +6,8 @@ module ML::Video::HyNomasReferenceBF16
   ROUND_KERNEL      = "hy_nomas_reference_bf16_round"
   MODULATE_KERNEL   = "hy_nomas_reference_bf16_modulate"
   RMS_FINISH_KERNEL = "hy_nomas_reference_bf16_rms_finish"
-  SOURCE            = {{ read_file("#{__DIR__}/kernels/hy_nomas_block.metal") }} + "\n" +
-                      {{ read_file("#{__DIR__}/kernels/hy_nomas_reference_bf16.metal") }}
+  SOURCE            = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_block.metal") }} + "\n" +
+                      {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_reference_bf16.metal") }}
 
   # Prepared pipelines are reusable across fixed-width calls. Buffers remain
   # caller-owned and must live through the command buffer's terminal wait.

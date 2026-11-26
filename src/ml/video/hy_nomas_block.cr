@@ -128,7 +128,7 @@ module ML::Video
   # Inputs, weights, scratch and output buffers remain caller-owned and resident.
   # `encode` only validates, binds and dispatches into the borrowed encoder.
   class HyNomasDualStreamBlock
-    SOURCE = {{ read_file("#{__DIR__}/kernels/hy_nomas_block.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_block.metal") }}
 
     struct LinearWeights
       getter weight : ML::MetalBuffer

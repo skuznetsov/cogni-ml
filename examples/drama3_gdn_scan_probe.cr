@@ -28,10 +28,10 @@ require "./support/drama3_gdn_scan"
       "src/ml/audio/drama3/tower_resident.cr" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/tower_resident.cr") }}),
       "src/ml/audio/drama3/native.cr" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/native.cr") }}),
       "src/ml/audio/drama3/resident_batch.cr" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/resident_batch.cr") }}),
-      "src/ml/audio/drama3/kernels/backbone_resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/kernels/backbone_resident.metal") }}),
-      "src/ml/audio/drama3/kernels/resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/kernels/resident.metal") }}),
-      "src/ml/audio/drama3/kernels/resident_batch.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/kernels/resident_batch.metal") }}),
-      "src/ml/audio/drama3/kernels/tower_resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/audio/drama3/kernels/tower_resident.metal") }}),
+      "src/ml/metal/kernels/drama3/backbone_resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/metal/kernels/drama3/backbone_resident.metal") }}),
+      "src/ml/metal/kernels/drama3/resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/metal/kernels/drama3/resident.metal") }}),
+      "src/ml/metal/kernels/drama3/resident_batch.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/metal/kernels/drama3/resident_batch.metal") }}),
+      "src/ml/metal/kernels/drama3/tower_resident.metal" => Digest::SHA256.hexdigest({{ read_file("#{__DIR__}/../src/ml/metal/kernels/drama3/tower_resident.metal") }}),
     }
 
     class Capture

@@ -263,7 +263,7 @@ module ML::Video
   # All encode methods only bind/dispatch into an existing SERIAL encoder.
   # This deliberately does not promise production-size GEMM/attention speed.
   module MetalOps
-    SOURCE = {{ read_file("#{__DIR__}/kernels/common.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/common.metal") }}
 
     def self.check(buffer : ML::MetalBuffer, count : Int64) : Nil
       unless count > 0 && count <= Int32::MAX

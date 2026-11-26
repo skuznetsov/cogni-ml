@@ -242,7 +242,7 @@ require "./support/drama3_moe_provenance"
         "support_metal_compiled" => Digest::SHA256.hexdigest(LOAD_SOURCE),
         "support_metal_file" => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "support/drama3_expert_load.metal"))),
         "resident_cr" => Digest::SHA256.hexdigest(File.read(File.join(root, "src/ml/audio/drama3/resident.cr"))),
-        "resident_metal" => Digest::SHA256.hexdigest(File.read(File.join(root, "src/ml/audio/drama3/kernels/resident.metal"))),
+        "resident_metal" => Digest::SHA256.hexdigest(File.read(File.join(root, "src/ml/metal/kernels/drama3/resident.metal"))),
       }
     end
 

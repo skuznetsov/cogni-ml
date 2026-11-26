@@ -392,7 +392,7 @@ module ML::Video
   end
 
   module WanT5
-    SOURCE = {{ read_file("#{__DIR__}/kernels/wan_t5.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/shared/wan_t5.metal") }}
 
     def self.pipeline(name : String) : ML::Metal::ComputePipeline
       ML::Metal::PipelineCache.get(name) { ML::Metal::ComputePipeline.new(name, SOURCE) }

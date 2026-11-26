@@ -12,7 +12,7 @@ module ML::Video
     # both boundary plans.
     MAX_SUPPORTED_TOKENS = 9_360
 
-    SOURCE = MetalLinearMPS::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_dit_boundaries.metal") }}
+    SOURCE = MetalLinearMPS::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_dit_boundaries.metal") }}
     private record Linear, input : ML::MetalBuffer, output : ML::MetalBuffer,
       weight : ML::MetalBuffer, bias : ML::MetalBuffer,
       weight_dtype : WeightDType, bias_dtype : WeightDType,

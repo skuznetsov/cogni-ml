@@ -63,7 +63,7 @@ module ML::Audio::Drama3
   # its output is codebook-major [10, frames] F32 exact integer IDs.
   class CodecEncoderResident
     FRAME_LENGTH = 2048
-    SOURCE = {{ read_file("#{__DIR__}/kernels/codec_resident.metal") + read_file("#{__DIR__}/kernels/codec_encoder_resident.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/codec_resident.metal") + read_file("#{__DIR__}/../../metal/kernels/drama3/codec_encoder_resident.metal") }}
 
     private struct Activation
       getter rows : Int32

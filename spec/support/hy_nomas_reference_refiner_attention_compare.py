@@ -79,7 +79,7 @@ COMPILED_SOURCE_FILES = (
     "src/ml/video/metal_ops.cr", "src/ml/core/buffer.cr",
     "src/ml/metal/device.cr", "src/ml/video/hy_nomas_block.cr",
     "src/ml/video/hy_nomas_vector_attention.cr",
-    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+    "src/ml/metal/kernels/hy_nomas/hy_nomas_vector_attention.metal",
 )
 # These embedded fingerprints are selected sources, not full binary or
 # toolchain provenance. The guarded build retains the wider source snapshot.

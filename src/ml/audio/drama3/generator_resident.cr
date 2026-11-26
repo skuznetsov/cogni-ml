@@ -8,7 +8,7 @@ require "./prompt_resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
 module ML::Audio::Drama3
-  RESIDENT_GENERATOR_SOURCE = {{ read_file("#{__DIR__}/kernels/generator_resident.metal") }}
+  RESIDENT_GENERATOR_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/generator_resident.metal") }}
 
   # CPU-visible token results plus the original resident frame allocation. The
   # valid device prefix has generation.frames.size rows of [main,c0,...,cN-1].

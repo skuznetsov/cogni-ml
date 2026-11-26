@@ -114,7 +114,7 @@ def make_fixture(*, tie: bool = False) -> dict:
                         case_kind=kind, logits=[f32(value) for value in logits],
                         settings=(temperature, top_k, top_p))
     case = common._validate_case_input(case, "test-case")
-    current = source_sha("src/ml/audio/drama3/kernels/resident.metal")
+    current = source_sha("src/ml/metal/kernels/drama3/resident.metal")
     fixture = {
         "format": common.FIXTURE_FORMAT,
         "provenance": {
@@ -161,7 +161,7 @@ def make_probe(fixture: dict, case: dict, native_ids: list[int], mlx_ids: list[i
         "fixture_sha256": "0" * 64,
         "sampler_kernel": "dr3_sample",
         "diagnostic_kernel": "dr3_sampler_compare",
-        "resident_metal_source_sha256": source_sha("src/ml/audio/drama3/kernels/resident.metal"),
+        "resident_metal_source_sha256": source_sha("src/ml/metal/kernels/drama3/resident.metal"),
         "diagnostic_metal_source_sha256": source_sha("examples/support/drama3_sampler_compare.metal"),
         "cases": case_outputs,
         "queue": {
@@ -284,7 +284,7 @@ def make_source_bound_fixture(directory: Path) -> dict:
         "comparison": common._logit_stats(logits, logits),
     }
     native_sampler_sha = hashlib.sha256(
-        (ROOT / "src/ml/audio/drama3/kernels/resident.metal").read_bytes()
+        (ROOT / "src/ml/metal/kernels/drama3/resident.metal").read_bytes()
     ).hexdigest()
     return {
         "format": common.FIXTURE_FORMAT,

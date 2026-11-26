@@ -10,8 +10,8 @@ require "./metal_mps_command_chain"
 module ML::Video::HyNomasReferenceKVCache
   STORE_KERNEL = "hy_nomas_reference_kv_cache_store_bf16"
   LOAD_KERNEL  = "hy_nomas_reference_kv_cache_load_f32"
-  SOURCE       = {{ read_file("#{__DIR__}/kernels/hy_nomas_block.metal") }} + "\n" +
-                 {{ read_file("#{__DIR__}/kernels/hy_nomas_reference_kv_cache.metal") }}
+  SOURCE       = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_block.metal") }} + "\n" +
+                 {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_reference_kv_cache.metal") }}
 
   # Element counts describe one K or V plane. named_bytes covers the two
   # physical BF16 planes and their two exact-size F32 read stages.

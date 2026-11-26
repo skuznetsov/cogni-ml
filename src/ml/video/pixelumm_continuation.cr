@@ -8,7 +8,7 @@ require "./metal_ops"
 require "./pixelumm_generation"
 
 module ML::Video::PixelUMMContinuation
-  SOURCE = {{ read_file("#{__DIR__}/kernels/pixelumm_continuation.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/pixelumm/pixelumm_continuation.metal") }}
 
   CONTEXT_LATENT_FRAMES = 5
   TUBELET_T             = 4

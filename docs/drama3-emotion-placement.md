@@ -100,7 +100,7 @@ and decodes all returned code frames without an energy-based trim
 `fish_speech/inference_engine/vq_manager.py:16–24`). Repetition-aware sampling
 is not a silence detector: native and MLX select one retry when the first
 semantic main token appears in the previous 16 main IDs. The retry is accepted
-without another uniqueness check (`src/ml/audio/drama3/kernels/generator_resident.metal:36–52`,
+without another uniqueness check (`src/ml/metal/kernels/drama3/generator_resident.metal:36–52`,
 `fish_omni.py:190–210`). This permits repeated IDs but is not evidence that
 repetition caused quiet output. The saved selected IDs do not identify which
 steps selected the retry; a matched-logit/candidate replay would be required.

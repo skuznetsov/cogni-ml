@@ -5,7 +5,7 @@ require "./resident"
 module ML::Audio::Drama3
   module ReferenceAudio
     extend self
-    SOURCE = {{ read_file("#{__DIR__}/kernels/reference_audio.metal") }}
+    SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/reference_audio.metal") }}
 
     def upload(input : Wav::Reference, context : Resident::Context) : Resident::Buffer
       raw = context.upload(input.pcm)

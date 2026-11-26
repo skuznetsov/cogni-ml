@@ -19,13 +19,13 @@ license for that dependency bundle or for separately supplied encoders/decoders.
 No model weights or community ComfyUI implementation are included.
 
 - `src/ml/video/hy_nomas_block.cr`
-- `src/ml/video/kernels/hy_nomas_block.metal`
+- `src/ml/metal/kernels/hy_nomas/hy_nomas_block.metal`
 - `spec/hy_nomas_block_spec.cr`
 - `spec/support/hy_nomas_reference.py`
 
 ## PyTorch MPS LayerNorm compatibility path
 
-`src/ml/video/kernels/hy_nomas_mps_norm.metal` is an opt-in adaptation of the
+`src/ml/metal/kernels/hy_nomas/hy_nomas_mps_norm.metal` is an opt-in adaptation of the
 non-affine F32 `layer_norm_single_row` kernel from PyTorch
 `aten/src/ATen/native/mps/kernels/LayerNorm.metal` at tag `v2.8.0`.
 Upstream: <https://github.com/pytorch/pytorch/tree/v2.8.0>.
@@ -44,7 +44,7 @@ used by same-input controls and the explicit Hy-Nomas MPS block backend.
 
 ## PyTorch MPS vector attention compatibility probe
 
-`src/ml/video/kernels/hy_nomas_vector_attention.metal` adapts `sdpa_vector`
+`src/ml/metal/kernels/hy_nomas/hy_nomas_vector_attention.metal` adapts `sdpa_vector`
 from PyTorch `aten/src/ATen/native/mps/kernels/Attention.metal` at tag `v2.8.0`,
 commit `ba56102387ef21a3b04b357e5b183d48f0afefc7`. Its source SHA-256 is
 `aaab42c45caaa222c62013af8dcac896ffa2abd889dbb9427c7648be6448c0cd`.
@@ -71,6 +71,6 @@ adaptations. The shared components include `src/ml/video/wan_t5.cr` and
 `examples/wan_s2v_export.py`.
 
 Shared independent GPU primitives in `src/ml/video/metal_ops.cr` and
-`src/ml/video/kernels/common.metal` retain the repository's MIT license.
+`src/ml/metal/kernels/hy_nomas/common.metal` retain the repository's MIT license.
 No upstream weights are bundled. External weights and separately supplied text,
 audio, or image encoders retain their own applicable licenses.

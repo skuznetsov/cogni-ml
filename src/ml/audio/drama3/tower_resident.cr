@@ -3,7 +3,7 @@ require "./resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
 module ML::Audio::Drama3
-  RESIDENT_TOWER_SOURCE = {{ read_file("#{__DIR__}/kernels/tower_resident.metal") }}
+  RESIDENT_TOWER_SOURCE = {{ read_file("#{__DIR__}/../../metal/kernels/drama3/tower_resident.metal") }}
 
   # The device-side result deliberately exposes buffers rather than eagerly
   # reading activations back to the host. Call Resident::Context#read only at

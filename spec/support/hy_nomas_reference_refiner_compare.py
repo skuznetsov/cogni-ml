@@ -39,14 +39,14 @@ NATIVE_SOURCE_FILES = (
     "examples/support/hy_nomas_reference_cache_probe.cr",
     "examples/support/hy_nomas_reference_refiner_trace.cr",
     "src/ml/video/hy_nomas_text_refiner.cr",
-    "src/ml/video/kernels/hy_nomas_text_refiner.metal",
+    "src/ml/metal/kernels/hy_nomas/hy_nomas_text_refiner.metal",
     "src/ml/video/metal_ops.cr", "src/ml/video/metal_linear_mps.cr",
-    "src/ml/video/kernels/linear_mps.metal",
+    "src/ml/metal/kernels/shared/linear_mps.metal",
     "src/ml/video/hy_nomas_mps_activation.cr",
     "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
-    "src/ml/video/kernels/common.metal",
+    "src/ml/metal/kernels/hy_nomas/common.metal",
     "src/ml/video/wan_t5.cr",
-    "src/ml/video/kernels/wan_t5.metal",
+    "src/ml/metal/kernels/shared/wan_t5.metal",
     "src/ml/video/wan_t5_mps_bridge.mm",
 )
 ATOL = shared.ATOL

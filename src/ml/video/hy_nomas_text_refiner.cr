@@ -61,7 +61,7 @@ module ML::Video
     QKV_LINEAR_NAMES                    = ["block0.qkv", "block1.qkv"]
     ATTENTION_PROJECTION_LINEAR_NAMES   = ["block0.proj", "block1.proj"]
 
-    SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
+    SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
       kernel void hy_nomas_text_clear_padded_attention_f32(
           device float *output [[buffer(0)]],

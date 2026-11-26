@@ -2,7 +2,7 @@ require "./metal_ops"
 require "./wan_t5"
 
 module ML::Video::MetalLinearMPS
-  SOURCE = {{ read_file("#{__DIR__}/kernels/linear_mps.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/shared/linear_mps.metal") }}
 
   def self.prepare! : Nil
     WanT5.pipeline("wan_t5_expand_fc2")

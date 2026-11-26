@@ -329,7 +329,7 @@ module ML::Video
   module DCAEVEncoder
     private record DCAEVWeightSpec, name : String, shape : Array(Int64)
 
-    SOURCE                    = {{ read_file("#{__DIR__}/kernels/dcae_v_encoder.metal") }}
+    SOURCE                    = {{ read_file("#{__DIR__}/../metal/kernels/shared/dcae_v_encoder.metal") }}
     WIDTHS                    = [128, 256, 512, 512, 1024, 1024, 1024]
     DEPTHS                    = [0, 5, 10, 4, 4, 4, 4]
     NORM_EPSILON              = 1.0e-5_f32

@@ -8,7 +8,7 @@ require "./metal_ops"
 
 module ML::Video::HyNomasMPSLayerNorm
   KERNEL_NAME = "hy_nomas_pytorch28_layer_norm_f32"
-  SOURCE      = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_mps_norm.metal") }}
+  SOURCE      = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_mps_norm.metal") }}
 
   # Prepared setup-time pipeline and fixed normalization geometry. `encode`
   # only validates borrowed buffers and appends a dispatch to the caller's

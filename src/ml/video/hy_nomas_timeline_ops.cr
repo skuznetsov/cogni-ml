@@ -9,7 +9,7 @@ module ML::Video::HyNomasTimelineOps
   COPY_KERNEL              = "hy_nomas_timeline_copy_f32"
   CACHE_NOISE_KERNEL       = "hy_nomas_timeline_cache_noise_bf16_f32"
   REFERENCE_SCATTER_KERNEL = "hy_nomas_timeline_reference_scatter_bf16_f32"
-  SOURCE                   = {{ read_file("#{__DIR__}/kernels/hy_nomas_timeline_ops.metal") }}
+  SOURCE                   = {{ read_file("#{__DIR__}/../metal/kernels/hy_nomas/hy_nomas_timeline_ops.metal") }}
 
   # Full resident banks describe [1,32,180,9,16], six 30-latent segments,
   # and six global-offset [4320,128] RoPE tables. A run may process a prefix

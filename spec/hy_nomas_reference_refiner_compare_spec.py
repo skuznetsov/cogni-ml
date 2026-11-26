@@ -81,7 +81,7 @@ class RefinerAdmissionTests(unittest.TestCase):
                 self.assertEqual(name in names, enabled_count >= 4)
 
     def test_compiled_pins_cover_linear_kernel_and_activation_bridge(self):
-        self.assertIn("src/ml/video/kernels/linear_mps.metal", compare.NATIVE_SOURCE_FILES)
+        self.assertIn("src/ml/metal/kernels/shared/linear_mps.metal", compare.NATIVE_SOURCE_FILES)
         self.assertIn("src/ml/video/hy_nomas_mps_reductions_bridge.mm", compare.NATIVE_SOURCE_FILES)
 
     def test_native_trace_and_comparator_pin_inventories_match(self):

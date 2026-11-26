@@ -242,9 +242,9 @@ require "./support/drama3_moe_provenance"
   isolated_rank_map = rank_map(isolated_stages["expert_ids_argpartition_order"])
   native_sources = {
     "backbone_resident.cr"     => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/audio/drama3/backbone_resident.cr"))),
-    "backbone_resident.metal"  => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/audio/drama3/kernels/backbone_resident.metal"))),
+    "backbone_resident.metal"  => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/metal/kernels/drama3/backbone_resident.metal"))),
     "resident.cr"              => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/audio/drama3/resident.cr"))),
-    "resident.metal"           => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/audio/drama3/kernels/resident.metal"))),
+    "resident.metal"           => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/metal/kernels/drama3/resident.metal"))),
     "native.cr"                => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "../src/ml/audio/drama3/native.cr"))),
     "drama3_moe_trace.cr"      => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "drama3_moe_trace.cr"))),
     "drama3_moe_provenance.cr" => Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "support/drama3_moe_provenance.cr"))),

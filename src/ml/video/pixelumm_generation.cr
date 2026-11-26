@@ -7,7 +7,7 @@ require "./metal_linear_mps"
 require "./pixelumm_decoder_block_mps"
 
 module ML::Video::PixelUMMGeneration
-  SOURCE = {{ read_file("#{__DIR__}/kernels/pixelumm_generation.metal") }}
+  SOURCE = {{ read_file("#{__DIR__}/../metal/kernels/pixelumm/pixelumm_generation.metal") }}
 
   LATENT_FRAMES               =  30
   MAX_LATENT_FRAMES           = 180
