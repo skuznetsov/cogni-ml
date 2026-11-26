@@ -8,6 +8,7 @@ port = 8080
 context = 16_384
 profile = "fast"
 ngram = nil.as(Bool?)
+dspark_path = nil.as(String?)
 use_metal = false
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
   use_metal = true
@@ -21,6 +22,7 @@ parser = OptionParser.new do |options|
   options.on("--port PORT", "Listen port (default: 8080)") { |value| port = value.to_i }
   options.on("--context N", "Allocated model context (default: 16384)") { |value| context = value.to_i }
   options.on("--profile PROFILE", "Prefill profile: fast or ordered (default: fast)") { |value| profile = value }
+  options.on("--dspark PATH", "Use native DSpark greedy drafting (mtp.safetensors)") { |value| dspark_path = value }
   options.on("--no-ngram", "Disable n-gram-assisted greedy verification") { ngram = false }
   options.on("--cpu", "Run inference on the CPU") { use_metal = false }
   options.on("--help", "Show this help") do
@@ -42,7 +44,7 @@ begin
 
   ENV["INKLING2_PREFILL_ATTENTION"] = "ordered" if profile == "ordered"
   engine = ML::GGUF::Inkling2Engine.new(path, context, metal: use_metal,
-    fast_prefill: profile == "fast", greedy_verifier: ngram)
+    fast_prefill: profile == "fast", greedy_verifier: ngram, dspark_path: dspark_path)
   backend = ML::Serve::Inkling2Backend.new(engine)
   api_key = ENV["COGNI_INKLING2_API_KEY"]?.presence
   handler = ML::Serve::OpenAI::Handler.new(backend, model_id, api_key)
@@ -50,7 +52,7 @@ begin
   address = server.bind_tcp(host, port)
   active_profile = engine.fast_prefill? ? "fast" : (engine.resident? ? "ordered" : "scalar")
   STDERR.puts("inkling2_serve listening on http://#{address}/v1 model=#{model_id} " +
-              "context=#{engine.max_seq} passes=#{engine.passes} prefill=#{active_profile} ngram=#{engine.greedy_verifier?}")
+              "context=#{engine.max_seq} passes=#{engine.passes} prefill=#{active_profile} ngram=#{engine.greedy_verifier?} dspark=#{engine.dspark?}")
   server.listen
 rescue ex : Exception
   STDERR.puts("inkling2_serve: #{ex.message}")

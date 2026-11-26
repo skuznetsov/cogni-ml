@@ -66,7 +66,8 @@ module ML::Serve
     end
 
     def run(&emit : String -> Nil) : OpenAI::Result
-      @engine.reset
+      dspark = @engine.dspark? && @options.temperature.zero? && @limit >= GGUF::Inkling2GreedyDecode::MIN_DSPARK_COMPLETION
+      @engine.reset(dspark: dspark)
       @visible = true
       output = TextOutput.new(@options.stop, &emit)
       logits = @engine.prefill(@ids)
@@ -74,7 +75,7 @@ module ML::Serve
       if @options.temperature.zero?
         first_id = GGUF::Inkling2Engine.greedy_token_id(logits)
         result = GGUF::Inkling2GreedyDecode.generate(@engine, @ids, first_id, @limit, eos,
-          ngram: @engine.greedy_verifier?) { |id| output.append(piece(id)) }
+          ngram: @engine.greedy_verifier?, dspark: dspark) { |id| output.append(piece(id)) }
         count = result.ids.size
         ended = result.ids.last == eos
       else

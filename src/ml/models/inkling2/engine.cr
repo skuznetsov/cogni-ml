@@ -139,7 +139,8 @@ module ML::GGUF
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
                    prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, greedy_verifier : Bool? = false,
-                   @depth_speculation : Bool = false, fast_prefill : Bool = false, loopcd : Inkling2LoopCD? = nil)
+                   @depth_speculation : Bool = false, fast_prefill : Bool = false, loopcd : Inkling2LoopCD? = nil,
+                   dspark_path : String? = nil)
       @loopcd = loopcd if loopcd && loopcd.strength > 0_f32
       if @loopcd
         raise ArgumentError.new("Inkling 2 LoopCD requires resident Metal") unless metal && resident
@@ -150,8 +151,14 @@ module ML::GGUF
       if greedy_verifier == true && @depth_speculation
         raise ArgumentError.new("Inkling 2 cannot combine depth speculation and n-gram verification")
       end
+      if dspark_path
+        unless metal && resident && !@stop_delta && !@trace && !@loopcd && !@depth_speculation
+          raise ArgumentError.new("Inkling 2 DSpark requires fixed three-pass resident Metal without LoopCD or loop tracing")
+        end
+        raise ArgumentError.new("Inkling 2 cannot combine DSpark and n-gram verification") if greedy_verifier == true
+      end
       @greedy_verifier = greedy_verifier == true
-      @greedy_verifier_auto = greedy_verifier.nil?
+      @greedy_verifier_auto = greedy_verifier.nil? && dspark_path.nil?
       if prefill_tile && auto_prefill_tile
         raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
       end
@@ -161,8 +168,19 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 prefill tile must be #{allowed} tokens")
       end
       @weights = Inkling2Weights.new(path)
-      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile, auto_prefill_tile, fast_prefill)
+      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile,
+        auto_prefill_tile, fast_prefill, dspark: !dspark_path.nil?)
       @core_prefix = Array(Int32).new(@passes, 0) if @stop_delta
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        if dspark_path
+          begin
+            @resident.not_nil!.install_dspark(dspark_path)
+          rescue ex
+            close
+            raise ex
+          end
+        end
+      {% end %}
     end
 
     def self.resolve_passes(configured : Int32, varying : Bool, requested : Int32?) : Int32
@@ -230,7 +248,7 @@ module ML::GGUF
     # Evaluate four known continuation tokens with the serial decode numerics.
     # Commits all four to the sequence and returns the next-token logits after each.
     def decode_block4(tokens : StaticArray(Int32, 4)) : StaticArray(Array(Float32), 4)
-      evaluate_block4(tokens) { |backend| {backend.decode_block4(tokens, @position), tokens.size} }
+      evaluate_block(tokens) { |backend| {backend.decode_block4(tokens, @position), tokens.size} }
     end
 
     # The caller supplies the exact pending token in row zero. Commit it and
@@ -238,7 +256,7 @@ module ML::GGUF
     # Return the committed row count and the exact next pending token ID.
     def verify_greedy_block4(tokens : StaticArray(Int32, 4)) : {Int32, Int32}
       raise ArgumentError.new("Inkling 2 greedy verification was not enabled") unless @greedy_verifier
-      evaluate_block4(tokens) do |backend|
+      evaluate_block(tokens) do |backend|
         rows = resident_greedy_top1? ? backend.decode_block4_greedy(tokens, @position) : backend.decode_block4(tokens, @position)
         accepted = 0
         expected = tokens[0]
@@ -248,6 +266,51 @@ module ML::GGUF
           accepted += 1
         end
         { {accepted, expected}, accepted }
+      end
+    end
+
+    # Draft after the pending target token, then commit only the matching prefix.
+    # The exact next token, including EOS, is returned pending.
+    def verify_dspark(first_id : Int32, width : Int32, *, eos_id : Int32) : {Array(Int32), Int32, Int32}
+      validate_active!
+      raise ArgumentError.new("Inkling 2 DSpark was not enabled") unless dspark?
+      raise ArgumentError.new("Inkling 2 DSpark verifier width must be 2–4") unless width.in?(2..4)
+      raise ArgumentError.new("Inkling 2 DSpark requires a positive prompt length") unless @position > 0
+      raise ArgumentError.new("Inkling 2 DSpark block cannot start at EOS") if first_id == eos_id
+      raise ArgumentError.new("Inkling 2 DSpark block exceeds the context") if width > @max_seq - @position
+      validate_token!(first_id)
+
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        begin
+          candidates = @resident.not_nil!.draft_dspark(first_id, @position, width - 1)
+          tokens = [first_id]
+          candidates.each do |candidate|
+            break if candidate == eos_id || candidate < 0
+            tokens << candidate
+          end
+          verify_dspark_tokens(tokens, eos_id)
+        rescue ex
+          @failed = true
+          raise ex
+        end
+      {% else %}
+        raise ArgumentError.new("Inkling 2 DSpark requires resident Metal")
+      {% end %}
+    end
+
+    private def verify_dspark_tokens(tokens : Array(Int32), eos_id : Int32) : {Array(Int32), Int32, Int32}
+      if tokens.size == 1
+        return {tokens, 1, forward_greedy(tokens[0])}
+      end
+      evaluate_block(tokens) do |backend|
+        rows = backend.decode_greedy_block(tokens, @position)
+        accepted = 1
+        expected = require_greedy_id(rows[0])
+        while accepted < tokens.size && expected != eos_id && tokens[accepted] == expected
+          expected = require_greedy_id(rows[accepted])
+          accepted += 1
+        end
+        { {tokens, accepted, expected}, accepted }
       end
     end
 
@@ -261,8 +324,9 @@ module ML::GGUF
       id
     end
 
-    private def evaluate_block4(tokens : StaticArray(Int32, 4), &)
+    private def evaluate_block(tokens : Indexable(Int32), &)
       validate_active!
+      raise ArgumentError.new("Inkling 2 verifier width must be 2–4") unless tokens.size.in?(2..4)
       raise ArgumentError.new("Inkling 2 LoopCD supports only scalar decode") if @loopcd
       raise ArgumentError.new("Inkling 2 decode block exceeds the context of #{@max_seq} tokens") if tokens.size > @max_seq - @position
       tokens.each { |token| validate_token!(token) }
@@ -374,6 +438,20 @@ module ML::GGUF
       end
     end
 
+    def dspark? : Bool
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.try(&.dspark?) || false
+      {% else %}
+        false
+      {% end %}
+    end
+
+    def disable_dspark : Nil
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.try(&.disable_dspark)
+      {% end %}
+    end
+
     def resident? : Bool
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         !@resident.nil?
@@ -432,11 +510,11 @@ module ML::GGUF
       {% end %}
     end
 
-    def reset : Nil
+    def reset(dspark : Bool = true) : Nil
       raise "Inkling 2 engine is closed" if @closed
 
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
-        @resident.try(&.reset)
+        @resident.try(&.reset(dspark))
       {% end %}
       @attention.each(&.reset)
       @ffn_conv.each(&.reset)
@@ -484,11 +562,15 @@ module ML::GGUF
       raise IndexError.new("Inkling 2 draft layer visit out of bounds") unless 0 <= visit < draft_layer_visits
     end
 
-    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?, auto_prefill_tile : Bool, fast_prefill : Bool)
+    private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?,
+                        auto_prefill_tile : Bool, fast_prefill : Bool, *, dspark : Bool)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
       loops = self.class.resolve_passes(config.passes, config.varying?, passes)
+      if dspark && loops != 3
+        raise ArgumentError.new("Inkling 2 DSpark requires exactly three passes")
+      end
       if @loopcd && loops != 3
         raise ArgumentError.new("Inkling 2 LoopCD requires exactly three passes")
       end
@@ -525,11 +607,12 @@ module ML::GGUF
           end
           append_rows = MAX_AUTO_APPEND_PREFILL_TILE if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
-            append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation) ? DEPTH_BLOCK_ROWS : 0,
+            append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation || dspark) ? DEPTH_BLOCK_ROWS : 0,
             depth_speculation: @depth_speculation, fast_prefill: @fast_prefill, loopcd: @loopcd)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
+      raise ArgumentError.new("Inkling 2 DSpark requires fixed-depth resident Metal") if dspark
       raise ArgumentError.new("Inkling 2 greedy verification requires fixed-depth resident Metal") if @greedy_verifier
       raise ArgumentError.new("Inkling 2 depth speculation requires fixed-depth resident Metal") if @depth_speculation
       raise ArgumentError.new("Inkling 2 LoopCD requires a supported resident Metal checkpoint") if @loopcd

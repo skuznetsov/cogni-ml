@@ -1,6 +1,7 @@
 require "./attention"
 require "./linear"
 require "./math"
+require "./dspark"
 require "../loopcd"
 
 module ML::GGUF
@@ -58,10 +59,11 @@ module ML::GGUF
       getter current : Inkling2View
       getter next_state : Inkling2View
       getter blocks : Inkling2View
+      getter capture : Inkling2DSpark::Capture?
       property block_count : Int32 = 0
 
       def initialize(@encoder, @scratch : Inkling2ResidentScratch, @start, @rows, @width, block_slots : Int32,
-                     @decode_block : Bool)
+                     @decode_block : Bool, @capture : Inkling2DSpark::Capture? = nil)
         @elements = @rows * @width
         @current = hidden
         @next_state = hidden
@@ -93,6 +95,7 @@ module ML::GGUF
     @float_offsets = {} of UInt64 => Int64
     @shared = [] of ML::MetalBuffer
     @depth_checkpoint : ML::MetalBuffer? = nil
+    @dspark : Inkling2DSpark? = nil
     @depth_speculation : Bool
     @depth_frontier = 0_i32
     @depth_block_start : Int32? = nil
@@ -180,6 +183,29 @@ module ML::GGUF
       @fast_prefill
     end
 
+    def install_dspark(path : String) : Nil
+      @dspark = Inkling2DSpark.open(path, @weights, @linear, @max_seq)
+    end
+
+    def dspark? : Bool
+      !@dspark.nil?
+    end
+
+    def disable_dspark : Nil
+      @dspark.try(&.reset(false))
+    end
+
+    def draft_dspark(token : Int32, position : Int32, count : Int32) : Array(Int32)
+      drafter = @dspark || raise ArgumentError.new("Inkling 2 DSpark weights were not loaded")
+      @ids.contents.as(Int32*).value = token
+      submit_command(1) do |encoder|
+        embedding = @scratch.take(@config.n_embd)
+        encode_embedding(encoder, embedding, @config.n_embd, 1)
+        drafter.encode(encoder, token, embedding, position, count)
+      end
+      drafter.candidates(count)
+    end
+
     def reserved_scratch_bytes : Int64
       @scratch.reserved_bytes
     end
@@ -207,13 +233,22 @@ module ML::GGUF
     end
 
     def decode_block4_greedy(tokens : StaticArray(Int32, 4), position : Int32) : StaticArray(Int32, 4)
+      data = submit_greedy_block(tokens, position)
+      StaticArray(Int32, 4).new { |row| data[row] }
+    end
+
+    def decode_greedy_block(tokens : Array(Int32), position : Int32) : Array(Int32)
+      data = submit_greedy_block(tokens, position)
+      Array(Int32).new(tokens.size) { |row| data[row] }
+    end
+
+    private def submit_greedy_block(tokens : Indexable(Int32), position : Int32) : Int32*
       ensure_ordinary_mode! if @depth_speculation
       ids = @ids.contents.as(Int32*)
       tokens.each_with_index { |token, row| ids[row] = token }
       output = greedy_ids_buffer
       submit_tile(position, tokens.size, output, decode_block: true, greedy: true)
-      data = output.contents.as(Int32*)
-      StaticArray(Int32, 4).new { |row| data[row] }
+      output.contents.as(Int32*)
     end
 
     def rewind_block(end_position : Int32) : Nil
@@ -223,6 +258,7 @@ module ML::GGUF
       end
       @visits.each(&.rewind(end_position))
       @reference_epilogue_visits.each(&.rewind(end_position))
+      @dspark.try(&.rewind(end_position))
       @depth_frontier = end_position if @depth_speculation
     end
 
@@ -242,11 +278,12 @@ module ML::GGUF
       ids = @ids.contents.as(Int32*)
       offset = 0
       result = nil
+      capture_from = Math.max(position + tokens.size - Inkling2DSpark::WINDOW, 0)
       while offset < tokens.size
         end_offset = offset < batched_end ? batched_end : tokens.size
         rows = Math.min(tile_rows, end_offset - offset)
         rows.times { |row| ids[row] = tokens[offset + row] }
-        result = evaluate(position + offset, rows, offset + rows == tokens.size)
+        result = evaluate(position + offset, rows, offset + rows == tokens.size, capture_from: capture_from)
         offset += rows
       end
       result.not_nil!
@@ -343,7 +380,8 @@ module ML::GGUF
       end
     end
 
-    def reset : Nil
+    def reset(dspark : Bool = true) : Nil
+      @dspark.try(&.reset(dspark))
       @visits.each(&.reset)
       @reference_epilogue_visits.each(&.reset)
       @depth_frontier = 0 if @depth_speculation
@@ -352,6 +390,8 @@ module ML::GGUF
     end
 
     def close : Nil
+      @dspark.try(&.close)
+      @dspark = nil
       @visits.each(&.close)
       @visits.clear
       @reference_epilogue_visits.each(&.close)
@@ -452,8 +492,9 @@ module ML::GGUF
       Inkling2View.new(@constants, @float_offsets[array.object_id])
     end
 
-    private def evaluate(position : Int32, rows : Int32, with_logits : Bool, *, decode_step : Bool = false) : Array(Float32)?
-      submit_tile(position, rows, with_logits ? @logits : nil, guide_hidden: with_logits || decode_step)
+    private def evaluate(position : Int32, rows : Int32, with_logits : Bool, *, decode_step : Bool = false,
+                         capture_from : Int32 = 0) : Array(Float32)?
+      submit_tile(position, rows, with_logits ? @logits : nil, guide_hidden: with_logits || decode_step, capture_from: capture_from)
       @logits.read(@config.vocab_size) if with_logits
     end
 
@@ -558,14 +599,16 @@ module ML::GGUF
     end
 
     private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *,
-                            decode_block : Bool = false, greedy : Bool = false, guide_hidden : Bool = false) : Nil
+                            decode_block : Bool = false, greedy : Bool = false, guide_hidden : Bool = false,
+                            capture_from : Int32 = 0) : Nil
       raise ArgumentError.new("Inkling 2 LoopCD supports only scalar decode") if decode_block && @loopcd
       if @depth_speculation
         ensure_ordinary_mode!
         raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
       end
       submit_command(rows) do |encoder|
-        encode_tile(encoder, position, rows, logits, decode_block, greedy, guide_hidden)
+        capture = @dspark.try(&.capture(encoder, position, rows, capture_from))
+        encode_tile(encoder, position, rows, logits, decode_block, greedy, guide_hidden, capture)
       end
       @depth_frontier = position + rows if @depth_speculation
     end
@@ -592,8 +635,9 @@ module ML::GGUF
     end
 
     private def encode_tile(encoder : ML::Metal::ComputeEncoder, position : Int32, rows : Int32,
-                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool, guide_hidden : Bool) : Nil
-      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block)
+                            logits : ML::MetalBuffer?, decode_block : Bool, greedy : Bool, guide_hidden : Bool,
+                            capture : Inkling2DSpark::Capture?) : Nil
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, decode_block, capture)
       prelude = tile.hidden if @passes > 1
       banks = if @passes > 1
                 first = @scratch.take(@core_blocks * tile.elements)
@@ -636,7 +680,12 @@ module ML::GGUF
         encode_layer(physical, visit, tile, nil)
         visit += 1
       end
-      encode_logits(tile, logits, greedy: greedy, loopcd_inputs: loopcd_inputs) if logits
+      if capture
+        captured = encode_output_normalized(tile, capture.rows, capture.taps[3])
+        logit_rows = decode_block ? rows : 1
+        normalized = captured.slice((capture.rows - logit_rows) * tile.width)
+      end
+      encode_logits(tile, logits, greedy: greedy, loopcd_inputs: loopcd_inputs, normalized: normalized) if logits
     end
 
     private def encode_hidden_guidance(tile : Tile, previous_bank : Inkling2View, loopcd : Inkling2LoopCD) : Nil
@@ -668,10 +717,10 @@ module ML::GGUF
     end
 
     private def encode_logits(tile : Tile, buffer : ML::MetalBuffer, *, greedy : Bool = false,
-                              loopcd_inputs : Inkling2View? = nil) : Nil
+                              loopcd_inputs : Inkling2View? = nil, normalized : Inkling2View? = nil) : Nil
       encoder = tile.encoder
       rows = tile.decode_block? ? tile.rows : 1
-      normalized = encode_output_normalized(tile, rows, loopcd_inputs)
+      normalized ||= encode_output_normalized(tile, rows, loopcd_inputs)
       padded_vocab = @weights.output.out_dim
       vocab = @config.vocab_size
       projection_rows = loopcd_inputs && @weights.output.type.q8_0? ? 2 : rows
@@ -733,16 +782,21 @@ module ML::GGUF
       raise "Inkling 2 depth block is active" if @depth_block_start
     end
 
-    private def encode_prelude(tile : Tile, saved : Inkling2View?) : Int32
-      encoder = tile.encoder
+    private def encode_embedding(encoder : ML::Metal::ComputeEncoder, output : Inkling2View,
+                                 width : Int32, rows : Int32) : Nil
       mark = @scratch.mark
-      embedding = tile.hidden
+      embedding = @scratch.take(width * rows)
       matrix = @weights.token_embd
-      unless MathOps.embed(encoder, @linear.view(matrix), matrix.type, Inkling2View.new(@ids), embedding, tile.width, tile.rows)
+      unless MathOps.embed(encoder, @linear.view(matrix), matrix.type, Inkling2View.new(@ids), embedding, width, rows)
         raise "Inkling 2 resident embedding type was not admitted"
       end
-      MathOps.rms(encoder, embedding, tile.current, constant(@weights.token_embd_norm), tile.width, tile.rows, @config.rms_eps)
+      MathOps.rms(encoder, embedding, output, constant(@weights.token_embd_norm), width, rows, @config.rms_eps)
       @scratch.rewind(mark)
+    end
+
+    private def encode_prelude(tile : Tile, saved : Inkling2View?) : Int32
+      encoder = tile.encoder
+      encode_embedding(encoder, tile.current, tile.width, tile.rows)
 
       visit = 0
       (0...@config.core_start).each do |physical|
@@ -801,6 +855,14 @@ module ML::GGUF
       layer = @weights.layers[physical]
       visit = visits[visit_index]
       encoder = tile.encoder
+      if capture = tile.capture
+        tap = case visit_index
+              when  5 then 0
+              when 23 then 1
+              when 41 then 2
+              end
+        capture.copy(encoder, tap, tile.current, tile.start) if tap
+      end
       mark = @scratch.mark
       residual = tile.hidden
       reuse_moe_input = @fast_prefill && !tile.decode_block? && !@depth_speculation && tile.rows > 1

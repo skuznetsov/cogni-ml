@@ -580,7 +580,9 @@ can commit per block.
 
 ## Greedy n-gram verification
 
-The Metal generator and server use n-gram verification for greedy generation.
+The Metal generator and server use n-gram verification for greedy generation by
+default. See the [native DSpark option](inkling2-serving.md#native-dspark) for
+checkpoint-based drafting on three-pass Metal.
 Use `--no-ngram` to select scalar decode. The decoder looks for a matching
 suffix of six to eight token IDs in its history. When the match supplies
 three candidate IDs, it verifies them in one block with the exact pending

@@ -29,6 +29,7 @@ staged_metal = false
 raw_prompt = false
 print_ids = false
 ngram = nil.as(Bool?)
+dspark_path = nil.as(String?)
 profile = "fast"
 depth_speculation = false
 loopcd_mode = nil.as(ML::GGUF::Inkling2LoopCD::Mode?)
@@ -62,6 +63,7 @@ end
 parser.on("--trace-loops", "Write position, completed_pass, and relative_delta records to stderr") { trace_loops = true }
 parser.on("--print-ids", "Write generated token IDs as CSV to stderr") { print_ids = true }
 parser.on("--ngram", "Verify repeated continuations in four-token blocks on fixed-depth resident Metal") { ngram = true }
+parser.on("--dspark PATH", "Use native DSpark greedy drafting (mtp.safetensors)") { |value| dspark_path = value }
 parser.on("--no-ngram", "Disable n-gram-assisted greedy verification") { ngram = false }
 parser.on("--depth-speculation", "Draft at 3 passes and verify at 10 on resident Metal with research weights") { depth_speculation = true }
 parser.on("--loopcd MODE", "LoopCD on three-pass resident Metal (logits, hidden, hidden-blocks)") do |value|
@@ -134,7 +136,7 @@ begin
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
       passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
       auto_prefill_tile: auto_prefill_tile, fast_prefill: fast_prefill, greedy_verifier: verify_ngram,
-      depth_speculation: depth_speculation, loopcd: loopcd)
+      depth_speculation: depth_speculation, loopcd: loopcd, dspark_path: dspark_path)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids
@@ -153,9 +155,12 @@ begin
 
     generated_ids = [] of Int32
     if max_new_tokens > 0
+      dspark = engine.dspark? && max_new_tokens >= ML::GGUF::Inkling2GreedyDecode::MIN_DSPARK_COMPLETION
+      engine.disable_dspark unless dspark
       first_id = ML::GGUF::Inkling2Engine.greedy_token_id(engine.prefill(prompt_ids))
       generated_ids = ML::GGUF::Inkling2GreedyDecode.generate(engine, prompt_ids, first_id,
-        max_new_tokens, tokenizer.eos_id, ngram: engine.greedy_verifier?, depth_speculation: depth_speculation).ids
+        max_new_tokens, tokenizer.eos_id, ngram: engine.greedy_verifier?,
+        depth_speculation: depth_speculation, dspark: dspark).ids
     end
 
     STDERR.puts("backfilled_core_passes=#{engine.backfilled_passes}") if trace_loops && stop_delta
