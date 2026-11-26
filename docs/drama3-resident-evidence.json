@@ -1,0 +1,561 @@
+{
+  "format": "cogni-drama3-resident-evidence-v1",
+  "status": "VERIFIED within pinned F32 short serialized M2 Max inference; timings are local observations",
+  "measured_at_utc": "2026-10-14T19:15:38.358607+00:00",
+  "base_commit": "9622936a66ec9b176a6c08182cb3a7e3260986fe",
+  "scope": "Opt-in GPU resident backbone, tower, routing, sampling and DAC. Small EOS/status reads and terminal codes/PCM remain. No universal seeded CPU equivalence, concurrent/reset, long-form, subjective quality, real-time or cross-device performance claim.",
+  "host": {
+    "hardware": "Apple M2 Max, 64 GiB RAM",
+    "os": "macOS 26.6.2",
+    "crystal": "1.21.0",
+    "llvm": "22.1.8",
+    "noise": "Host load was not controlled; unrelated processes were preserved. Sequential local observations, not a statistically controlled benchmark."
+  },
+  "native_source_sha256": {
+    "examples/drama3_codec_resident_trace.cr": {
+      "sha256": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97",
+      "bytes": 5798
+    },
+    "examples/drama3_generate.cr": {
+      "sha256": "dae5b782bb80588fcb35c82ddec1ea0c1a01a48efd8c2ad4b6850063246164a6",
+      "bytes": 6882
+    },
+    "examples/drama3_resident_trace.cr": {
+      "sha256": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe",
+      "bytes": 1341
+    },
+    "examples/drama3_tower_resident_trace.cr": {
+      "sha256": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296",
+      "bytes": 3885
+    },
+    "spec/drama3_codec_resident_spec.cr": {
+      "sha256": "c26fafacb26e678ede39adfa69eeedc5ff2fa4e93b573660c07279d3a5a3f721",
+      "bytes": 9898
+    },
+    "spec/drama3_generator_resident_spec.cr": {
+      "sha256": "438f4b7ed12d64d859c983376e2078e2964f00d635a1edc679a0382d10cde08c",
+      "bytes": 5535
+    },
+    "spec/drama3_resident_spec.cr": {
+      "sha256": "d0750d37de7a02d4aa7a74ea0452fc55511a12875f5a1536f32d05555ee4d6a3",
+      "bytes": 4686
+    },
+    "spec/drama3_tower_resident_spec.cr": {
+      "sha256": "45abc70628ea340fda577e6aa20ee8424d5ef85f13de4fa6be9f96b56fe6104e",
+      "bytes": 8552
+    },
+    "src/ml/audio/drama3/backbone_resident.cr": {
+      "sha256": "c70983f66aa579295767bc37593f53185d22e385d321348c3b548efc2b9b656c",
+      "bytes": 8441
+    },
+    "src/ml/audio/drama3/codec_resident.cr": {
+      "sha256": "701cf1b36612fc45be0b0b8f9e8f12517c586f0af0b80c9d2680827a72b150a9",
+      "bytes": 22024
+    },
+    "src/ml/audio/drama3/generator_resident.cr": {
+      "sha256": "f1d80a1510c7624be3a3de584043b50ca538bf3ac2f77295131a355524892494",
+      "bytes": 9984
+    },
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": {
+      "sha256": "c4fdb653e69b3d9f192ab323ccb0424ca433186bb23b29b8efa784277ea228ab",
+      "bytes": 4124
+    },
+    "src/ml/audio/drama3/kernels/codec_resident.metal": {
+      "sha256": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+      "bytes": 12738
+    },
+    "src/ml/audio/drama3/kernels/generator_resident.metal": {
+      "sha256": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+      "bytes": 1963
+    },
+    "src/ml/audio/drama3/kernels/resident.metal": {
+      "sha256": "def8188e0b235d01e47da30d4a293533524450198f09eb491365c7f5737f4027",
+      "bytes": 7299
+    },
+    "src/ml/audio/drama3/kernels/tower_resident.metal": {
+      "sha256": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b",
+      "bytes": 8273
+    },
+    "src/ml/audio/drama3/resident.cr": {
+      "sha256": "b3f882d6e8047f1f833e7d4c66a9baa8852821c2ba3ab4d032fd4af5c2571f14",
+      "bytes": 11756
+    },
+    "src/ml/audio/drama3/tower_resident.cr": {
+      "sha256": "f653585d4c281e6d5f44dc85d6aeaed3ca9515282f40afb8aeecbc02eff25455",
+      "bytes": 24772
+    }
+  },
+  "binary": {
+    "path": "/tmp/drama3_generate_resident_boundary",
+    "sha256": "602a5e6afb4c0f311881134d78dc97f93be04f50d5898dfef0e789f3ff01c4cb",
+    "bytes": 1366832
+  },
+  "trace_binaries": {
+    "drama3_resident_trace_final": {
+      "path": "/tmp/drama3_resident_trace_final",
+      "sha256": "35f82e80ef394aaf2a4f0ff5cec848b8ccc2cc2a490556925925b4c4a8aa4767",
+      "bytes": 813464
+    },
+    "drama3_tower_resident_trace_final": {
+      "path": "/tmp/drama3_tower_resident_trace_final",
+      "sha256": "6023138b73b8c357c1cf87241da60a20bcee283d0178496e72c1ddb2d4f4cb13",
+      "bytes": 885152
+    },
+    "drama3_codec_resident_trace_final": {
+      "path": "/tmp/drama3_codec_resident_trace_final",
+      "sha256": "0ad72d52915d1a29c2aaf3a4498f285baa793caf6b89f3ed022122f90d11c94a",
+      "bytes": 884400
+    }
+  },
+  "asset_provenance": {
+    "prior_manifest": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-native-evidence.json",
+      "sha256": "f9c000401eccabb18c38338dddf908270ea9a61a11a57bf3b1b884157bcc8956",
+      "bytes": 32865
+    },
+    "pinned_sources": {
+      "mlx_audio": {
+        "repository": "https://github.com/cguldogan/mlx-audio",
+        "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+        "checkout_clean_observed": true
+      },
+      "fish_speech": {
+        "repository": "https://github.com/fishaudio/fish-speech",
+        "revision": "541566932abbaebcb0a40e562a1f846738383f38",
+        "checkout_clean_observed": true
+      },
+      "official_model": {
+        "repository": "fishaudio/drama-3",
+        "revision": "e0a9218aa48888270f06ef1ed9ea67622c0e17d2"
+      },
+      "converted_model": {
+        "repository": "cguldogan/drama-3-mlx-q4",
+        "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+        "files": {
+          "config.json": {
+            "sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+            "bytes": 17453
+          },
+          "model.safetensors.index.json": {
+            "sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+            "bytes": 106861
+          },
+          "tokenizer.json": {
+            "sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+            "bytes": 20791070
+          },
+          "codec.safetensors": {
+            "sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+            "bytes": 1874070622
+          },
+          "model-00001-of-00005.safetensors": {
+            "sha256": "bcb7e680d4f07ea21404070a407ab327572cb7d7b577d73e145871b2456b5012",
+            "bytes": 5498947446
+          },
+          "model-00002-of-00005.safetensors": {
+            "sha256": "67ca8709ee770c21fb09b68d08fc50faf3102451f150745dcb6971dbf8e5894a",
+            "bytes": 5390036166
+          },
+          "model-00003-of-00005.safetensors": {
+            "sha256": "0c0e1055b617bbf7e507ab9ac611d290124b985f63cbdb52cb5275d558202e76",
+            "bytes": 5402946528
+          },
+          "model-00004-of-00005.safetensors": {
+            "sha256": "116f376cf435fc7f2dfc09ffa985e5d1c908fd9580877b3fcb9df37e9be029f2",
+            "bytes": 5423590660
+          },
+          "model-00005-of-00005.safetensors": {
+            "sha256": "e20c3406557e2b1e44f446f2e1af8e7832ef545047f8c146c9e704a692a63b2d",
+            "bytes": 2277811252
+          }
+        }
+      }
+    },
+    "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "refresh": "Source checkout HEADs and clean trees, all asset byte lengths, and config/tokenizer/index SHA-256 rechecked. Large shard/codec SHA-256 values inherited from prior verified manifest, not rehashed."
+  },
+  "precision": "FP32 compute and floating weights; packed Q4/Q8 preserved. Dense reductions are parallel; exact-order packed group/convolution arithmetic retained. GPU top-k/top-p uses FP32 and Float32-rounded input uniforms; CPU sampler uses Float64. GELU erf uses a device approximation.",
+  "workload": {
+    "text": "Hello.",
+    "seed": 0,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "prompt_rows": 23,
+    "sample_rate": 44100,
+    "samples": 34816,
+    "seconds": 0.7894784580498866
+  },
+  "timing_boundary": "Same final binary, sequential CPU/Metal profile-enabled runs. Sidecar timer begins before generator initialization and includes first-use mapping/conversion/Metal pipeline compilation, generation, DAC and WAV write. Tokenizer/config/WeightStore construction, executable compilation and process startup excluded. Profile synchronizes component completion. Sublayer dispatch/MoE spans can be enqueue-only. Host not controlled/quiet; not statistical or process cold-start evidence.",
+  "runs": {
+    "resident_final": {
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary.wav",
+        "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+        "bytes": 69676
+      },
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary.wav.json",
+        "sha256": "17785c948d5474fd1db806c36a7028a9dbd5864e09c90679a4794016b76fe361",
+        "bytes": 3121
+      },
+      "profile": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/resident-boundary-profile.json",
+        "sha256": "ffac812a5d783754f1c7f6c72110613e0d26629e5c6d26311c027995a6d1be7c",
+        "bytes": 5032
+      },
+      "elapsed_seconds": 19.984220375,
+      "frames": 17,
+      "stopped_on_eos": true,
+      "backend": "metal_resident",
+      "resident_readbacks": {
+        "control": 152,
+        "terminal": 140012
+      },
+      "submissions": 129,
+      "components": {
+        "backbone.step": {
+          "calls": 40,
+          "seconds": 15.029323876
+        },
+        "tower.teacher_force": {
+          "calls": 22,
+          "seconds": 0.945419874
+        },
+        "tower.sample_frame": {
+          "calls": 17,
+          "seconds": 1.071584167
+        },
+        "codec.decode": {
+          "calls": 1,
+          "seconds": 2.762156959
+        }
+      }
+    },
+    "cpu_final": {
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary-cpu.wav",
+        "sha256": "880f9fae92c4d8c2bf675a74ee5f40910f537ae03b1cbd2117d3942778a2621e",
+        "bytes": 69676
+      },
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary-cpu.wav.json",
+        "sha256": "032f0a77b3045d132db62173f5eb05f91c60d9182beb2f469b18adc670880dce",
+        "bytes": 3063
+      },
+      "profile": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/resident-boundary-cpu-profile.json",
+        "sha256": "0db39cbfc9a75da12e4537dd84f920433997afec5ad49de9052578494426fac9",
+        "bytes": 13264
+      },
+      "elapsed_seconds": 244.100495375,
+      "frames": 17,
+      "stopped_on_eos": true,
+      "backend": "cpu",
+      "resident_readbacks": {},
+      "submissions": 0,
+      "components": {
+        "backbone.step": {
+          "calls": 40,
+          "seconds": 96.497684499
+        },
+        "tower.teacher_force": {
+          "calls": 22,
+          "seconds": 6.645447335
+        },
+        "tower.sample_frame": {
+          "calls": 17,
+          "seconds": 1.61145221
+        },
+        "codec.decode": {
+          "calls": 1,
+          "seconds": 139.260166917
+        }
+      }
+    },
+    "cpu_earlier_before_guard_fix": {
+      "elapsed_seconds": 258.489074375,
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-verified-cpu.wav.json",
+        "sha256": "9c28f171354ac0100f816d5c7c6fda70cf7ab74e4f5af3c4a1622f1e7a9f39c1",
+        "bytes": 3063
+      },
+      "source_difference": "Only GPU main-candidate bound later changed; CPU branch unchanged"
+    },
+    "resident_earlier_profile_after_metadata_cleanup": {
+      "elapsed_seconds": 22.180461042,
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-verified.wav.json",
+        "sha256": "47f6ce21e41dea99026c33337d3f7a9005a4ffbc7e32bcde46a8bf3008d0c39f",
+        "bytes": 3121
+      },
+      "source_difference": "Only highest semantic candidate guard changed; not sampled in this smoke; WAV bytes identical"
+    },
+    "resident_earlier_profile": {
+      "source_difference": "Before final shape-metadata cleanup and highest semantic candidate guard correction; selected Hello. codes and WAV unchanged",
+      "elapsed_seconds": 23.923006417,
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-final.wav.json",
+        "sha256": "a2244c5627aaa670ec79f4903028984b9a6962badff9d563be5666376c3ba906",
+        "bytes": 3121
+      }
+    },
+    "resident_unprofiled_before_metadata_cleanup": {
+      "elapsed_seconds": 22.712608875,
+      "submissions": 90,
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-unprofiled.wav.json",
+        "sha256": "0b305a9b0ff7deec80927a7258e4e9ccce87c396d73f2a2871c1b44738de4634",
+        "bytes": 3120
+      },
+      "source_difference": "CodecResident element-count validation used values.size rather than Tensor.count, and main selection rejected the highest semantic candidate (not sampled in this smoke); all three resident WAVs agree. Old codec source sha256 f63baf9c614e88a2862f5cbf9f653a9e01c252afa96c5205ad50b1af865d69f3. All three resident WAV SHA-256 values agree."
+    }
+  },
+  "cpu_resident_speedup": 12.214661907970479,
+  "historical_hybrid_comparison": {
+    "manifest": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-metal-evidence.json",
+      "sha256": "0beee3d9c6934fef5a7db9962afca2ecf2ef162b8ac84274f85ae2caa400a48c",
+      "bytes": 29793
+    },
+    "elapsed_seconds": 51.605936167,
+    "speedup_vs_resident": 2.5823342216321015,
+    "qualification": "Prior source/binary and run, same Hello./seed/codes, setup excluded in old timer. Historical local comparison, not same-binary controlled benchmark."
+  },
+  "output_comparison": {
+    "prompt_ids_exact": true,
+    "all_code_frames_exact": true,
+    "eos_exact": true,
+    "pcm_cpu_vs_resident": {
+      "samples": 34816,
+      "exact_samples": 34741,
+      "max_abs_pcm_error": 1,
+      "rms_pcm_error": 0.04641316607703161
+    },
+    "resident_repeats_wav_bytes_exact": true
+  },
+  "readback": {
+    "observed": {
+      "control": 152,
+      "terminal": 140012
+    },
+    "attempts": 18,
+    "control_formula": "18*(4-byte EOS token + 4-byte finite status) + 2*4-byte terminal status = 152 bytes",
+    "terminal_formula": "17*11*4 bytes codes + 34816*4 bytes PCM = 140012 bytes",
+    "diagnostic_bytes": 0,
+    "activation_bytes": 0,
+    "scope": "Source call-site audit plus Context ledger for the ordinary CLI. Labels alone are caller-supplied and not proof. Initial model/prompt/uniform upload and terminal I/O remain host boundaries. Original device frames feed next backbone row and DAC without code re-upload."
+  },
+  "actual_backbone": {
+    "comparison": {
+      "status": "match",
+      "trace_count": 243,
+      "value_count": 497664,
+      "atol": 6e-05,
+      "rtol": 0.0003,
+      "prefixes": [],
+      "max_abs_error": 0.0010986328125,
+      "max_relative_error_at_max_abs": 6.418351579042856e-07,
+      "worst_trace": "backbone.row0.layers.37.hidden",
+      "worst_flat_index": 1269
+    },
+    "inputs": {
+      "path": "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+      "sha256": "4936da6d65d264ab6251d5451d022686b884eed2797094832d44015cfb2774de",
+      "bytes": 92119
+    },
+    "reference": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json",
+      "sha256": "1c5d92f82368d1850cd67c65c368eafb9466f7cf60b0ddac357714e71c1b8127",
+      "bytes": 9841119
+    },
+    "actual": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/resident-backbone-final.json",
+      "sha256": "aa9a9a5aa4e4253f77b5625beb557ed95e22f640915ffa22653734b17fe6d90a",
+      "bytes": 5502130
+    }
+  },
+  "actual_tower": {
+    "comparison": {
+      "status": "match",
+      "trace_count": 726,
+      "value_count": 2042880,
+      "atol": 0.0006,
+      "rtol": 0.0003,
+      "prefixes": [],
+      "max_abs_error": 0.0048828125,
+      "max_relative_error_at_max_abs": 1.383655500220866e-06,
+      "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product",
+      "worst_flat_index": 1320
+    },
+    "strict_outputs": {
+      "status": "match",
+      "trace_count": 20,
+      "value_count": 77824,
+      "atol": 3e-05,
+      "rtol": 0.0003,
+      "prefixes": [
+        "tower.prefill.row0.head_logits.",
+        "tower.prefill.row0.hidden_output",
+        "tower.decode.row0.head_logits.",
+        "tower.decode.row0.hidden_output"
+      ],
+      "max_abs_error": 1.049041748046875e-05,
+      "max_relative_error_at_max_abs": 1.09544939367374e-06,
+      "worst_trace": "tower.decode.row0.head_logits.1",
+      "worst_flat_index": 1008
+    },
+    "inputs": {
+      "path": "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+      "sha256": "a6eb8809a66e2c95ebdcdd9fb9fccd442dbdcf0a123c0993775304a69c9db514",
+      "bytes": 49887
+    },
+    "reference": {
+      "path": "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+      "sha256": "784057f0d440401183b8db66c1ab07d34e262525a358c7944207558b5e2debaa",
+      "bytes": 39542597
+    },
+    "actual": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/resident-tower-final.json",
+      "sha256": "8d1f8b35ec10c106cdc7a62b99f1946716c7ba8016b3d51ef4c9aec0c2dc2614",
+      "bytes": 39540929
+    }
+  },
+  "actual_codec_two_frame": {
+    "trace_count": 30,
+    "internal_count": 29,
+    "samples": 4096,
+    "max_internal_errors": {
+      "max_abs": 0.0007963180541992188,
+      "rms": 0.0001249241900420104,
+      "normalized_rms": 4.4881608185494106e-05
+    },
+    "waveform": {
+      "name": "waveform",
+      "max_abs": 2.8401613235473633e-05,
+      "rms": 6.327697676785793e-06,
+      "normalized_rms": 2.973762201602917e-05,
+      "worst_index": 2430
+    },
+    "gates": {
+      "max_abs": 0.001,
+      "rms": 0.0002,
+      "normalized_rms": 0.0002,
+      "waveform": "abs(error)<=max(5e-5,abs(reference)*1e-3) for every sample"
+    },
+    "reference": {
+      "path": "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+      "sha256": "b514a7f002ead6653ddc4990f1be8b05e88bd3c730d175ed8a537892f9186b9f",
+      "bytes": 103267653
+    },
+    "actual": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/resident-codec-2frame-final.json",
+      "sha256": "f7deb5710c3fa3d29d2a11324692ca8ad86ca6465a410db7675fa6d04c842ae2",
+      "bytes": 103273549
+    }
+  },
+  "full_utterance_mlx_dac": {
+    "comparison": {
+      "samples": 34816,
+      "exact_samples": 34359,
+      "max_abs_pcm_error": 1,
+      "rms_pcm_error": 0.11456940646201683,
+      "max_abs_error_normalized_units": 3.051850947599719e-05,
+      "rms_error_normalized_units": 3.4964875167704344e-06,
+      "one_pcm_lsb_normalized_units": 3.051850947599719e-05,
+      "within_one_pcm_lsb": true
+    },
+    "final_build_pcm_comparison": {
+      "samples": 34816,
+      "exact_samples": 34359,
+      "max_abs_pcm_error": 1,
+      "rms_pcm_error": 0.11456940646201683
+    },
+    "lineage": "Upstream replay compared hello-resident-verified.wav; corrected highest-candidate build hello-resident-boundary.wav has identical SHA-256 and PCM bytes",
+    "reference_report": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-mlx-codec.json",
+      "sha256": "06d4032bd973e41e2969fada6f7e65f3efa06d1923b099bd6c66eeb715452e7e",
+      "bytes": 1152
+    },
+    "reference_wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-mlx-codec.wav",
+      "sha256": "856e6f30fabb42a359df2e80d65caa093129897d8fdb612ffb641c5df63f55a0",
+      "bytes": 69676
+    }
+  },
+  "observed_checks": {
+    "metal_focused": "39 examples, 0 failures, 0 errors, 0 pending",
+    "cpu_focused": "18 examples, 0 failures, 0 errors, 0 pending",
+    "python_contracts": "6 tests, OK",
+    "failure_probes": [
+      "forbidden activation read label rejects before read",
+      "finite-status detects hidden NaN even with finite terminal",
+      "out-of-range GPU expert ID cannot read arbitrary expert weights",
+      "cache/ring continuation across eight rows and capacity failure",
+      "last semantic candidate in primary/retry and out-of-range rejection; regression failed before endpoint fix",
+      "immediate EOS empty prefix without reading uninitialized frames",
+      "top-p FP32 vs Float64 cutoff falsifier rejects universal CPU exactness",
+      "both DAC frame/book layouts, semantic clipping and poisoned main token",
+      "raw singleton alpha and weight_g layouts"
+    ]
+  },
+  "mini_quadrumvirate": [
+    {
+      "decision": "Keep intermediate graph resident; unified-memory naming is insufficient",
+      "falsifier": "Forbidden-read test, call-site audit, actual byte ledger; frame slab feeds DAC directly",
+      "result": "No default intermediate/diagnostic reads; retain explicit 8-byte per-attempt control and terminal boundary"
+    },
+    {
+      "decision": "GPU dynamic routing/cache changes require upstream boundaries before WAV",
+      "falsifier": "243 backbone, 726 tower, strict terminal logits, ring-wrap and invalid expert ID probes",
+      "result": "Existing tolerances pass; no tolerance widening"
+    },
+    {
+      "decision": "Raw DAC singleton dimensions and semantic/main offset must survive port",
+      "falsifier": "Poison main column, compare both layouts/clipping, raw [1,C,1] alpha and [C,1,1] WN gains, 30 actual MLX gates",
+      "result": "Full device DAC passes and full utterance PCM stays within one count"
+    },
+    {
+      "decision": "Head has EOS plus the complete semantic band",
+      "falsifier": "Highest valid main/retry candidate rejected as non-finite before fix; one-past-end must still reject",
+      "result": "Changed candidate bound from >= vocab_size to > vocab_size; new device regression and full smoke pass"
+    },
+    {
+      "decision": "Reject universal exact seeded CPU sampling claim",
+      "falsifier": "Equal logits with top_p=0.99999999 and draw=0.75 retains different candidate after FP32 rounding",
+      "result": "Test intentionally preserves/documented FP32 boundary; Hello. codes exact is scoped"
+    },
+    {
+      "decision": "Speedup must include synchronization and unchanged codes",
+      "falsifier": "Final same-binary CPU/Metal run plus upstream PCM replay; separate disjoint backbone/tower/DAC spans",
+      "result": "Report measured elapsed/components with local host-load and timing-boundary qualifications"
+    }
+  ],
+  "adversary": {
+    "verdict": "ROBUST within stated short single-inference residency/parity scope",
+    "review": "Correlated same-lineage source reviews; numerical support is executed upstream replay, not model agreement. No remaining concrete default-path index/ownership blocker found.",
+    "narrowed_claims": [
+      "Caller labels cannot alone prove residency; source audited",
+      "GPU FP32 sampling can differ from CPU Float64 near cutoffs/draws",
+      "No concurrent model/reset guarantee",
+      "Frame/count overflow guards do not bound aggregate RAM for long DAC output",
+      "No broad quality, long-form, real-time, device-independent or statistical speed guarantee"
+    ]
+  },
+  "commands": {
+    "build_generator": "crystal build --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' examples/drama3_generate.cr -o /tmp/drama3_generate_resident_boundary",
+    "metal_specs": "DRAMA3_BACKEND=metal crystal spec --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' spec/drama3_resident_spec.cr spec/drama3_tower_resident_spec.cr spec/drama3_generator_resident_spec.cr spec/drama3_codec_resident_spec.cr spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr spec/drama3_profile_spec.cr spec/drama3_metal_spec.cr spec/drama3_metal_codec_spec.cr",
+    "cpu_specs": "crystal spec --release -Dcpu_only --link-flags='-fuse-ld=/usr/bin/ld' spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr spec/drama3_profile_spec.cr spec/drama3_metal_spec.cr spec/drama3_metal_codec_spec.cr",
+    "python_contracts": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest spec/drama3_reference_spec.py",
+    "resident_generation": "DRAMA3_PROFILE=/Users/sergey/.cache/cogni-ml/drama3-runs/resident-boundary-profile.json DRAMA3_BACKEND=metal COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /tmp/drama3_generate_resident_boundary 300 40960 --model /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 --text 'Hello.' --max-frames 128 --seed 0 --output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary.wav",
+    "cpu_generation": "DRAMA3_BACKEND=cpu DRAMA3_PROFILE=/Users/sergey/.cache/cogni-ml/drama3-runs/resident-boundary-cpu-profile.json COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /tmp/drama3_generate_resident_boundary 600 40960 --model /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 --text 'Hello.' --max-frames 128 --seed 0 --output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-boundary-cpu.wav",
+    "backbone_trace": "DRAMA3_BACKEND=metal COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /tmp/drama3_resident_trace_final 300 40960 /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 /private/tmp/cogni-drama3-reference/actual_inputs.json /Users/sergey/.cache/cogni-ml/drama3-runs/resident-backbone-final.json",
+    "tower_trace": "DRAMA3_BACKEND=metal COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /tmp/drama3_tower_resident_trace_final 300 40960 /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 /private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json /Users/sergey/.cache/cogni-ml/drama3-runs/resident-tower-final.json",
+    "codec_trace": "DRAMA3_PROFILE=/Users/sergey/.cache/cogni-ml/drama3-runs/resident-codec-final-profile.json DRAMA3_BACKEND=metal COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /tmp/drama3_codec_resident_trace_final 300 40960 /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 /private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json /Users/sergey/.cache/cogni-ml/drama3-runs/resident-codec-2frame-final.json /Users/sergey/.cache/cogni-ml/drama3-runs/resident-codec-2frame-final.wav",
+    "codec_reference": "PYTHONPATH=/private/tmp/cogni-drama3-reference/mlx-audio /opt/homebrew/Caskroom/miniconda/base/bin/python3 spec/support/drama3/codec_reference.py real --codec /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors --output /private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+    "full_mlx_replay": "PYTHONPATH=/private/tmp/cogni-drama3-reference/mlx-audio COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /opt/homebrew/Caskroom/miniconda/base/bin/python3 300 40960 spec/support/drama3/codec_reference.py real --codec /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors --codes-json /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-verified.wav.json --wav-output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-mlx-codec.wav --compare-wav /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-verified.wav --output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-resident-mlx-codec.json"
+  },
+  "rollback": "Set DRAMA3_BACKEND=cpu. Previous hybrid implementation is 9622936a. No Qwen runtime edits.",
+  "next_frontier": "First final-source prefill row 9.34 s dominates. Separate initial pipeline/mapping/conversion preparation from compute before another optimization; no specific driver root cause claimed.",
+  "refresh_policy": "Invalidate dependent claims on native/reference source, compiler, precision, weight/tokenizer/config, input/workload, device/OS or artifact availability changes. Regenerate fixed-input upstream gates, matched generation, readback audit and timing. JSON structure/hashes are an evidence index, not substantive proof."
+}

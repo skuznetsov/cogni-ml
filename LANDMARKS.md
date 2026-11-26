@@ -6,6 +6,85 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DRAMA3-GDN-SCAN-2026-10-18] Dense scan rejected; exact serial control retained
+
+- Standalone GPU diagnostic at `e4131aaa`, production dimensions K=V=128,
+  layers 0/38, actual varying q/k/v/gates and zero/nonzero incoming states.
+  Summary, prefix, transport, every replay output and final state are charged.
+  Production sources and routes are unchanged; no new MLX or WAV run.
+- Six release Metal examples and ten offline examples pass. At graph depths
+  0/2, sequential replay reproduces capture bits. Serial tile is bit-exact for
+  all 24 validation groups and all 80 timed pairs including warmups. Its local
+  paired GPU medians are 1.0581x/1.0548x; full-request benefit is unmeasured.
+- Dense affine scan fails native bit identity in 6/12 groups per depth and is
+  slower in every timing cohort; useful size-8 scans lose by 1.66–2.70x.
+  Maximum absolute error is 3.8146973e-5, all finite and within the unchanged
+  tolerance metric. Real-arithmetic affine algebra does not preserve F32 bits.
+- Combined JSON/timeline-log analysis, live selected-source/executable hashes,
+  16 damaged-receipt rejections and scoped source review are ROBUST for these
+  bounded claims. Review is correlated; local receipts are not attestation.
+  Source pins, artifact hashes, limits and refresh: `docs/drama3-gdn-scan.md`
+  and `.landmark/evidence/drama3-gdn-scan.json`.
+- Next falsifier: integrate the exact serial tile into known-input prefill,
+  preserving convolution history and output/state bits; charge preparation,
+  normalization, projection and commit before upstream/full-WAV pairs. Compact
+  scans and surrogate stochastic verification remain separate research paths.
+  Refresh after source/compiler/driver/device/checkpoint/input/graph/control
+  changes or artifact loss. Listening found no quality defect in the user's
+  examples; the old layer-39 MLX mismatch remains an open numerical issue.
+
+### [LM-DRAMA3-GDN-POST-2026-10-18] Exact local fusion, default off
+
+- `DRAMA3_GDN_POST_FUSION=0|1` freezes at Context construction. The candidate
+  combines per-head RMS, SiLU(z) and multiply, preserving the ascending F32 fold
+  and products. No production read, submit or completion wait is added; existing
+  per-frame CPU EOS reads remain. Rollback/default is 0 and a new Context.
+- 25 release Metal examples, 36 offline driver checks, 90 varying-input captures
+  and 243 native boundary pairs pass. Saved MLX metrics are unchanged, including
+  row 1/layer 39 strict failure. All 24 full requests preserve code/tape/EOS/WAV
+  and ordinary read/wait ledgers. Warm allocations fall by 5,340.
+- Local paired GPU command intervals favor fusion at 2.5806x across eight pairs.
+  Full-request medians improve in both timing blocks, but two of four mirrored
+  worker contrasts regress and unchanged DAC timings drift. Causal full-WAV gain
+  is unestablished; keep default 0. Intervals may overlap and are not additive.
+- Final source review and 29 damaged-receipt attacks are ROBUST for these bounded
+  claims. Candidate model files are hashed; control payload is unauthenticated.
+  This is correlated review, not independent runtime replication. Qualification,
+  commands, source/artifact hashes and refresh: `docs/drama3-gdn-post.md` and
+  `.landmark/evidence/drama3-gdn-post.json`.
+- Follow-up known-input prefill GDN summary/prefix/replay is qualified above;
+  dense scan is rejected on the tested short blocks. Refresh after source/toolchain/device/checkpoint,
+  sampler/text/reference/queue-depth or flag-stack changes and artifact loss.
+
+### [LM-DRAMA3-OPTIMIZATION-CONTINUATION-2026-10-18] Exact fusion first
+
+- User requested durable continuation and authorized implementation after the
+  source/evidence audit at `a8156b8c`. Roadmap and limitations:
+  `docs/drama3-optimization-roadmap.md`; active slice:
+  `docs/drama3-native-frontier.md`.
+- Start exact routed/shared gate/up/SwiGLU, default-off; preserve F32 reductions,
+  old upstream tolerances and GPU residency. First signal: fail-first API spec,
+  then GPU bit receipts, captured operands and profiler-off full WAV pairs.
+- First slice implemented: 19 release Metal examples and eight offline checks;
+  240 actual-input captures and 243 native boundary pairs are bit-exact. Existing
+  strict row 1/layer 39 MLX failure is unchanged. All 24 complete WAV requests
+  preserve codes, sampler tape and read/wait ledgers. Warm allocations decrease
+  21,360. Local GPU ratios 1.2165x/1.6828x do not establish request speedup:
+  forward generation is unchanged, reverse improves, one mirrored pair regresses
+  and the unchanged DAC phase moves. Keep `DRAMA3_EXPERT_SWIGLU_FUSION=0` by
+  default. Evidence/limits: `docs/drama3-expert-swiglu.md` and
+  `.landmark/evidence/drama3-expert-swiglu.json`.
+- The next exact per-head RMS/SiLU/multiply slice is qualified above, default-off.
+  Correction: the user's intended historical Qwen reference was projected-K and
+  block-residual surrogates plus temporal affine GDN scan, not the separate
+  rank-one update/output fusion. Their source-backed limits are in the roadmap.
+  Known-input prefill scan is qualified above. The historical greedy
+  verifier does not certify stochastic DRAMA sampling or fixed-tape identity.
+- q1 overlap, GPU EOS blocks, calibrated BF16-to-Q8, line protocol and streaming
+  remain hypotheses/future slices. Existing late MLX failures remain open.
+- Recheck source/model/device/compiler/sampler pins before reusing evidence;
+  local command gains and ASR/RMS alone do not establish user-visible success.
+
 ### [LM-QWENIMAGE21-CONTINUATION-4-7-INPUTS-2026-09-30] CPU prerequisites checked; no later-block execution
 
 - After qualified 0..3 replay, root authenticated each arm's own block-3 full
@@ -30783,3 +30862,1985 @@ Refresh after source/toolchain/device/model/workload changes.
   frozen runs. App goal snapshot is `blocked`, not resumed/completed by this
   bounded update. Local verified commits allowed; push and outgoing neighbor
   messages remain unauthorized. All preceding prefill landmarks are preserved.
+
+### Continuation 2026-10-14 — DRAMA-3 native Metal profile and exact-order kernels
+
+- Pinned native text-to-WAV base is `e1065a75`; source/model/reference identities
+  and unchanged numerical gates are in `docs/drama3-native-frontier.md` and
+  `docs/drama3-metal-evidence.json`. Metal is opt-in with `-Ddrama3_metal` plus
+  `DRAMA3_BACKEND=metal`; CPU remains the default rollback.
+- Initial CPU profile selected packed Q4/Q8 expert matvec (87.40 s) and DAC
+  (141.45 s). Metal preserves scalar FP32 group order and convolution
+  accumulation order. Batched gate/up and down expert dispatches reduce
+  38,400 expert waits to 3,200; the DAC adds 44 commands. Dense projections,
+  tower, routing, gating, and sampling still use CPU/Accelerate.
+- Reject typed/aligned shard-offset assumptions: actual U32 data starts at
+  byte 1,032,369,718 (2 mod 4); BF16 scales can begin beyond 4 GiB. Use 64-bit
+  byte offsets/LE loads, raw scalar conversion, retained mmap owners, bounded
+  codec cache, and scratch ownership through GPU completion/readback.
+- Same final binary, `Hello.`, seed 0, 17 frames through EOS on M2 Max:
+  CPU 250.55 s / Metal 51.61 s inference (4.86x); backbone 101.54/35.36 s,
+  tower 7.84/11.27 s, DAC 141.07/4.91 s. Earlier batched Metal was 48.54 s.
+  Host was not quiet; this is a local observation, not a universal latency
+  bound or cold-start measurement. First-use pipeline/mapping costs occurring
+  during inference are included; initial setup is excluded.
+- Prompt IDs, all codes, EOS, and WAV bytes agree exactly with CPU. The
+  243 backbone/726 tower trace values agree exactly with prior CPU and pass
+  existing upstream gates. Fresh real/synthetic MLX DAC gates pass; complete
+  17-frame MLX PCM replay remains within one PCM16 count. Final suites passed
+  25 Metal, 18 CPU, four synthetic codec examples and six Python contracts.
+  Correlated read-only adversary found no scoped ownership/index/order blocker.
+- Next: dense CPU/tower and first-use preparation. Per-expert mapped GPU
+  views are a candidate, not an established fix. Refresh fixed-input parity
+  and matched generation after source, precision, weights, compiler, device/OS,
+  workload or artifact drift. No stock BF16, long-form, quality, concurrency,
+  or real-time claim. Library model unload must clear CodecMetal and reset
+  MetalBackend; CLI exit releases retained globals.
+
+
+### Continuation 2026-10-14 — DRAMA-3 resident Metal graph
+
+- The opt-in Metal CLI now uses ResidentGenerator and CodecResident. Backbone,
+  tower, routing, FP32 sampling, recurrent/KV state, generated codes, and DAC
+  execute on GPU. The original frame allocation feeds both later backbone
+  rows and DAC; the sidecar's terminal code read does not cause re-upload.
+  CPU remains the default rollback; no Qwen runtime changes.
+- Ordinary Hello./seed-0 inference reads 152 control bytes (18 attempts of
+  4-byte EOS plus 4-byte finite status, then two 4-byte terminal status checks)
+  and 140,012 terminal bytes (codes and F32 PCM). No activation or diagnostic
+  reads were observed; call-site audit supports the ledger. Tokenizer, input
+  preparation, scheduling, EOS branch and terminal I/O remain on the host.
+- Final fixed-input upstream gates pass unchanged: 243 backbone traces,
+  726 tower traces plus strict final-hidden/head-logit gates, 29 DAC internal
+  stages and 4096 waveform values. Full 17-frame pinned MLX DAC replay differs
+  by at most one PCM16 count. Correlated review is source evidence only;
+  executed upstream comparisons establish the declared numerical support.
+- Reject universal exact CPU seeded sampling: the GPU uses FP32 probabilities
+  and rounded uniforms, whereas CPU uses Float64. An equal-logit cutoff probe
+  at top_p=0.99999999 deliberately retains a different candidate on GPU.
+  Also reject the initial main-candidate endpoint bound: EOS adds a head row,
+  so candidate vocab_size must map to semantic_end. Its failing regression
+  now passes for direct/retry selection and still rejects one-past-end.
+- Same corrected binary, Hello./seed-0, M2 Max: CPU 244.1005 s / resident
+  19.9842 s (12.21x observed). Backbone 96.4977/15.0293 s, tower 8.2569/2.0170 s,
+  DAC 139.2602/2.7622 s. Prompt IDs, 17 frames and EOS agree; PCM differs by at
+  most one count. The sidecar timer includes generator initialization through
+  WAV writing but excludes tokenizer/WeightStore/process startup. Earlier
+  resident runs were 22.18/23.92 s; host not quiet, no statistical speed bound.
+- Focused checks pass 39 Metal / 18 CPU examples and six Python contracts.
+  They cover finite faults hidden behind finite outputs, GPU expert bounds,
+  eight-row ring/cache continuation, empty EOS prefix, DAC frame layouts,
+  poisoned main token, and raw singleton alpha/weight_g shapes.
+- Resident buffers and pending views retain ownership through checked command
+  completion; mapped weight globals retain mmap owners. Use one serialized
+  inference and finish before cache reset/unload. Frame/count guards do not
+  establish an aggregate RAM budget or long-form admission. No concurrent,
+  subjective-quality, stock BF16, real-time or broad speed guarantee.
+- Results, source/binary/input hashes, commands and readback formulas live in
+  docs/drama3-native-frontier.md and docs/drama3-resident-evidence.json. The
+  first row (9.34 s in the final GPU run) remains the next profiling target:
+  separate mapping/conversion/pipeline preparation from compute before another
+  optimization. Refresh gates, readback audit and matched timing on source,
+  precision, asset, compiler, input, device/OS or evidence-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 resident rank batching and Delta layout
+
+- Baseline is `b91ad1e7`. Packed top-8 expert projections now batch ranks in
+  three GPU dispatches, retaining original affine-group and final rank order
+  (49 rank-dependent dispatches per layer become 6). Private Delta state uses
+  `[head,key,value]` so neighboring value lanes are contiguous; each lane's
+  key-order recurrence stays unchanged. The per-model frozen rollback flags
+  `DRAMA3_MOE_BATCH=0 DRAMA3_DELTA_TRANSPOSE=0` restore the previous routes.
+- Four same-binary AB/BA fresh-process Hello./seed-0 pairs on M2 Max give median
+  optimized/previous ratios 0.8812 autoregressive backbone, 0.9438 GPU interval
+  sum and 0.9611 complete inference. Every pair improves; full profiled runs
+  are 22.3971–23.6972 s previous versus 21.5529–21.7429 s optimized. Preparation
+  remains inside the timer. Host not controlled; this is a bounded observation.
+  One normal-path pair is 23.8942/19.3659 s, not a general 19 percent claim.
+- Seven matched actual-shape Delta microbenchmark pairs give GPU ratio 0.6969;
+  all final state/output bits agree. Reject interpreting this kernel result as
+  a 30 percent whole-model improvement. Source: examples/drama3_delta_benchmark.cr.
+- Fresh 243 backbone / 726 tower / strict 20 terminal / 30 DAC upstream gates
+  pass at unchanged tolerances. All traces are bitwise identical to preceding
+  native values; full prompt/codes/EOS/WAV bytes match in all measured runs.
+  Normal reads remain 152 control / 140,012 terminal bytes. Focused suites pass
+  42 Metal / 18 CPU examples and six Python contracts, including rank-order
+  cancellation, unaligned Q4/Q8 shared/per-rank projection tails, and every
+  recurrent-state bit at asymmetric/actual shapes. Correlated source adversary
+  found no bounded indexing, lifetime or arithmetic-order blocker.
+- GPU residency does not imply autonomous GPU control. Ordinary inference
+  still submits 90 CPU-managed command buffers with row/control/DAC-stage
+  completion waits; profiling adds component waits (129 commands). EOS/finite
+  control is 8 bytes per attempted frame; terminal code/PCM reads remain.
+  Intermediate tensors are not read back. Reducing these waits must preserve
+  bounded scratch ownership and EOS/finite handling.
+- First-command timestamps show 10.9795 s before GPU start and 0.1348 s of GPU
+  execution; synchronous library/function/pipeline APIs total about 13 ms.
+  Deferred driver work, resource preparation, pinning and page faults remain
+  indistinguishable in this probe. No driver/resource/timer-hoisting change
+  promoted. Next: attribute this startup interval and unnecessary host waits.
+- Evidence and reproduction: docs/drama3-resident-speed-evidence.json and
+  docs/drama3-native-frontier.md. Refresh numerical, residency and performance
+  claims on source/reference, precision, asset, compiler, input, device/OS or
+  artifact-availability changes. No broad realtime, concurrent/reset, quality,
+  stock BF16 or cross-device guarantee. Primary dirty Qwen checkout untouched.
+
+### Continuation 2026-10-14 — DRAMA-3 CogniGraph bounded handoff
+
+- Scope and rollback: opt-in `DRAMA3_COGNIGRAPH_MAX_INFLIGHT=1|2`; default and
+  rollback are depth zero. `Resident::Context` wraps CogniGraph's FIFO queue on
+  one Metal queue; context owner identity follows buffer slices, rejecting
+  ordinary foreign views. This is not a security boundary: internal backing
+  handles/reconstruction or raw external writes can bypass tags. Scope the safe
+  claim to the serial single-context CLI without external mutation, rebinding,
+  or concurrency. Leases retain temporary bindings; directly bound persistent
+  caches and mapped weights remain model/backend-rooted until completion. Keep
+  model and Context owners alive until drained. Scratch is fresh, with no pool.
+- Eight same-binary runs across four graph/legacy pairs reproduced 17 frames,
+  EOS and WAV bytes exactly. Commands and completion waits each fell 90→73;
+  readbacks stayed 152 control / 140,012 terminal bytes, with no activation or
+  diagnostic reads. Evidence: [CogniGraph run packet](docs/drama3-cognigraph-evidence.json).
+- Graph/legacy full-wall ratios: 0.870419, 1.048293, 0.980546, 0.974302;
+  median 0.977424. One pair regressed 4.8%. `/usr/bin/time` per-process peak
+  footprint rose from 1.576–1.639 GB to 1.709–1.765 GB. The
+  31,903,032,324-byte retained counter is conservative whole-backing
+  accounting, can double-count, omits directly
+  bound packed weights, and is not RAM usage. The 40,960 MB process-tree RSS
+  cap and 25% free-memory floor are separate run guards.
+- Final owned-binary depth-0/2 replays passed with exact WAV bytes; all three
+  upstream trace sets match and intermediate values are bitwise equal to the
+  previous native path. Pinned gates are 243 backbone traces / 497,664 values,
+  726 tower traces / 2,042,880 values, 20 strict-head traces / 77,824 values,
+  29 codec internal stages (max absolute 1e-3, RMS 2e-4, normalized RMS 2e-4),
+  and a per-sample waveform absolute-error bound `max(5e-5, abs(reference) *
+  1e-3)` over 4,096 values. Final ownership guards passed; Metal depth 0 and
+  depth 2 each passed 60 examples, CPU passed 18, and Python passed six tests.
+  See [the frontier](docs/drama3-native-frontier.md) and [evidence
+  packet](docs/drama3-cognigraph-evidence.json).
+- MiniQuad/LTP disposition: Spike exposed redundant row waits; the bounded
+  Ladder queue passed lifecycle/parity replays. Collapse and speed promotion
+  remain withheld: full-run timing is inconsistent and measured peak footprint
+  increased. Fewer waits do not certify global potential descent.
+- Next falsifier: attribute the roughly 11-second first-command pre-GPU
+  interval. Refresh matched timings and memory bounds on source, weights,
+  compiler, input, device/OS, or evidence drift.
+
+### Continuation 2026-10-14 — DRAMA-3 first-submit extent and shared mapping
+
+- Base `0f62797e`. The old binary reproduced 14.310 s before first GPU start
+  versus 0.173 s GPU execution. A new bounded diagnostic repeats five identical
+  dispatches per command: same-file 16 KiB / 5.50 GB views yield first waits
+  0.881/0.817 ms versus 518.645/519.265 ms in four fresh processes. This
+  reproduces an extent-associated delay without model compute; it does not
+  isolate driver pinning, page faults, deferred compilation, or cold caches.
+- Keep opt-in `DRAMA3_MMAP_SHARED=1`; default/rollback `0` stays MAP_PRIVATE.
+  Both modes use PROT_READ and unchanged owners/whole-shard no-copy GPU views,
+  kernels, Shared storage, tracked hazards, and queue ordering. Stable immutable
+  checkpoints and reset only after every referencing context drains remain
+  caller requirements; exposed raw handles/pointers are unsafe plumbing.
+- Two same-binary full-process AB/BA shared/private pairs measured 11.00/20.97 s
+  and 18.60/25.20 s, using the earlier timed binary (formatter-only delta to
+  final); cache/host state was uncontrolled. An unpaired shared run took 9.89 s.
+  All completed graph runs preserved exact 17 frames/EOS/WAV, 152 control /
+  140,012 terminal read bytes and drained leases. Three later full attempts
+  (private and shared)
+  hit the unchanged 25% system-free-memory guard; retain them as incomplete,
+  not successful timings. Foreign workloads were untouched. No stable speed,
+  physical-RAM, default-promotion or LTP/WBA Collapse claim.
+- Fresh final-binary synchronous shared generation at graph depth zero passed
+  exact WAV/readbacks; application time 11.084 s. A separate profiled final run
+  measured pre-GPU 2.079 s, GPU 0.159 s, complete process 12.16 s;
+  host/cache state differs from
+  the predecessor. Pinned replays passed 243 backbone / 726 tower / 20 strict
+  head traces, 29 DAC stages and 4,096 waveform values at unchanged tolerances;
+  all traces bitwise match prior native. Metal 63 examples at each depth 0/2,
+  CPU 20, Python six passed. Mapping guards include queued GC/owner lifetime,
+  unchanged fixture bytes, malformed flags and byte-range rejection.
+- Reject the CPU prefault route in the measured probe (24.02 s setup + 5.74 s
+  wait). Tensor-view code was removed after four full-process view/default
+  ratios 1.029940/1.045088/0.887771/1.025412; smaller backing-extent bookkeeping
+  was not RAM evidence. No inference madvise change was retained.
+- Canonical scope, source/binary/artifact identities, DoD and failed attempts:
+  [.landmark/evidence/drama3-startup.json](.landmark/evidence/drama3-startup.json).
+  Next falsifier: repeated complete same-binary AB/BA pairs at depths 0/2 with
+  sufficient headroom and explicit cache-state controls. Refresh numerical,
+  ownership, residency and timing evidence on source/reference, assets,
+  precision, compiler, input, device/OS or artifact-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 controlled mapping gate
+
+- Keep MAP_PRIVATE as default (`DRAMA3_MMAP_SHARED=0`); shared remains opt-in
+  (`1`). New Darwin-only harness: `scripts/drama3_mapping_benchmark.py`.
+  Same-binary private/shared AB/BA pairs, graph depths 0/2, model-scoped
+  read-only cache invalidation, exact zero/all-resident mincore admission,
+  immutable file-stat/source/binary checks, and separate preparation/process
+  timing. No foreign process changes, global purge, activation readback, or
+  LTP/WBA transformation. The user authorized the 15% sampled reserve; the
+  global run_safe default is unchanged. Ten CPU controls and a 1 MiB fixture
+  self-test passed, including owned-child abort, final reserve invalidation,
+  prelaunch partial-cache rejection, cleanup, and the two-pass repair bound.
+- Preserve attempts a/b/c/d separately. Initial 30%-reserve attempt a stopped
+  its first private arm; b completed three pairs before a warm-preparation
+  failure. Holding all six maps through full reads let c complete eight pairs,
+  but still lost resident pages while mapped. A cache-only missing-page probe
+  converged once; this did not certify repeatable conditioning.
+- Final d completed nine pairs / eighteen arms before warm/depth-two/private
+  preparation failed after both permitted missing-page repair passes. Median
+  paired shared/private process ratios were 0.730317/0.786786 for zero-resident
+  depths 0/2, and 0.638089/0.611097 for all-resident depths 0/2; counts were
+  2/2/3/2 rather than the required four each. All completed pairs favored shared,
+  but none of these cells may promote. Every completed arm reproduced exact
+  baseline WAV/prompt/codes/EOS, 152 control / 140,012 terminal read bytes, and
+  zero pending/retained graph resources. A separate artifact recheck agreed.
+  Minimum sampled inference headroom was 26%. Failed preparation had 71–78%
+  free but only 1,456,273/1,578,824 resident pages after cleanup. This refutes
+  reliable bounded read/repair conditioning on this host, not the speedup.
+- Harness adversary: ROBUST in the executed guard scope; default-promotion
+  claim: VULNERABLE / IN_PROGRESS. No production code or default changed.
+  Canonical evidence: `.landmark/evidence/drama3-mapping-controlled.json` and
+  `docs/drama3-native-frontier.md`. Earlier upstream intermediate replays are
+  unchanged-source lineage, not rerun by this harness.
+- Next mapping falsifier needs a changed cache-conditioning premise or a
+  controlled host, not more identical retries. For further acceleration,
+  attribute fixed-input sampler/projection groups with existing whole-command
+  GPU timestamps and one final drain; current component profiling adds waits.
+  Actual sampled vectors are 4097/4096, not the 252288 text vocabulary. Other
+  hypotheses are shared-input backbone projections, ordered tower gathers,
+  and DAC convolution/Snake work; no kernel speedup is established from source.
+  The bounded external sampler probe stopped after two build-command errors
+  (`-I`, then `--path` unsupported); no compile, GPU run, or timing resulted.
+  Source/latest log/curated diagnostic are indexed in the mapping packet;
+  correct the build command before reopening this operator-magnitude probe.
+  Refresh on source/reference/assets/precision/compiler/input/device/OS/evidence
+  drift; performance additionally decays with host/cache state.
+
+### Continuation 2026-10-14 — DRAMA-3 sampler cost measured without intermediate waits
+
+- The earlier `-I`/`--path` compile blocker is superseded by the repository
+  example `examples/drama3_sampler_benchmark.cr`: relative require, release
+  Metal build, unchanged `Context.sample` and finite guard. Diagnostic only;
+  inference kernels/defaults and MAP_PRIVATE promotion decision are unchanged.
+- Final invocation `80ab95a36d308772874d86d58da91914`: seven profiles, two
+  warmup plus seven alternating-order measured pairs each, main 36 calls
+  (18 normal, 18 retry), tower 153 calls. Each pair submits two command buffers
+  at graph depth two and drains once after both. Zero intervening Context
+  waits/readbacks; 126 total submitted/completed/waits, final pending/retained
+  zero, 11,907 exact scalar-FP32-oracle IDs. Wrong-ID and depth-one controls
+  fail. Nine parser controls include invocation mixing, global profile order,
+  missing/reused/shifted timestamps, invalid duration and drain failures.
+- Retained tower rows with explicitly synthetic main/EOS proxies measure
+  median 413.687–441.401 ms per 189 calls (main 78.760–83.665 ms, tower
+  334.678–357.682 ms). Synthetic ascending costs 4407.456 ms versus descending
+  354.414 ms. Timings include finite guards; they are hot fixed-input
+  command-group GPU spans, not per-dispatch or production attribution.
+- Fresh CPU audit executes pinned Fish-Speech sampler revision
+  `541566932abbaebcb0a40e562a1f846738383f38`. Non-tie normal support matches
+  10/10 role-cases (probability max error 5.96e-8), retry 5/5 (7.45e-9).
+  Flat/cutoff ties diverge because native prefers lower IDs and upstream CPU
+  unstable sort reorders them. Uniform versus exponential-race RNG also
+  prevents same-seed parity claims. No actual main logits were retained.
+- Adversary ROBUST for the bounded probe with executed negative controls;
+  correlated source review is not independent numerical evidence. Universal
+  sampler equivalence and any full-model speedup remain unsupported. Earlier
+  backbone/tower/DAC/WAV gates are unchanged-source lineage, not fresh runs.
+- Next attribution experiment: actual-shape shared-input backbone `qkv/z/b/a`
+  projection groups, with no additional completion waits, before proposing
+  fusion. Earlier combined prefill/generation 6.67 s and DAC 1.75 s are
+  different boundaries and cannot rank individual operators. Strongest
+  counterexample is a mixed production sampler distribution costing much
+  more than the three retained rows; retain that uncertainty. Kernel changes
+  require relevant pinned upstream intermediates and full-WAV replay.
+- Canonical evidence: `.landmark/evidence/drama3-sampler-cost.json` and
+  `docs/drama3-native-frontier.md`; local raw artifacts in
+  `~/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/`. Refresh on source,
+  reference, assets, precision, compiler, input, device/OS or artifact drift;
+  timings additionally decay with host state. Keep the 15% sampled reserve
+  and never modify unrelated workloads to obtain a quiet host.
+
+### Continuation 2026-10-14 — opt-in DRAMA-3 dense backbone kernels
+
+- `DRAMA3_BACKBONE_DENSE_REDUCTION=simd` applies only to qkv/z/b/a in the
+  30 linear-attention blocks. Default/rollback stays `tree`; generic dense
+  selection independently defaults to `tree`. The checkpoint's 120 affected
+  tensors are BF16 (1,517,813,760 bytes), all at even mapped offsets. The
+  candidate uses aligned ushort loads plus a guarded 32-lane SIMD shuffle
+  tree. FP32 product/add order, tensor decoding, device allocations, mapped
+  owners and queue scheduling are preserved. Non-32-lane fallback is reviewed
+  in source but unexercised on this M2 Max.
+- Three real normalized upstream inputs, seven AB/BA pairs each: paired median
+  speedups qkv 1.068–1.083x, z 1.095–1.109x, b 1.587–1.635x,
+  a 1.578–1.611x. Tree/tree control medians 0.994–1.002x. Each invocation
+  verifies 1,474,560 elements bitwise, queues two buffers before final drain,
+  has zero intervening waits/reads and drains all leases. Shuffle-only was
+  rejected for negligible large-projection and whole-generation benefit.
+- Standalone layer-0 projections pass pinned MLX-audio F32 replay at unchanged
+  atol 6e-5 / rtol 3e-4: 37,056 values, max abs error 3.815e-6. Full native
+  tree/SIMD traces are bitwise identical (243 tensors / 497,664 F32 values).
+  All 14 full-generation runs retain identical WAV/codes/EOS/prompt and
+  readback counts (152 control / 140,012 terminal bytes), with per-depth
+  submissions/waits 73 at depth2 and 90 at depth0. Final release specs:
+  15 examples, no failures/pending; 14 Python tests pass.
+- Full GPU command sums improve 0.76% at depth2 (four pairs) and 2.91% at
+  depth0 (two pairs). Process medians are +2.4% and -9.6% respectively on a
+  shared host; general latency improvement is unproven. A warm-driver
+  diagnostic finds only 0.263 ms setup for the extra SIMD pipeline, not a
+  cold-start guarantee. Keep the sampled memory reserve 15%; no foreign
+  process manipulation or cache-control claim.
+- Default-promotion frontier remains open: both native arms fail the refreshed
+  full MLX tolerance gate at exactly row1/layer39 hidden[33], 0.921100616 vs
+  0.921916962 (abs 8.16345e-4; allowed 3.36575e-4). Upstream without dense
+  instrumentation is bitwise identical to the captured reference. The first
+  failing boundary is the final MoE/residual, not an altered dense output.
+  Different expert order/reduction is a hypothesis only. Next falsifier:
+  capture exact router logits, expert IDs/order, weighted outputs and partial
+  sums for row1/layer39 on the same normalized input; preserve tolerances and
+  native precision. Do not promote the default from local kernel speed alone.
+- Adversary ROBUST for the bounded opt-in change and measurements; VULNERABLE
+  for default promotion/full upstream parity and general process speedup.
+  Canonical evidence: `.landmark/evidence/drama3-dense-backbone.json` and
+  `docs/drama3-native-frontier.md`; local runs `dense-20261014/`. Reference
+  MLX-audio revision e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1,
+  checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8. Refresh on
+  source/assets/reference/runtime/compiler/input/device/OS/artifact drift;
+  timings also decay with host/cache state. MAP_SHARED remains default-off.
+
+### Continuation 2026-10-15 — DRAMA-3 layer-39 MoE localization
+
+- Active goal: resolve the full-backbone row1/layer39 hidden[33] mismatch
+  without widening atol 6e-5 / rtol 3e-4, changing precision or adding ordinary
+  inference GPU/CPU boundaries. Base `7bf40df8`; original gate remains one
+  failure in 497,664 values (0.921100616 vs 0.921916962). Dense stays `tree`,
+  SIMD opt-in; MAP_SHARED default-off. No arithmetic/kernel fix in this step.
+- Exact upstream normalized-input replay passes router logits, expert weights
+  by ID, gate/up and activation at fixed tolerance. Raw selected orders differ:
+  upstream 159,194,245,154,230,191,171,108; native
+  108,171,191,230,154,245,194,159. First failing boundary is expert down output
+  (expert 108 coordinates 469/766). Tolerance equality is not bitwise equality.
+- Causal GPU probe feeds exact stored upstream activation to native affine-Q4
+  down: expert108[33] remains -9.0419435501 vs -9.0411090851, delta
+  -0.0008344650. Native down replay from its own activation is bitwise equal
+  to captured down (16,384 values); its reduction reproduces captured native
+  sum bitwise (2,048). Native reduction of upstream terms/weights in upstream
+  order reproduces upstream official sum bitwise across all 2,048 values.
+- Order-only interventions reorder both rows and weights by explicit ID.
+  Neither changes coordinate33; other-coordinate bit differences pass fixed
+  tolerance. Router weight drift changes sum[33] by only 9.54e-7. This rejects
+  routing/order as the dominant cause at this coordinate, not universally.
+  Native full-input drift (max 1.907e-6) and small residual/shared deltas remain;
+  the down projection is the dominant contribution, not a complete proof of
+  all full-pass errors. Exact Q4 suboperation responsible is still unknown.
+- Capture fidelity: upstream detailed/no-capture full arrays (243) and common
+  full/isolated MoE stages match bitwise. Native detailed/no-detailed captures
+  match 8,192 output values; three final outputs plus target residual/hidden
+  match retained native baseline. Actual returns and diagnostic auxiliary
+  prefix/weighted records have distinct authority labels. Inference/probe
+  arithmetic stays on GPU; serialization/report analysis follows one final
+  drain. Actual graphs show zero pre-drain submissions/waits, one final each,
+  and no serialization-induced submission/wait. Default-nil hooks add no GPU
+  diagnostic allocation, dispatch, readback or completion boundary.
+- Actual loaded `WeightStore` bytes for 14 target-MoE tensors, config and index
+  are hashed before GPU context creation in both diagnostic examples. Target
+  digest matches upstream `648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc`.
+  The checkpoint must remain immutable during a run. Final checks: 21 Crystal
+  examples, 20 comparator tests and one upstream capture regression pass;
+  real trace/ablation exit 0. The numeric comparator still exits 1 as expected.
+- Mini-Quadrumvirate adversary: ROBUST for bounded common-input/down-boundary
+  localization; original production parity correction remains IN_PROGRESS.
+  Next falsifier: expert108 official MLX quantized matmul versus MLX dequantize
+  plus F32 matmul on identical activation/packed weights. Do not infer MLX
+  internal FMA/reduction from unavailable core kernel source. A production
+  correction needs the original full gate passing plus adjacent guards.
+- Evidence: `.landmark/evidence/drama3-moe39-diagnostic.json`,
+  `docs/drama3-native-frontier.md`; local raw artifacts `moe39-20261015/`.
+  Checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8, MLX-audio
+  e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1. Refresh on source,
+  model, reference/runtime, input, precision, compiler, device/OS or artifact
+  drift. Continue through `scripts/run_safe.sh` with sampled reserve 15%,
+  `DRAMA3_PROFILE` unset, no unrelated process manipulation and no push.
+
+### Continuation 2026-10-15 — expert-108 quantized/F32 down discriminator
+
+- At base `4e76054b`, compare the exact stored upstream row1/layer39 SwiGLU
+  activation and raw Q4 down weights on GPU. Full-eight `gather_qmm` reproduces
+  all 16,384 official upstream down values bitwise; single-expert gather and
+  direct `quantized_matmul` reproduce expert108's 2,048 values bitwise too.
+- `mx.dequantize` plus F32 M=1 `mx.matmul` fails the unchanged atol6e-5/rtol3e-4
+  against upstream at 469/766, maximum absolute error 0.00390625. Against the
+  retained native down on exact upstream activation, it passes all 2,048
+  values, without bitwise equality. Native versus quantized retains failures
+  469/766/1555. At33: quantized -9.041109085083008; decoded F32
+  -9.04194164276123; native -9.041943550109863. No accuracy-oracle claim.
+- Explicit GPU uint4 `scale*q+bias` decoding equals `mx.dequantize` across all
+  1,048,576 weight bit patterns. This is a native-style formula control in MLX,
+  not a capture of native Metal decoding. Together with matched input/weights,
+  the experiment isolates a quantized-dot versus decoded-F32 arithmetic-path
+  difference. Exact affine grouping/reduction/FMA subcause remains open.
+- Pinned MLX v0.31.1 source at `ce45c52505c8158ea48d2a54e8caae05efd86bfe`
+  shows group-affine regrouping plus SIMD reduction. Actual M=1 shapes/dtypes
+  are asserted before eval; source predicts QMV/GEMV without NAX/TF32, and the
+  run sets MLX_ENABLE_TF32=0. Runtime GPU kernel names are not profiled.
+- Probe arithmetic/metrics stay on GPU; one explicit terminal mx.eval precedes
+  six result/metric read calls. No intermediate host activation read or explicit
+  synchronize API; internal backend submissions/waits are not instrumented.
+  CPU handles loading/provenance, fixture setup and terminal report analysis.
+- Mini-Quadrumvirate found and closed a missing current-replay-source hash
+  check: negative test fails before the guard, final 32 Python tests pass.
+  Second qualified GPU run reproduces all 22,528 projection values bitwise
+  across four arms. Actual target-MoE/down bytes and separate normalized-input/
+  expert-activation hashes bind the evidence before GPU array construction.
+- Next falsifier: opt-in GPU reproduction of MLX low-M Q4 affine grouping and
+  reduction, then exact-input down and the original full upstream gate. No
+  production arithmetic/default/scheduling change; original hidden[33] gate
+  remains open. Dense default tree/SIMD opt-in and MAP_SHARED off remain.
+  No performance or LTP/WBA promotion claim. Rollback: revert this probe commit.
+- Evidence: `.landmark/evidence/drama3-down108-qmm.json`,
+  `docs/drama3-native-frontier.md`; local `down108-20261015/`. Same pinned model
+  and MLX-audio revisions as the preceding investigation. Refresh on source,
+  model, input, runtime/reference, precision, device/OS or artifact drift.
+  Adversary ROBUST for the bounded differential, not production parity.
+  Continue sequential heavy runs through run_safe with sampled reserve15%,
+  profiling unset and unrelated processes untouched; no push.
+
+### Continuation 2026-10-15 — native MLX Q4 down arithmetic
+
+- At base `31920e41`, add an opt-in native affine Q4/group64 GPU path using
+  MLX0.31.1 packed lane expressions and SIMD reduction. On the exact upstream
+  row1/layer39 SwiGLU activation and verified target-MoE bytes, all 16,384
+  eight-expert outputs and expert108's 2,048 scalar outputs match upstream
+  bitwise. Repeat and scalar/batched controls match bitwise. The default
+  native arm reproduces failures 469/766/1555; no tolerance/precision change.
+- The original full gate was actually rerun: 243 boundaries, 497,664 values,
+  one remaining failure at row1/layer39.hidden[33]. Candidate absolute error
+  0.00034999847412109375 exceeds allowance 0.00033657508850097655; prior native
+  error 0.00081634521484375. Default-native capture equals its retained trace
+  bitwise on all 497,664 values. This is capture fidelity, not upstream parity.
+- GPU probe and full capture each have zero pre-drain reads/submissions/waits,
+  one final submission/wait, and unchanged counters during terminal reads.
+  A passive device-buffer callback replaces host boundary reads for the full
+  diagnostic. CPU handles checkpoint/fixture provenance and terminal analysis.
+- Exact normalized-input MoE replay at graph depth 2 passes every compared
+  intermediate/down/routed/shared stage at fixed tolerance, but final official
+  MoE output fails 1012/1111. Own gate/up activations are not bitwise upstream;
+  the full native input differs and is unqualified for exact-input localization.
+  Depth 0 comparator attempt was invalid (exit 2); depth 2 rerun is valid
+  (exit 1). Capture control matches 8,192 values bitwise; no added wait.
+- Observed guards: 24 Crystal examples and 32 Python tests pass. Distinct
+  K=1024 blocks, odd raw affine offsets, mixed F32/BF16/F16 metadata and shuffled
+  GPU IDs test indexing with exactly representable fixtures; they do not prove
+  general rounding equivalence. Actual 14 target-MoE tensors are byte-pinned.
+  Historical full reference lacks all-shard hashes; retain that provenance
+  limit and the immutable-checkpoint assumption.
+- Mini-Quadrumvirate verdict ROBUST for local down reproduction and measured
+  negative full gate; full production parity IN_PROGRESS. Selector
+  DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4 is frozen per backbone and remains opt-in;
+  native default, dense tree and MAP_SHARED off remain. No speed or LTP/WBA
+  promotion. Rollback: disable the selector or revert the atomic change.
+- Next falsifier: GPU substitutions of upstream gate/up-derived activation and
+  shared output on common normalized input, then the official final MoE sum;
+  retain full hidden[33] gate before promotion. Return pointer:
+  docs/drama3-native-frontier.md and .landmark/evidence/drama3-native-mlx-q4.json;
+  local raw artifacts mlx-q4-20261015/. Same pinned model/MLX-audio/MLX revisions
+  as prior discriminator. Refresh on source/model/input/reference/runtime/
+  precision/compiler/device/OS/artifact drift. Standing authority: sequential
+  run_safe runs, sampled reserve 15%, profiling unset, no unrelated process
+  manipulation and no push.
+
+### Continuation 2026-10-15 — DRAMA-3 thirty-word timing and silent suffix
+
+- At base `a21ee640`, native Metal seed1/temperature0.8/topk30/topp0.9,
+  graph depth2, native expert down/tree dense/MAP_SHARED off generates 489
+  frames with EOS in 186.776 s wrapper time: generation133.147 s and
+  DAC52.538 s, WAV22.709 s. This is a shared-host, uncontrolled-cache
+  measurement, not a speedup or steady-state claim. Phase clocks add no GPU
+  operation/read/wait; initialization means resident object construction.
+- Full 30-word delivery fails: user hears excellent whisper but no remaining
+  speech. Every half-second from9.5 s onward peaks at only1–2 PCM16 units.
+  Official DAC with identical codes is equally quiet. Whole-clip DAC error
+  max7/RMS0.168956 PCM16 fails the unchanged one-LSB gate; second-half max1.
+  A repeated main token spans frames198–262, but its causal role is unproved.
+  EOS/global RMS cannot certify word delivery; do not count silence as speech.
+- GPU teacher-forced common-prefix capture compares 140 steps, 1670 stages,
+  6269068 F32 values per arm, with F32-promoted upstream floating tensors and
+  packed integers preserved. Steps0/1/2/4/8/16/32/64/128/192/256 and every
+  361–489 are captured. Both down selectors first fail at447; all captured
+  through446 pass at atol6e-5/rtol3e-4. Native failures1051036/max0.861520767;
+  opt-in failures1051066/max0.861519337. Top1 differs448/463, top30 overlap
+  minimum28/30. Late observed drift cannot explain earlier silence. Sparse/
+  dense overlap146 stages/546829 F32 values matches bitwise in both paths;
+  this controls capture perturbation only on those overlaps.
+- Independently sampled low-level official controls use the same87 prompt IDs
+  and settings, rowwise prefill1 and different RNG. Canonical BF16/Q4 core
+  reaches768 cap with weak activity after1 s; F32 core returns384 frames with
+  near-silence after10.5 s. Neither verifies the requested speech. Initial
+  canonical load hit sampled free13% and was stopped by reserve15%; cache0
+  retries complete. Official EOS/DAC scalar reads remain. These controls
+  bypass public high-level chunking and do not establish a unique cause.
+- The public `Model.generate` F32 control returns both expected chunks with
+  default300-byte chunking/prefill128 in108.865 s wrapper time. Chunk0 has
+  534frames/24.799 s, with near-silence from8 s to its end (half-second peaks
+  20–28 PCM16); history-conditioned chunk1 has114frames/5.294 s and activity
+  through4.5 s followed by a quiet tail. Neither reaches its cap; exact stop
+  reason is unavailable. Public chunking does not remove chunk0's silent
+  tail. Changed chunking/prefill/RNG prevents a single-cause inference; no
+  speech-content or full-delivery pass is claimed.
+- Public F32 prompt ablation removes only the whisper wrapper, preserving all
+  words, laughter cue, settings and two chunk boundaries. It returns451/104
+  frames (20.944/4.830 s) in129.996 s wrapper time. Chunk0 half-second peaks
+  remain1–4 PCM16 from7 s onward. Removing the wrapper does not remove the
+  quiet suffix in this run; its contribution to the original trajectory is
+  still open. The port documents laughter cues but merely passes paired tags
+  through tokenization; that source behavior is not a learned-semantics proof.
+- Observed guards:18 Crystal examples and15 Python tests pass,87 prompt IDs
+  match, real CLI invalid range/cache bounds reject. Frame cap permits1–1024
+  with existing1024-row resident-cache guard; default160 and arithmetic stay.
+  Native selected control/terminal reads3928/4027404 bytes; replay pre-drain
+  reads0 and terminal serialization adds no submission/completion wait.
+- Mini-Quadrumvirate: ROBUST for bounded timings, capture fidelity and negative
+  gates; speech delivery/parity/root cause remain IN_PROGRESS. Evidence:
+  `.landmark/evidence/drama3-whisper30.json`, `docs/drama3-native-frontier.md`;
+  local raw artifacts `whisper30-20261015/`. All9 cached files are SHA-bound,
+  with post-run metadata recheck; not authenticated remote identity.
+- Generation next falsifier: equal reference precision, aligned random draws
+  and boundaries around first trajectory divergence/silence onset. Original
+  return frontier remains MoE39 row1 hidden[33], with common
+  normalized-input GPU substitutions described in `drama3-native-mlx-q4.json`.
+  No precision/tolerance/default/performance/LTP-WBA promotion. Rollback:
+  revert this measurement/probe commit. Refresh on source/model/input/reference/
+  precision/runtime/compiler/device/OS/artifact drift. Standing authority:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, no push.
+
+### Continuation 2026-10-15 — DRAMA-3 listening feedback and decoder clock
+
+- At base `f908862d`, the user confirms that both selected native seed1 and
+  F32 MLX clips lose all speech after the whispered phrase. The native whisper
+  sounds faster and higher to the user; no fundamental-frequency measurement
+  or word alignment is claimed. Other reference clips remain unlistened.
+- Read-only PCM analysis finds last RMS>32 windows ending at9.02 s native and
+  10.36 s F32 MLX, using20 ms windows. All three selected/same-code WAVs are
+  mono PCM16/44100 Hz with2048 samples per code frame. Same-code lengths match
+  exactly and PCM delta max7/RMS0.168956, excluding a substantial decoder-clock
+  shift for this pair while retaining the failed one-LSB codec gate.
+- The independent runs diverge at main token0 (250521 vs248764), with no
+  identical frame prefix. Text/87 prompt IDs/explicit settings match; RNGs
+  differ, so this comparison cannot isolate numerical error or explain pitch.
+- A NumPy activity probe through run_safe reserve15% and a separate stdlib
+  calculation agree on all three activity counts/endpoints and input hashes.
+  Local report: `listening-feedback-20261015/analysis.json`, SHA256
+  44f78b93d5cb1884595e5a48ce85040c5a5f8bafc8333e462794b9b224470751.
+  Scope is existing artifacts, not a fresh model run or speech/pitch proof.
+- Root cause remains open; generation next needs common-prefix GPU sampling
+  diagnostics with equal precision and aligned sampling inputs. Original MoE39
+  hidden[33] return frontier remains unchanged. See docs/drama3-native-frontier.md.
+  Refresh on artifact drift; no tolerance/default/precision/performance promotion.
+
+### Continuation 2026-10-15 — DRAMA-3 common uniforms and bilingual omissions
+
+- At base `3fc3de68`, add diagnostic-only fixed-logit GPU sampling and a pinned
+  MLX generation control using one uploaded F32 uniform tape in native call
+  order: main, unconditional retry, nine residual heads. This is an explicit
+  inverse-CDF shadow, not stock seeded MLX RNG parity. F32 core/Q4 integers and
+  checkpoint-dtype DAC follow the existing reference contract.
+- Original thirty-word outputs share448 full11-code frames (~20.8s), while
+  both become near-silent from9.5s. First emitted difference448 is too late
+  to explain that onset. Denser onset teacher forcing captures sparse0..64
+  and every96..223:6127752 values pass unchanged atol6e-5/rtol3e-4; terminal224
+  is separate/counterfactual. The unique checkpoint/reference cause stays open.
+- Actual tape/history replay matches9/9 RAS decisions. Main250598 is new at198;
+  at199 first/retry both accept it; at208 both filters retain only candidate2500.
+  Upstream retries once and may accept a repeat. This explains persistence,
+  not the earlier quiet transition. Do not change RAS to hide this negative gate.
+- Exact bilingual text preserves `Holliwood`. User hears RU+EN for native
+  seeds1/2, Russian only for3. Later blind ASR conflicts with the seed3 content
+  report; treat English omission as unresolved (see follow-up below). Seed3
+  and matched MLX retain all179 emitted frames and EOS equal; seed1 all197
+  equal. Seed2 diverges at12, column8. Randomized variants are not controlled
+  speaker identities. PCM/EOS cannot certify words.
+- Style ablations: whisper-only first diverges26; laughter-only198; both cues
+  all287 equal. Removing both cues from original30words yields768 identical
+  frames in both, at cap, with half-second peaks<=1 PCM16 from5.5s onward.
+  Whisper is unnecessary for the observed near-silent suffix.
+  No-cue full-text listening remains pending; do not infer transcript from RMS.
+- New discriminator: long styled/no-cue texts are360/332 UTF-8 bytes, exceeding
+  the high-level MLX default300-byte threshold. Existing controls deliberately
+  call one-prompt generate_codes, bypassing default chunk/history orchestration.
+  Official splits are265+94 /237+94 bytes. Two controls now use official
+  Model.generate split/history policy with F32/Q4,prefill1 and common uniforms.
+  No-cue emits515+89frames (23.917+4.133s); styled741+78 (34.412+3.622s), allEOS.
+  No-cue chunk0 half-second peaks<=5PCM16 from7s onward; styled chunk0 peaks
+  37–51 from12s onward. High-level orchestration retains a long quiet suffix.
+  Chunk1 signal is active; word delivery still requires listening. Within-text
+  controls change split/history/DAC segmentation together; across-markup
+  differences do not isolate chunking. Cap768 is per chunk versus per prompt,
+  not a matched total termination budget. Plain bilingual93bytes is unaffected.
+- New opt-in --chunk-text adapter builds official zero-code history prompts,
+  replaces guarded audio spans onGPU, then terminal-byte-compares all4prompts
+  against restored official build_chunk_prompt: all equal. One tape upload,
+  per-chunk frame caps/global capture indices. No in-loop actual history-code
+  readback by source inspection; official row-prefill/frame-EOS/DAC syncs stay.
+  Native styled chunk0 shares exacttext/71promptIDs/model/settings/initial
+  variates;427vs741frames,111fullframes equal, then columns9/10 differ at111.
+  This new fork is unlocalized, not a numerical parity pass. Native consumes
+  only main/retry on EOS versus all11slots inMLX; no native chunk1 or
+  cross-chunk draw-consumption parity. This is a custom sampler-shadow/GPU
+  history control of pinned text orchestration, not full stock execution.
+- Short-whisper replay all0..26 passes1216539 actual values. At26 residual
+  codebook4, candidates135/764 reverse rank by1.9–3.8e-6 scaled-logit units.
+  SharedU0.33058440685 selects rank6 away from a CDF boundary; both samplers
+  agree per fixed arm. This localizes the sampled fork to input rank sensitivity,
+  not the original arithmetic operation. No tolerance/precision/tie-band change.
+- Fixed-logit onset199cases agree on IDs/order/masks/common-noise IDs, but
+  strict parity FAILS on two one-ULP upstream discarded-tail CDF decreases at
+  unchanged1e-7 monotonic guard. Whisper67cases PASS, including3 RAS checks.
+  Native probes assert0 pre-drain reads/waits,1 queued batch/final wait;
+  terminal reads add no submission/wait. Existing generation EOS/status and
+  official MLX scalar controls remain. No new per-step activation readback.
+- Same-code PCM max/RMS: plain1=16/0.618570, plain3=10/0.464103,
+  whisper+laughter=10/0.228216, original-no-cues=3/0.182296. All retain failed
+  one-LSB DAC gate. Equal lengths/44100Hz headers do not establish F0 parity.
+- Evidence index: `.landmark/evidence/drama3-sampler-voices.json`; raw artifacts
+  `sampler-voices-20261015/`; details/next probes in `docs/drama3-native-frontier.md`.
+  Source/build/run receipts bind the observed harness externally; report shader
+  hashes alone are not execution attestation. All9 local checkpoint files are
+  SHA-bound with post-run metadata recheck; remote revision label unauthenticated.
+- Final tooling DoD: 20 sampler and 9 generation-control CPU tests pass;
+  AST/Crystal format/diff checks pass. Guards reject changed role parameters,
+  missing trace provenance, edited source bytes and vectors rebound to matching
+  outputs. Final retained comparisons reproduce onset FAIL (exactly two CDF
+  invariants) and whisper PASS; no ID/RAS mismatch. Correlated adversary ROBUST
+  for local artifact consistency, not strict parity or unique causation.
+- No production/default/performance/LTP-WBA promotion. Speech delivery, unique
+  silence cause, strict sampler/DAC parity remain IN_PROGRESS. Prior numerical
+  return frontier: MoE39 row1 hidden[33], see `drama3-native-mlx-q4.json`.
+  Rollback: revert diagnostic commit. Refresh on source/model/input/random tape/
+  reference/precision/runtime/compiler/device/OS/artifact drift. Standing scope:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, local commit only and no push.
+
+
+### Continuation 2026-10-15 — listening feedback and ASR falsifier
+
+- Base `3156210b`: user confirms no cat sentence in either named native/MLX
+  styled first chunk. Delayed “шорох / происходит” reply has ambiguous file
+  identity; do not assign it to both no-cue WAVs.
+- Direct audio input was rejected by this session. No model listening claim.
+  Pinned local Whisper turbo FP16 on MLX GPU ran 10 full/negative and 7 isolated
+  controls without target text, hotwords or transcript conditioning. ASR and
+  resampling host control are separate from unchanged DRAMA inference.
+- The empty-silence guard FAILS: both digital zero and actual quiet tail yield
+  “Thank you.” Full no-cue controls also append “Продолжение следует...”. ASR
+  outputs remain candidates, never proof of speech presence/absence.
+- Full seed3 and its isolated post-4s crop yield English, contradicting earlier
+  human Russian-only feedback. All three sequence segments byte-match their
+  seed WAVs, including3 and zero gaps. Reopen the English-omission inference;
+  preserve human report and ASR conflict. All179 matching codes/EOS still hold.
+- No cat sentence in either first-chunk ASR candidate; both last chunks yield
+  the requested final sentence as an ASR candidate. No full-delivery pass.
+  Original shared-code quiet onset remains measured; unique cause open.
+- Index `.landmark/evidence/drama3-listening-asr.json`; details in
+  `docs/drama3-native-frontier.md`. Next falsifier: full-stream cross-decode of
+  saved first-chunk codes, with an audible positive stream. Do not extend
+  shared-prefix decoder agreement to the diverging continuation. Refresh on
+  source/model/audio/preprocessing/options/runtime/listening-evidence drift.
+
+### Continuation 2026-10-15 — full-stream GPU DAC cross decode
+
+- Base `1898cc55`: four full saved streams (197 bilingual positive, native427
+  and MLX741 styled first chunks, common768 no-cue) decoded by native Metal
+  and pinned official MLX DAC on identical ten-book inputs, main excluded.
+  All58 actual boundaries compared on GPU; observer MLX output matches an
+  unobserved official decode elementwise4/4. Native observer-on/off spec
+  preserves output bits. No production arithmetic/precision/default changes.
+- Every embedding exact; all ten projections and combined sum within old
+  gates4/4. First failed observed boundary is post-transformer layer0 in all4;
+  max errors for first3 are0.0249863/0.0291367/0.0316620. Whole-block mismatch
+  does not locate the arithmetic primitive. All waveform and one-LSB parity
+  gates FAIL; PCM max16/4/13/3. No tolerance widening or parity promotion.
+- Lazy-GPU loader audit: independent541 sanitized tensor names/shapes exactly
+  match, all541 bind to supplied checkpoint array objects. Naive strictload
+  rejects120 nestedconv runtimealiases in60modules; all are overwritten from
+  loaded g/v/bias before every call/step. Alias-aware guard passes without
+  evaluation/decode. No missing independent weight found; this does not
+  certify checkpoint semantics or exclude a shared reference/codec defect.
+- Native427 quiet region4–19.830s peaks36–57PCM16; MLX741 region12–34.412s
+  peaks37–51; no-cue768 region5.5–35.666s peaks1. Each half-second peak equals
+  the cross decoder's. Quiet is low residual signal, not literal digitalzero
+  or a transcript. Native archived WAVs match bytewise3/3; legacy MLX PCM
+  reconstructed exactly3/3 after its half-away rounding. New WAVs use native
+  ties-even policy in both arms. The pinned MLX substitution does not restore
+  the quiet continuation: native-DAC-only explanation refuted for these codes.
+  Unique generation/shared-codec cause and speech delivery remain unresolved.
+- No native activation host reads before completed decode; depth2 retains32
+  submitted/completed buffers and terminal reads add no submissions/waits4/4.
+  Reference fixtures export only after full MLX evaluation and upload once
+  before native decode. Input/fixture/final serialization are outside inference.
+  No claim of zero existing GPU waits; timings include diagnostics, not perf.
+- DoD: GPU reducer corruption/F64-oracle/finite/index/window checks pass;
+  resident2 examples pass including passive hook/layouts; reference-input10
+  tests pass; Crystal format and diff checks pass. Source/run/fixture index
+  `.landmark/evidence/drama3-codec-cross.json`, raw `codec-cross-20261015/`.
+  Correlated adversary ROBUST for scoped substitution result, no parity or
+  unique-cause promotion. Device callback's buffer is mutable; read-only
+  behavior is checked for this probe rather than guaranteed by the API type.
+- Next silence falsifier: same full codes through original Fish codec or
+  independently validated speech codes; MLX alone cannot exclude shared
+  codec/checkpoint/representation error. Numeric frontier: capture layer0
+  attention_norm/QKV/postRoPE/attention/residual/FFN on matched input, allGPU
+  terminal comparisons. Return pointer: styled code fork111 and MoE39 row1
+  hidden[33]; no attribution without onset discriminator. Refresh on source/
+  compiler/model/input/reference/artifact/runtime/device/OS/gate/layout or
+  bound listening-evidence drift. Standing authority unchanged: sequential
+  run_safe, reserve15%, profilesunset, unrelated processes untouched, local
+  atomic commit and no push. Rollback: revert diagnostic commit, hookdefaultsnil.
+
+### Continuation 2026-10-15 — original Fish full-stream DAC control
+
+- Base `c259151d`: original Fish source54156693 and original codec74fc41c5
+  decode the same complete197/427/741/768-frame ten-book streams. Direct DAC
+  CLI F32 loader semantics preserve535F32 parameters, parametrized weight norm
+  and3BF16 RoPE buffers; complete Fish BF16 serving/text generation is untested.
+  All58 actual boundaries captured on MPS. Both full model calls have host-
+  tensor/scalar-extraction guards and CPU fallback disabled. Observed original
+  waveform equals separate unobserved full decode elementwise4/4.
+- Fish actual versus MLX reference: waveform pointwise and one-PCM-LSB gates
+  pass4/4, strict full-stage parity only2/4. Native427 fails8 stages, first
+  upsample1convnext; common768 fails postlayer7 alone. All gates unchanged.
+  Native versus Fish fails4/4 first at postlayer0; PCMmax16/4/13/3. Native WAVs
+  byte-match prior cross-decodes4/4; new MLX-reference regression reproduces
+  all58 stage metrics and WAV exactly. No production arithmetic/default change.
+- All3 decoders give identical half-second PCM peaks in measured quiet tails:
+  native427 at4–19.830s36–57, MLX741 at12–34.412s37–51, common768 at5.5–35.666s1.
+  Original Fish substitution does not restore the quiet continuation for
+  these saved codes. This rejects a decoder-port-only account, not shared
+  checkpoint/representation defects or generation/conditioning failures.
+  Peaks are not transcripts; prior human listening remains the content source.
+- CPU byte/source audit: all541 original tensors equal MLX after the exact
+  converter's BF16 promotion. Original535F32/3BF16/3bool; converted538F32/3bool.
+  MLX loads the serialized RoPE caches over its F32 constructor values; loaded
+  coefficients equal Fish BF16 values expanded to F32. Native recomputes
+  F32cos/sin. Concrete path difference, not measured cause. Next numeric
+  falsifier: replay exact loaded coefficients on GPU before block-level gates.
+- Original model/manifest/source/runtime/run hashes and measured DoD indexed
+  in `.landmark/evidence/drama3-fish-codec-cross.json`; raw full stages/WAVs
+  in `fish-codec-cross-20261015/`, not Git. Terminal diagnostics add no native
+  graph work/waits; existing depth2 drain remains32 completions. No performance
+  promotion or zero-existing-waits claim. Overall silence-cause frontier open.
+- Return frontier: generation quiet onset with matched conditioning/sampler
+  inputs; prior code fork111 and MoE39 row1hidden[33] remain distinct until a
+  discriminator connects them. Refresh on source/compiler/model/input/artifact/
+  runtime/device/OS/gate/layout or bound listening-evidence drift. Sequential
+  run_safe, reserve15%, unrelated processes untouched, local commit/no push.
+  Rollback is this atomic diagnostic commit; production kernels are unchanged.
+
+### Continuation 2026-10-15 — emotion placement and voice-control audit
+
+- Base51789b83: eight WAVs complete for RU/EN emotion-with-whisper-last and
+  matching no-cue bodies, seed1,512-frame cap, shared F32 uniform prefix.
+  Prompt IDs exact4/4. EN-end512, RU-plain463, EN-plain239 code frames exact
+  native/MLX; RU-end forks262 and lengths512/494. All inference arithmetic
+  stays GPU; existing EOS/status/drain reads remain. No precision/gate change.
+- User hears final phrase only in native RU-end, not EN-end. Both EN-end
+  decoders have matching peak9–22PCM16 half-second windows6.5–23.777s and no
+  EOS before cap. Code divergence is not necessary for this English result.
+  RU-plain also contains2–2.5s low intervals at peak2 in both decoders, so
+  tags are not necessary for those intervals. Signal windows are not words
+  or sentence alignment; no unique whisper/exit/language cause established.
+- Original Fish/MLX/native controls pass style cues as learned text, without
+  a whisper-state/reset parser. EOS/cap controls length; no energy stop or
+  scheduled inter-sentence gap. One-shot RAS checks prior16main IDs, not audio
+  silence; retry may repeat. Speaker0 is a participant token, not fixed voice.
+  Upstream cloning conditions on reference audio codes plus transcript;
+  native currently lacks reference prompt input/encoder. All8 omit references.
+- Report `docs/drama3-emotion-placement.md`; curated index
+  `.landmark/evidence/drama3-emotion-placement.json`; raw receipts/analyzer/
+  source-tokenizer audit/human bindings in `emotion-whisper-end-20261015/`.
+  Analysis/structural provenance checks pass; exact-code results do not close
+  floating-point parity. Correlated review only; silence cause IN_PROGRESS.
+- Next causal falsifier: same body with only whisper-position changed;
+  separately same plain text/draws with one fixed reference. Return numeric
+  frontier: loaded RoPE coefficients, then code-fork111/MoE39. Refresh on
+  source/model/tokenizer/sampler/conditioning/artifact/runtime/device/OS/gate
+  or bound listening-evidence drift. Authority: sequential run_safe, reserve15%,
+  unrelated processes untouched, local commit/no push. Revert docs/index for
+  rollback; no production behavior changed.
+
+### Continuation 2026-10-15 — bilingual whisper with native reference input
+
+- Base `7ad03c3c`: native reference audio/transcript support is now present;
+  the older voice-control audit's missing-native-reference statement is
+  historical. Four native and four pinned MLX WAVs repeat the exact historical
+  RU whisper/laugh text and a new EN translation, fixed public 3.904s reference
+  pair versus none, seed1/cap512. Actual 5632-F32 sampler input digests match
+  the native producer probe and common MLX prefix, not merely seed equality.
+- RU-reference all347 frames/11IDs exact, both EOS, no >=1s quiet run; GPU ASR
+  recognizes the requested continuation in both. RU-no-reference quiet from
+  9.5s, first code fork448 after quiet onset; native489EOS versus MLX512cap.
+  EN-no-reference all390 frames exact/bothEOS, quiet7–18s; EN-reference first
+  codebook fork28/main30, both512cap, quiet7.5–23.5s. Full-window ranges exclude
+  qualifying partial final windows. Reference-as-universal-remedy refuted;
+  native token divergence unnecessary for these quiet onsets. No language-only,
+  audio-only, unique-cause, laughter-delivery or voice-identity claim.
+- Fresh102 encoder/VQ boundaries, exact850 reference IDs/full prompt and
+  first-prefill pointwise gates pass for each language at depths0/2; metrics
+  identical cross-depth. Largest encoder maxAbs0.00062561035; all old tolerances
+  unchanged. Reused binaries freshly source/shader/checkpoint-bound, not rebuilt.
+  No intermediate activation/code host handoff or added drain; existing EOS/
+  control reads, CogniGraph waits, initial uploads and terminal diagnostics remain.
+- Unprompted GPU Whisper on8 full WAVs plus source-positive and exact-zero
+  negative: EN recognizes only pre-close text; RU-no-ref adds unrequested words
+  with an out-of-clip timestamp. Digitalzero says "Thank you." ASR/segment times
+  are fallible observations, not word/speech certification. GPU normalization/
+  resampling, no source-waveform CPU DSP;5 synthetic GPU resampler oracle cases
+  pass fixed2e-5/2e-6. Initial reserved-Metal-identifier compile failure retained
+  and narrowly resolved by exact-source-hash-checked rename; no threshold change.
+- Analyzer adds EN filename namespace and accepts actual max_frames status
+  with strict EOS/cap/count/tape/geometry checks. Step0 exporter admits strictly
+  validated capped captures while preserving raw termination and marking them
+  incomplete.51 CPU contracts pass. Report `docs/drama3-whisper-reference.md`,
+  curated `.landmark/evidence/drama3-whisper-reference.json`, raw receipts/WAVs
+  in local `whisper-reference-20261015/`. Correlated mini-Quad ROBUST for narrow
+  measurements; full generation/decoder numeric parity and silence cause open.
+- Next discriminator: replay common EN-reference prefix and compare tower/
+  codebook decision28 on identical uniforms, then main30. Separate causal probe:
+  vary only whisper-cue placement/syntax on fixed conditioning. Return to
+  MoE39/DAC frontiers without attributing silence absent a connecting test.
+  Refresh on source/checkpoint/input/tape/reference/artifact/runtime/device/OS/
+  gate or bound listening-evidence drift. Authority: serial run_safe, reserve15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback tooling/
+  report commit; no production inference arithmetic changed.
+
+### Continuation 2026-10-15 — acting prompts and wider output window
+
+- Base `8e1f326a`: two no-reference Russian prompts (newsreader/storyteller and
+  a newly written Max/Juffin dialogue), each native/MLX at caps512 and768.
+  Actual native F32 uniform prefixes proved and matched upstream shadow
+  sampler; the wider plan changes only the cap. All four same-backend first512
+  code prefixes equal their initial runs exactly on GPU, all11 IDs.
+- 512 was an experimental cap, not the native context ceiling. Metal requires
+  prompt_rows+max_frames-1<=1024; prompt lengths158/190 permit867/835 frames.
+  The768 tests fit925/957 resident rows. Beyond1024 needs full-attention
+  scratch/guard changes (`scores[1024]`), not only a CLI override or KV eviction.
+- Wide news: native768cap/35.666s, MLX741EOS/34.412s, all-ID fork704. Both
+  quiet from11.5s through the final full windows35.5/34.0; partial peak2PCM16.
+  This rejects a512-cap-only explanation for this prompt/seed's missing voiced
+  continuation; silence cause remains open. Wide dialogue: native525EOS/24.381s
+  and MLX645EOS/29.954s, code/main forks126/132, long internal pauses persist.
+  ASR recognizes final dialogue reply in both; no listening/acting certificate.
+- First-prefill hidden/main-logit GPU gates pass unchanged3e-5+3e-4abs(ref),
+  zero failures/nonfinite for both prompts at prompt-only and wide capacities.
+  Wide probes request1frame with768 cache budget, not full768-step traces.
+  Terminal metric reads add no graph work at depth2. Comparison stdout and
+  embedded support shaders are bound to executed binaries;14 CPU guards pass.
+- ASR still omits news storyteller, adds unrequested "Продолжение следует...";
+  exactzero says "Thank you." No words/identity certification from ASR or
+  amplitude, no full generation/DAC numeric parity. Native remains speaker0;
+  two actor roles are learned cues, not separate speaker assignments.
+- Report `docs/drama3-acting-tests.md`, index
+  `.landmark/evidence/drama3-acting-tests.json`, raw receipts/WAVs in local
+  `directing-roles-20261015/` and `directing-roles-wide-20261015/`. Retained first
+  wide sampler compile failure resolved by proper Metal flags before generation.
+  Correlated mini-Quad ROBUST for narrow measurements/cap falsifier, VULNERABLE
+  for successful acting or unique cause. No production/default/precision change.
+- Next causal probe: direction/cue-format-only ablation, fixed spoken text and
+  sampler inputs; no established newline cause. Return numeric frontiers:
+  generation common-prefix forks and prior MoE39/DAC, without causal promotion.
+  Refresh on source/model/tokenizer/input/tape/conditioning/artifact/runtime/
+  device/OS/gate or bound listening-evidence drift. Authority: serial run_safe,
+  reserve15%, unrelated processes untouched, local atomic commit/no push.
+  Rollback this report/index/landmark commit; keep raw evidence outside Git.
+
+### Continuation 2026-10-15 — wider Metal window and explicit DAC scratch
+
+- Base `f74318bf`: Metal resident allocation accepts up to 4096 total positions
+  (`prompt_rows+frame_bound-1`); <=1024 retains the legacy attention kernel.
+  Wider allocation uses persistent device score scratch with unchanged scalar
+  reduction order. CPU remains 1024; default generation remains 160 frames.
+- Three DAC scratch slabs are allocated once per decode, reused by backing-handle
+  liveness exclusion, then explicitly released after the existing finish. Traces
+  bypass scratch; uncertain error drains quarantine. Other temporary buffers,
+  wrappers and host outputs still use GC. No whole-pipeline GC-free claim.
+- Same actual 768 codes, serial private-mmap pairs at depths 0/2: all four F32
+  digests exact; 32 submissions/waits, 4 control bytes and 6,291,456 terminal bytes
+  unchanged. Requests 27.004->3.549GiB; sampled peak Metal 21.855/25.030->5.276GiB.
+  Arena timings 108.817/106.528s versus fresh 82.531/87.173s are slower on shared
+  host, so `DRAMA3_DAC_SCRATCH=0` remains default; no speed promotion.
+- Actual 2048-frame DAC cyclic replay completes in 237.252s, 95.109s output, 4.5GiB
+  total scratch, sampled peak Metal 9.639GiB; 32 existing waits, no terminal-read
+  graph work. This is saved-code allocation evidence, not 2048 LM steps.
+- Final 17 CPU/18 GPU specs pass, including wide attention lengths 1025/2048/4096
+  at depths 0/2, exact legacy 1024 output, alias/trace/error/quarantine guards.
+  Valid per-buffer red tests found conv-history and doubled-q-projection
+  omissions; checked byte maxima repaired. CPU and Metal CLIs compile.
+- Pinned upstream first-prefill gates pass at capacity 2205 (2048-frame budget),
+  hidden/logit maxAbs 4.7683716e-6/1.4305115e-5, unchanged 3e-5+3e-4abs(ref), zero
+  failures/nonfinite. Fresh 58-stage DAC metrics equal the earlier control;
+  quantizer.post_module.layers.0/full/one-LSB failures remain, maxPCMerror 16.
+- Full native news bound 1100 allocates 1257 resident rows, stops EOS at 773 before
+  old execution ceiling. All 768 prior native frames/11IDs exact on GPU; pinned
+  MLX fork remains 704. Actual 12,100-F32 sampler upload hash bound to producer;
+  first 8448 uniforms exactly equal prior native/upstream tape. No 1100-step,
+  full upstream trajectory, silence repair or acting-quality claim.
+- Experimental auto budget keeps 15% physical reserve+1GiB margin, checks mapped
+  inventory/static copies/caches/decoder/temporaries and maxBufferLength. First
+  live plan refuses under pressure; final-source plan admits 687 frames/844 rows
+  after headroom increases. Plan-only outcomes, not auto-sized generation or
+  physical reservation: host GC/driver retention remains uncertified.
+- Report `docs/drama3-window-memory.md`, curated
+  `.landmark/evidence/drama3-window-memory.json`; raw receipts/hashes/WAVs in
+  local `window-scratch-20261015/`. Correlated mini-Quad ROBUST for narrow
+  results, VULNERABLE for speedup/physical guarantees; neither promoted.
+- Next performance discriminator: interleaved fresh/arena GPU timeline versus
+  host encoding time; broader backbone/tower workspace remains separate.
+  Native 773 run records 1,419,434 Context.alloc calls, not allocation time.
+  Return numeric frontier: MoE39/common-prefix forks and prior DAC stage, with
+  old gates intact. Refresh on source/model/input/tape/fixture/runtime/device/OS/
+  precision/gate/graph-policy drift. Authority: serial run_safe, reserve 15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback disable
+  arena/auto and use <=1024 positions, or revert the feature commit.
+
+### Continuation 2026-10-16 — opt-in tower codebook embedding fusion
+
+- Base `37ee7fdd`: an eight-codebook sum drops 26 allocations/dispatches to one
+  GPU kernel reading mapped BF16/F16/F32 bytes at their original byte offsets.
+  Sequential FP32 addition, semantic masking and clipping are preserved; scaled
+  tensors fall back. Existing command leases retain weight/frame/output; no new
+  hot-loop readback or wait. `DRAMA3_TOWER_EMBEDDING_FUSION=0` remains default.
+- Four focused Metal examples pass. At depths0/2, 1,179,648 output elements per
+  depth are bitwise exact; seven alternating 64-op pairs show median paired GPU
+  speedups10.00x/10.69x for this operation only. No per-operation fence.
+- Eight cold/warm native worker jobs in 0/1/1/0 arm order produce the same60
+  frames/all11IDs and WAV bytes. Warm allocations135590->133034; readbacks and
+  122 submissions/waits unchanged. Warm request medians29.53s/31.54s reject
+  whole-generation speed promotion on this shared-host sample.
+- Fresh pinned MLX F32 control with the same704-F32 sampler inputs matches the
+  complete60-frame code trajectory. First-prefill hidden/logits pass unchanged
+  3e-5+3e-4abs(ref), maxAbs4.7683716e-6/1.4305115e-5. No stock-RNG, general
+  MoE/DAC, long-generation, silence or voice-quality parity claim.
+- Report `docs/drama3-tower-embedding.md`; curated receipts
+  `.landmark/evidence/drama3-tower-embedding.json`; raw local
+  `drama3-runs/studio-20261015/`. Correlated mini-Quad ROBUST within these bounds.
+  Next falsifier: interleave whole jobs and separate host encoding/allocation
+  time from GPU time before workspace reuse. The135590 allocations are a lead,
+  not a measured cause. No LTP/WBA certificate.
+- Refresh on source/shader/model/input/tape/runtime/device/OS/graph/precision/
+  tolerance drift. Authority remains serial run_safe,15% reserve, unrelated
+  processes untouched, local commits/no push. Rollback flag0 or this commit.
+
+### Continuation 2026-10-16 — local native voice studio
+
+- A loopback Crystal HTTP app now owns persistent editing sessions, reference
+  voices, segment revisions, immutable takes, serialized generation/export jobs
+  and local WAV/MP3/Opus files. Build with `make drama3_studio`; usage and bounds
+  in `docs/drama3-studio.md`, admitted frontier in `drama3-studio-frontier.md`.
+- One lazy native Metal worker reuses static model mappings/tensors/pipelines;
+  every job receives fresh KV/recurrent state. Reference encoding, generation
+  and DAC remain resident. Existing EOS/terminal reads and waits remain; host
+  media I/O and between-job GC are explicit. No GC-free or total-speed claim.
+- Revision snapshots keep late results in history without selecting over newer
+  edits. Exports snapshot selected takes in order. Selected/active/export-source
+  assets have deletion guards; metadata failures roll back and pause/retry the
+  consumer. Startup fails interrupted jobs and recovers deletion tombstones.
+  Worker quiet timeout5min and ffmpeg timeout30s kill/reap owned hung children.
+- Final18 CPU examples pass, including stale revisions, persistence faults,
+  invalid HTTP/ranges, ordered PCM/codecs and hung-child recovery. Release Metal
+  Makefile build passes. All final Crystal sources match the tested source;
+  served embedded assets match source bytes. UI polls retain drafts, focus/caret,
+  disclosures and export format; frame/detail progress does not rebuild editor.
+- Real browser flow: two sessions across restart; one public reference import;
+  three GPU jobs (one no-reference/two reference, two warm); take selection,
+  rename/archive/restore; three exports and byte-exact Opus download. WAV PCM
+  exactly equals ordered selected-source PCM. Chromium decodes/advances all three
+  formats. Desktop/mobile have no horizontal overflow or JS errors in final
+  bounded probe. Mocked UI progress/fault transitions are not GPU evidence.
+- No-reference browser WAV equals the eight-job repeated probe; pinned MLX
+  shared-tape60-frame/full11ID check and old prefill gates pass. No general
+  MoE/DAC, silence/prosody, seamless segment or voice-identity certificate.
+  Hard crashes may leave unregistered output/report files; no orphan sweep or
+  fsync durability guarantee. Keep service local; no multi-user boundary.
+- Curated `.landmark/evidence/drama3-studio.json`, raw local
+  `drama3-runs/studio-20261015/`; correlated mini-Quad ROBUST for bounded workflow.
+  Next falsifier: longer reference-conditioned sessions plus listening and
+  unchanged upstream gates. Return numeric frontier remains MoE39/common-prefix
+  and DAC first post-module stage. Refresh after source/assets/schema/model/input/
+  tape/runtime/device/graph/precision drift. Standing authority: serial run_safe,
+  reserve15%, own children only, local commits/no push. Rollback studio commit;
+  preserve local data and use standalone generator.
+
+### Continuation 2026-10-16 — generation workspace allocation reuse
+
+- Base `ce592825`: optional `DRAMA3_GENERATION_SCRATCH=1` gives backbone,
+  tower.prefill, tower.sample and main one GPU backing per call ordinal. Slots
+  allocate on first use, remain ordered on the same tracked queue, then release
+  after the existing terminal boundary. Uploads/static conversions/finite status
+  stay fresh; escaping frames stay persistent; traces bypass reuse and late
+  enablement rejects. Growth retains replaced backings; abort quarantines them.
+- Short warm worker generation drops 135139->1894 backing allocations and
+  1596632160->22125244 requested bytes; four plans total 22110080 bytes and end
+  with zero live slots/bytes. V1 host construction clocks819–892->7.15–9.37ms
+  measure only MetalBuffer.new. Per-job plans, wrappers/metadata/GC and codec
+  allocations remain; this is ordinary reuse, not an LTP/WBA certificate.
+- All18 paired full jobs (6 timer-on,8 timer-off v1,4 timer-off final source)
+  retain all60frames/11IDs, WAV bytes and sampler/readback/graph ledgers:
+  122 submits/waits, maxpending2, control496bytes, terminal494160bytes. Final
+  source includes retired-backing and fresh-only capacity guard fixes; old
+  timing receipts are not promoted to final-source measurements.
+- Warm v1 request medians28.588s fresh/29.546s reuse; final-source one-per-mode
+  warm27.618s/31.935s. No stable request-to-WAV speedup; default scratch0 remains.
+  Next discriminator: host encoding/bookkeeping/GC versus DAC host-time variation
+  using paired jobs and existing GPU timestamps, not allocation count as value.
+- Final native full60-frame GPU comparison matches the saved pinned MLX F32-core
+  control on shared effective tape draws. Actual reused158-row prefill at2205
+  capacity gives zero fresh/reuse hidden/logit bit mismatches and zero failures
+  under unchanged3e-5+3e-4abs(ref). Post-first backbone/tower.prefill scopes create
+  no new backing allocations; both arms retain159 existing submits/waits.
+- Final49 Metal and29 CPU examples plus release build pass. Depths0/2, two pending
+  commands+GC, actual slot growth/retired storage, status/zeros, ownership, retained
+  traces, late-enable rejection, generated-frame handoff and reference guards
+  covered. Native wait source establishes terminal Metal completion before
+  status errors; generic foreign-queue/hardware-loss recovery remains untested.
+- Report `docs/drama3-allocation-reuse.md`, curated
+  `.landmark/evidence/drama3-allocation-reuse.json`; raw local
+  `drama3-runs/allocation-reuse-20261016/`. Correlated mini-Quad ROBUST within
+  bounded storage/numeric checks; no overall performance promotion. The first
+  external prefill helper failed on config nesting before inference; corrected
+  native TowerConfig helper passes and both receipts remain.
+- Return numeric frontier: MoE39/common-prefix forks and DAC post-module stage;
+  no long-speech/identity/prosody, stock-RNG, cross-job pool or whole-GC claim.
+  Refresh on source/shader/checkpoint/input/tape/fixture/precision/gate/graph/
+  runtime/device/OS drift. Authority: serial run_safe,15% floor, unrelated
+  processes untouched, local atomic commit/no push. Rollback flag0 or feature
+  commit. Paired host noise/uncertified speed is an explicit default blocker.
+
+### Continuation 2026-10-16 — host command and GC attribution
+
+- Base `b3144c85`: optional `DRAMA3_HOST_PROFILE=1` uses fixed timer/counter
+  arrays for backings/views, workspace, pipeline, encoder API, retention and
+  command creation/submission. Separate existing waits from encoder acquisition;
+  nested wall timers overlap GPU work. Coarse managed-GC snapshots and the
+  existing between-job GC are explicit. No shader/arithmetic/precision/tape or
+  GPU submit/wait/read boundary change. Disabling fine clocks leaves the facade
+  and coarse snapshots; reverting this commit removes all instrumentation.
+- All44 worker jobs (24 primary,12 old/current,8 existing-timestamp controls)
+  retain full60-frame/11-ID codes, WAV bytes, sampler and queue/read ledgers.
+  Warm profiled generation medians: backing770.3->8.2ms, full-GC1222.5->20.5ms,
+  encoder API54.6/46.3ms, retention16.9/19.7ms fresh/reuse. GC overlaps timers;
+  counters/managed bytes are not a typed object census or CPU-time budget.
+- Timeline-off warm request medians26.853s fresh/28.466s reuse for2.786s audio:
+  9.6/10.2 request seconds per audio second, including WAV/report/post-job GC,
+  excluding model loading. Paired deltas and same-mode repeats vary by seconds.
+  Existing timestamps stay near15.5s generation-command sum/6.0s DAC; waits vary.
+  Unique slowdown cause, zero instrumentation overhead and general speedup are
+  unproven. Scratch remains opt-in; no broad host-object rewrite is justified.
+- Final33 CPU/51 Metal examples, release build, saved MLX shared-tape full-code
+  comparison and158-row prefill pass unchanged gates. Prefill fresh/reuse is
+  bitwise equal; graph depths0/2 transparency and terminal reduced metrics keep
+  existing boundaries. No fresh MLX audio, stock-RNG, long-speech or general
+  MoE39/DAC numerical/voice-quality claim. Final mini-Quad review is ROBUST
+  within this diagnostic scope; same-lineage review is correlated.
+- Report `docs/drama3-host-attribution.md`, curated
+  `.landmark/evidence/drama3-host-attribution.json`; raw local
+  `drama3-runs/host-attribution-20261016/`. Source seal binds42 production files
+  across8 commands and the same current binary; old binary matches its prior
+  hash and committed per-file source. Refresh on source/shader/checkpoint/input/
+  tape/gate/precision/graph/runtime/device/OS drift or contradictory results.
+- Next falsifier: attribute generation GPU kernels and command-wait variation,
+  keeping DAC separate; return numeric frontier remains MoE39/common-prefix and
+  DAC post-module stage. Authority: serial run_safe,15% floor, own children only,
+  unrelated processes untouched, atomic local commit/no push. No LTP/WBA claim.
+
+### Continuation 2026-10-16 — GPU kernels and command-start variance
+
+- Base `22c99628`: optional native timeline surrounds the existing commit/wait,
+  preserves authoritative status when timestamps/callbacks fail, and logs after
+  the measured wait. All six full requests retain codes/WAV/tape/ledgers; 732
+  command timestamps are valid. A 6.5175s warm wall spread has +6.5398s before-GPU
+  wait and -0.2943s GPU duration sum. First prefill contributes 6.2344s of the
+  before-GPU increase; residency/resource/driver/competing-work cause remains
+  unresolved.
+- Bounded Instruments capture qualifies 54508 shader samples/44 labels but has
+  overlapping intervals and no additive family weighting. M2 Max rejects
+  dispatch-boundary counters. No dominant-kernel ranking follows. Raw traces
+  were removed; capture harness now uses an explicit environment allowlist.
+- Opt-in `simd32` dense preserves the original 64-lane partial-sum tree, with
+  original-kernel fallback outside SIMD width32. Native affine expert32 uses
+  unchanged group order only at <=32 groups; group33 retains64. Independent
+  Q4/Q8 scalar/shared/per-rank constants cover that boundary. Defaults stay
+  dense tree/expert64; no LTP/WBA or zero-instrumentation-overhead claim.
+- Actual-weight tower probes are bitwise equal and locally faster. Captured
+  upstream-input expert32/64 probes give paired GPU ratios1.04383 and1.06120,
+  seven faster32 pairs per capture. Three full ABBA matrices,12 jobs each,
+  retain complete outputs/ledgers but establish no request-to-WAV gain. Latest
+  expert64/32 warm medians29.7862/30.5885s for2.7864s audio, RTF10.690/10.978.
+- Final62 Metal/10 offline tests, same-tape saved-MLX60-frame/full11-ID GPU
+  comparison and combined simd32/expert32 reused158-row prefill pass. Native
+  fresh/reuse is bitwise equal; upstream remains within unchanged3e-5/3e-4.
+  Source seal binds43 production files across11 final commands. Older dense/
+  timeline evidence retains capture-time lineage; saved-baseline differing
+  source bytes remain unavailable. General MoE39 numerical failure stays open.
+  Final correlated mini-Quad review is ROBUST within this bounded scope.
+- Report `docs/drama3-gpu-kernels.md`, curated
+  `.landmark/evidence/drama3-gpu-kernels.json`. Stable reference/run files moved
+  to `/opt/mldata_ssd/cogni-ml`:25067 files/52095286973bytes SHA-verified, original
+  paths remain compatibility symlinks. All6 DRAMA weight shards stay local;
+  active browser log retains its local inode. Cold timings cannot span the move.
+- Next falsifier: separate pre-start resource/residency from other GPU/driver
+  work, or compare guarded aligned Q4 loads with existing byte loads on captured
+  inputs. Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+  Streaming is design only; first check stateful chunked DAC against whole
+  decode, then prove PCM ownership/backpressure/cancel behavior. No latency claim.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS drift or contradictory evidence. Standing authority: serial
+  run_safe,15% floor, unrelated processes untouched, exact-path local atomic
+  commit/no push. Rollback flags/defaults or this isolated feature commit.
+
+### Continuation 2026-10-16 — first-prefill startup attribution
+
+- Base `ccb0d178`: default-off `DRAMA3_METAL_RESOURCES=1` observes process
+  user/system CPU, task page-ins/faults and process disk-read/resident/footprint
+  counters. Requires graph depth1/2 and implies timeline. Passive Metal kernel
+  scheduling timestamps are read after the existing completion wait. No shader,
+  precision, inference synchronization, GPU activation read or default change.
+- Twelve off/on/on/off requests retain full60x11 codes, WAV, sampler and
+  122-wait/read ledgers. Six observer-on first commands show10.7–24.7ms before
+  commit,11.38–11.96s cold or0.35–4.83s warm driver scheduling, and0.163–0.195s
+  GPU execution. Cold after-commit process counters add1,464,429 page-ins and
+  about24GB reads; warm has zero registered page-ins/reads and0.35–4.82s system
+  CPU. Cold means new process/mappings, not purged filesystem cache. Page-in is
+  insufficient to explain warm spread; its duration and pure GPU queue delay
+  remain unidentified. Kernel timestamp epoch is not assumed mach-relative.
+- Separate own-worker warm CPU samples locate Metal submission in
+  `IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap`; main thread
+  waits at the existing completion boundary. Three additional outputs remain
+  exact. Samples do not identify work below the trap or turn stack counts into
+  CPU time. Overlapping resource windows are distributions, never request sums;
+  mini-Quad rejected and corrected the initial additive interpretation.
+- Native observer test,63 Metal/6 CPU/23 offline cases, same-tape saved MLX full
+  codes and158-row prefill pass unchanged3e-5/3e-4 gates. Known MoE39 full
+  intermediate failure stays open. Pair-wrapper interruption is disclosed:
+  child driver PASS and12 manifests establish completion, no wrapper exit or
+  uninterrupted memory guard is claimed. No performance gain is promoted.
+  Final correlated mini-Quad verdict is ROBUST for the bounded diagnostic and
+  attribution scope; work below the driver kernel trap remains unresolved.
+- Report `docs/drama3-prefill-startup.md`, curated
+  `.landmark/evidence/drama3-prefill-startup.json`; raw local external SSD
+  `drama3-prefill-start-20261016/`. Next falsifier: establish resource
+  revalidation in the submission corridor; compare stable resource identity
+  with fresh wrappers over the same mappings, preserving queue/numeric gates.
+  Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS changes, contradictory results or evidence eviction.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  exact-path local atomic commit/no push. Disable diagnostics or revert the
+  isolated commit to roll back; no residency/lifetime rewrite is admitted yet.
+
+
+### Continuation 2026-10-16 — mapped weight wrapper lifetime
+
+- Base `99a4f447`: an opt-in, single-Context raw-weight bank compares persistent
+  no-copy Metal buffers with whole-bank release/recreation over the same mmap
+  owners, addresses, extents and offsets. Rotation requires an already terminal
+  queue, rejects active/aborted boundaries without a drain, and quarantines owners
+  on failure. Ordinary inference keeps its global cache through a nil-bank branch;
+  no shader, precision, inference wait/read or default policy changes.
+- Eighteen requests (two new-worker primes, sixteen warm) yield eight balanced
+  adjacent P/R pairs. Six mappings declare 25867452416 bytes; this is not physical
+  residency. Warm prepare medians 2.646us/1.087167ms, paired request R-minus-P
+  median -0.000816s, range -5.439325..+6.644850s, four wins each. Both modes retain
+  seconds-long first-driver spread. No speed/default promotion or equivalence
+  follows. Actual factory calls and backing identity are qualified; internal
+  driver registration reuse is unobserved. Quiet host is off.
+- Refresh also clears raw tensor-view objects, while converted GPU F32 weights
+  stay cached. Not every refreshed shard reaches the first warm command. This
+  is a combined wrapper/view-cache intervention, not pure Metal identity cost.
+  Warm first-command process page-ins/reads are zero; request-wide reads need
+  not be zero and process windows overlap. Zero counters do not prove residency.
+- All 18 full 60x11 codes/WAV/tape and 122-wait/read ledgers remain exact. Final 67
+  Metal cases, two saved-control MLX-GPU full-code checks and final hidden/logits
+  after 158-row prefill pass unchanged 3e-5/3e-4 gates. Prefill rotates five model
+  shards and also enables tested workspaces in arm 2; it is a combined numerical
+  guard, not per-row/layer parity or a performance contrast. MoE39 remains open.
+- Correlated mini-Quad verdict ROBUST within that scope; exact-run shard/cycle
+  objections are resolved by receipt/artifact qualification. Report
+  `docs/drama3-weight-wrappers.md`, index
+  `.landmark/evidence/drama3-weight-wrappers.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/`.
+- Next falsifier: view-only sham preserving Metal handles, balanced against P/R
+  on one Engine, plus passive per-shard first-command binding counts. Return
+  numeric frontier: MoE39/common-prefix and DAC post-module stage. Refresh on
+  source/model/layout/queue/input/tape/observer/host/OS drift, contradiction or
+  evidence eviction. Standing authority: serial run_safe,15% floor, unrelated
+  processes untouched, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated commit.
+
+
+### Continuation 2026-10-16 — raw weight views and binding exposure
+
+- Base `c37f4d91`: Context-mediated view-only reset retains identical raw Metal
+  buffers/mmap owners, while fresh reset recreates them. Existing terminal
+  guards reject active/pending/aborted use without draining. Passive binding
+  capture arms at the current command index, counts host set_buffer returns,
+  seals after the first existing submit and publishes only at terminal;
+  abort discards it. Direct bank use/concurrency and future aliases are outside
+  the supported boundary. No shader, precision, queue or inference read/wait
+  changes; disabled observer branch overhead is unmeasured.
+- One Engine completes one excluded prime and six P/V/R permutations (18 warm
+  jobs). P/V/R preparation medians 2.542us/3.917us/1.075104ms; first-driver ranges
+  0.391–5.862/0.393–9.054/0.377–6.375s. Within-triplet R-minus-P request median
+  -0.018379s, range -1.049909..+6.465244s, three wins each. All arms retain long
+  spread; no stable gain, equivalence, internal-registration inference or
+  default promotion. Active-host order/carryover remains a confound.
+- Every warm first command has 5442 bindings, 862 raw across five model shards
+  (100/183/198/190/191); codec 0. Six mappings declare 25867452416 bytes, not
+  physical residency or bytes read. All 566 converted GPU cache entries retain
+  their host identities. Warm first-command page-ins/reads are zero while
+  system-CPU time spreads into seconds; process windows are nonadditive.
+- All 19 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  69 relevant Metal/14 offline cases, three saved-control MLX-GPU code checks
+  and both V/R 158-row final hidden/logit gates pass unchanged 3e-5/3e-4. No
+  activation read or new inference synchronization. Endpoint parity does not
+  close MoE39 or establish general voice/prosody/DAC/long-speech parity.
+- Correlated mini-Quad verdict ROBUST for the bounded diagnostic, executed
+  numerical/queue contract and descriptive observations. Report
+  `docs/drama3-weight-views.md`, index `.landmark/evidence/drama3-weight-views.json`,
+  external raw root `/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/`.
+  Offline analysis alias failure is retained; v2 passes, with no GPU rerun.
+- Next falsifier: whole-shard versus narrower page-aligned no-copy resource
+  extent, with the view sham, mmap ownership/alignment/range checks and unchanged
+  numerical/queue gates. Earlier per-tensor views had no stable gain; the new
+  qualified sham/exposure addresses a missing discriminator, not that result's
+  automatic reversal. Return numeric frontier: MoE39/common-prefix and DAC
+  post-module stage. Refresh on source/model/layout/input/tape/tolerance/queue/
+  observer/device/OS drift, contradiction or artifact eviction. Standing
+  authority: serial run_safe, 15% floor, unrelated processes untouched, external
+  scratch/local weights, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — mapped weight resource extents
+
+- Base `30833811`: Context-mediated diagnostic transitions whole-shard to
+  page-rounded full-Tensor no-copy resources at the existing terminal boundary.
+  Release all old handles before construction; retain immutable mmap owners,
+  rebase/guard full raw intervals and all dynamically selectable experts. Exact
+  envelopes deduplicate; read-only overlaps report sum and union separately.
+  Replacement/legacy refresh discard stale first-command receipts, while a
+  same-layout view clear preserves them. No shader/arithmetic/precision or
+  inference submit/wait/readback changes; ordinary defaults remain whole-shard.
+- One Engine completes S/N/N/S blocks, each excluded prime then P/V/V/P:
+  twenty requests, sixteen scored. N-minus-S block medians favor N for P
+  (-3.477684/-5.359322s) but S for V (+9.493018/+2.230206s). No uniform layout
+  gain, equivalence, internal-driver explanation or default promotion follows.
+  First-driver intervals still span 0.316–9.421s. Active-host CPU/scheduling
+  variability, layout-by-view interaction and carryover remain confounds.
+- Mappings rise from 6 to 1310, first-command active resources from 5 to 853.
+  Warm raw binds remain 862; bound interval union falls only 0.0768%, about 24 GB still
+  exposed. All-resource sum/union are 24752242688/24732073984B for N, versus
+  25867452416B for S. These are API intervals, not RAM/residency or bytes read.
+  All 566 converted-cache host identities stay fixed; scored mapped-resource
+  construction/retirement is zero. Cold histogram differs and is excluded.
+- All 20 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  76 relevant Metal and 7 new/14 existing offline cases, four saved-MLX GPU code
+  checks and final 158-row hidden/logit gate pass unchanged 3e-5/3e-4. The latter
+  also enables existing workspaces and is a combined numerical guard. Known
+  MoE39 full-intermediate and DAC post-module frontiers remain open.
+- Two analysis-only failures are preserved: baseline list-length assumption,
+  then cold-versus-warm histogram scope. V3 and cross-artifact/source verification
+  pass without rerunning/excluding any matrix requests. Report
+  `docs/drama3-weight-extents.md`, index
+  `.landmark/evidence/drama3-weight-extents.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/`.
+  Correlated mini-Quad verdict ROBUST for the Context-mediated diagnostic,
+  fixed numerical/queue contract and descriptive conclusion; no independent
+  replication or causal timing claim follows.
+- Nomic comparison: GPU route and selected-rank projection batching already
+  exist in DRAMA (MoE dispatches 49 to 6). Nomic's historical cross-token batched
+  workload gain is not a DRAMA prediction: current prompt prefill/decode are
+  row-by-row, and transfer first needs a real multi-token backbone path. Do not
+  import its different quantized/FP16 arithmetic as a precision-preserving move.
+  Return numeric frontier remains MoE39/common-prefix and DAC post-module.
+- Reopen extent timing only with a new discriminator for host scheduling and
+  layout/view interaction. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/observer/device/OS/storage drift, contradiction or raw artifact eviction.
+  Standing authority: serial run_safe, 15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+  Rollback by omitting diagnostic enabling or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — genuine native batched prefill
+
+- Base `a15d4253`: opt-in layer-major backbone prefill batches dense and affine
+  expert projections across token/rank pairs. Temporal attention/conv/delta
+  updates preserve explicit causal base+row order; routing ties, reductions,
+  dtype and quantization are unchanged. Host and ResidentPrompt generators
+  teacher-force the original N-1 pairs, with separate prefill scratch and
+  borrowed-output lifetime guards. `DRAMA3_PREFILL_CHUNK=1..32`, default 1;
+  measured candidate 16. Normal execution adds no activation read/wait/submit.
+- Genuine missing matvec_rows RED witness, 86 Metal and 29 offline cases pass.
+  At graph0/2 the 158-row prompt has 932 native bitwise checks per depth, exact
+  following decode/head and saved-MLX terminal hidden/logits at unchanged
+  3e-5/3e-4. Twelve bounded 60-frame requests preserve all codes/WAV/tape/read
+  ledgers; WAV SHA256 bc4c5b258c08f25828c727c69c1033691da651dc936ab30583ade88a0994ff31.
+  Submitted/completed/waited counts are 310/309 at depth0 and 251/250 at depth2,
+  scalar/batch, pending zero. Exactly one empty multirow-tail command is elided.
+- Fresh pinned MLX scalar/sequence captures contain 109/110 tensors, all hashed;
+  canonical route IDs match independently reconstructed SwitchGLU IDs. The
+  unchanged intermediate 6e-5/3e-4 gate remains OPEN: per native arm scalar MLX
+  fails 100 elements across eight stages, sequence 222 across eleven. Native
+  scalar/batch metrics are identical, also across graph depths. Failures include
+  late residuals, expert down and routed/shared/output sums; not every coordinate
+  is proven to be the historical expert108 discrepancy. Passing endpoints do
+  not close this gap. Final parity writes 1307 checks and exits 1 as intended.
+- Isolated warm scalar/batch medians: backbone 20.296115/8.747524s at depth0,
+  18.912527/8.031174s at depth2 (2.320x/2.355x). MoE39 on the same 158 normalized
+  rows gives 2.192x/1.357x wall and 1.889x/1.201x GPU-interval-sum ratios.
+  Bounded-request wall medians are 47.263830/38.826715s and
+  45.247341/33.115445s (1.217x/1.366x); GPU-sum ratios 1.362x/1.340x.
+  Isolated ABBA+BAAB has four scored observations per arm; requests ABBA two.
+  Primes excluded, persistent weights/context, fixed seed/tape/input. These are
+  active-host descriptive observations with command-count-scaled telemetry,
+  not causal shader timings. GPU intervals may overlap; depth0 lacks spans.
+  The frame cap truncates output at 2.786395s, so no long-speech RTF follows.
+- Rejected fresh-Context timing pilot is retained. Early parity capture exit0
+  on a red JSON gate is superseded by final fail-closed CLI. `verify-final`
+  replays raw qualification, checks reference/source/log/build hashes and the
+  cross-depth numerical/output/queue scope: PASS_WITH_UPSTREAM_GATE_OPEN.
+  Correlated mini-Quad verdict ROBUST for bounded native mechanics/regression,
+  VULNERABLE for upstream compatibility/promotion. Default remains chunk1.
+  Report `docs/drama3-batched-prefill.md`, index
+  `.landmark/evidence/drama3-batched-prefill.json`, raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/`.
+- Next numerical falsifier: earliest late upstream failed row/channel on matched
+  inputs, separating expert-down reduction from shared/residual accumulation.
+  Direct token-row addressing to avoid GPU expert-input expansion is an
+  unmeasured performance candidate. Return numeric frontier also retains DAC
+  post-module fidelity. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/workspace/observer/device/OS/storage drift, contradiction or artifact
+  eviction. Standing authority: serial run_safe, 15% floor, unrelated processes
+  untouched, external scratch/local weights, exact-path atomic commit/no push.
+  Rollback by selecting chunk1 or reverting this isolated slice.
+### Continuation 2026-10-16 — late-layer matched-input fidelity
+
+- Base `d05bc45d`, diagnostics only. Original MLX scalar/sequence returns on
+  the same 158-row F32 input; selected exact operands at layers34–39. All219
+  overlapping prior arrays are bitwise unchanged. Config/index/all5 shards
+  hashed; stat identities unchanged through final verification. New shared
+  internal captures lack a prior no-hook control.
+- First bit difference is layer0 attention residual. First strict sequence
+  boundary is layer35.hidden row154/channel1277 (7.4863434e-5 error against
+  6.1382445e-5 allowance); scalar layer37.hidden row154/channel1557
+  (6.592274e-5 against6.5157314e-5). No widened tolerance. All162 boundary
+  metrics per depth reproduce the prior saved strict full-prompt gate.
+- Matched shared operations pass; exact routed+weighted-shared and exact
+  residual+upstream-MoE additions are bitwise through layers34–39. Native down
+  fails locally only at39 (7 scalar/1 sequence); first witnesses expert108.
+  Existing mlx_q4 down is scalar-bitwise on15,532,032 values but fails7
+  sequence39 values. Whole native MoE/residual replay failures are also39-only.
+  This cannot explain the earlier35/37 crossing; accumulated input drift and
+  local39 error are separate findings, and the former cause remains open.
+- All318 groups have identical metrics/witnesses at graph0/2, no nonfinites.
+  One66144-byte terminal receipt plus existing4-byte finite status; comparisons,
+  maxima, first64-bit coordinate and expert witness stay GPU. No intermediate
+  finish/read. Eleven submissions/completions/waits per depth; depth2 max2
+  pending and22,928,410,032 retained bytes, not physical residency. Both full
+  native CLIs retain exit1 for the red strict boundary gate. Production source
+  and defaults unchanged. One Metal oracle/16 offline tests and final source/
+  binary/weight/prior-gate crosschecks pass.
+- Correlated mini-Quad ROBUST for bounded observations; VULNERABLE for full
+  upstream compatibility or a single-cause explanation. Report
+  `docs/drama3-late-matched.md`, evidence
+  `.landmark/evidence/drama3-late-matched.json`, raw
+  `/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/`.
+- Active speed target is sustained RTF0.8–0.9 and separate first-audio latency.
+  Next performance discriminator: aligned packed-word expert loads preserving
+  exact arithmetic, then full trajectory timing if local output/timing passes.
+  Next numerical discriminator: sequence upstream quantized down on identical
+  operands, followed by earlier cumulative-coordinate decomposition. Refresh on
+  source/model/input/reference/tolerance/queue/device/OS drift or evidence loss.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+
+### Continuation 2026-10-16 — exact DAC Conv1d weight layout acceleration
+
+- From `fc717747`, normalized ungrouped Conv1d packs its effective F32 weights
+  as `[in,tap,out]` inside the existing apply pass. Scale reduction, serial
+  multiply/add order, bias/padding/dilation, allocation and dispatch counts
+  remain unchanged. `coalesced` is default; frozen
+  `DRAMA3_DAC_CONV_LAYOUT=native` restores the original path. Grouped/depthwise
+  and transpose kernels keep their original layouts.
+- Seven Metal examples pass. Direct weight/output guards stay GPU with a
+  20-byte receipt. All 58 real DAC stages,157,782,720 values, match native bits
+  with no nonfinites; negative controls pass. The first standalone report was
+  invalidated for lazy iterator exhaustion; only rebuilt r2 qualifies it.
+  Timed decodes have no observers/reads and retain32 existing commands/waits.
+  The untimed stage/negative receipts total472 bytes, including one separate
+  negative command. The 197-frame upstream control has identical58 metrics
+  and WAV in both arms; historical full DAC gate remains red, first at
+  post-module layer0. No tolerance changes or upstream compatibility claim.
+- Standalone DAC ABBA/BAAB medians6.298823/2.841204s (2.217x). Full-request
+  ABBA mirrored wins1.35797x/1.15125x; worker warm medians28.994506/23.131649s
+  for2.786395s audio,RTF10.406/8.302. All12 requests retain complete codes,
+  WAV,tape,reads/waits. Fresh unset-selector Studio cold/warm controls also
+  pass exact original baseline. Active-host generation timing shifts are
+  confounds; these are not independent replicas or realtime performance.
+- Correlated mini-Quad ROBUST within bounded parity/speed scope, with actual
+  root execution. Index `.landmark/evidence/drama3-dac-layout.json`, report
+  `docs/drama3-dac-layout.md`, immutable raw receipt
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS drift or
+  raw evidence loss; timing generalization also needs new host/input controls.
+- Packed-Q4 word loads gave no sustained win and were rejected. Next speed
+  discriminator is packing several output rows per64-lane affine expert group,
+  retaining native F32 subtotal/final-sum order. Numerical return pointer is
+  the late-layer slice above; neither strict backbone nor DAC gate is closed.
+
+### Continuation 2026-10-16 — guarded expert row-packing experiment
+
+- From `3a83aadb`, optional batched native Q4/Q8 group64 expert dispatch packs
+  several output rows per64-thread group for supported shapes. Byte loads,
+  F32 subtotal/final reduction order, allocations and command count stay the
+  same. `DRAMA3_EXPERT_PACKED_ROWS=0` is the frozen default and rollback;
+  scalar, MLX-Q4, requested32 and unsupported groups keep existing paths.
+- Two local captured-layer39 probes preserve7,077,888 values bitwise each,
+  with zero nonfinites and rejecting bit/NaN controls. Final paired native/
+  candidate ratios1.02022 gate,1.02347 up,1.29316 down; all7 pairs per family
+  favor the candidate. Timings are overlapping command intervals, not additive
+  family cost. All13 production Metal examples pass, including odd tails,
+  invalid IDs, fallbacks, branch-cache checks and env flips before dispatch.
+- Full12-request ABBA preserves codes,WAV,sampler tape,reads/waits, but
+  mirrored request ratios0.853759/1.018696 do not establish request benefit.
+  Keep default off. Fixed DAC timing also varies; no isolated causal expert
+  regression follows. DAC coalesced default and its prior qualification stand.
+- With packing enabled, the complete matched-input MLX report is identical
+  to native-depth2:162 boundaries+156 replays, same reads and11 waits. The
+  known strict gate remains false; neither backbone nor DAC parity is closed.
+  Correlated source mini-Quad review plus root execution support bounded
+  native parity, not independent replication or realtime performance.
+- Evidence `.landmark/evidence/drama3-expert-packed-rows.json`, details
+  `docs/drama3-expert-packed-rows.md`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/expert-packed-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS/host-load
+  drift or artifact loss. Next distinct hypothesis is shared-input qkv/z/b/a
+  multi-output dispatch with exact original row reductions; current additive
+  dominance is unproven. Require local GPU parity/timing then full requests.
+
+### 2026-10-17 — exact-tree backbone qkv/z/b/a dispatch experiment
+
+- From `932e7b6b`, a frozen opt-in selector combines four shared-input decode
+  projections into one dispatch, preserving byte decoding and the original
+  F32 lane/reduction order. Same four ordinal output allocations; no new
+  production commands, waits or reads. Unsupported formats/reductions fall
+  back. Unset/`DRAMA3_BACKBONE_DENSE_FUSION=0` retains the original four
+  inline calls and remains the default/rollback.
+- Final local production-API probe compares 2,668,032 values bitwise on GPU,
+  rejects bit/NaN controls, passes 37,056 upstream projection values at the old
+  tolerance, and gives 1.16824 pooled paired command ratio (21/21 wins).
+  This is a local command interval result, not an additive family cost.
+- Seventeen Metal examples pass. The new decode `#step` harness observes
+  frozen off/on arms and compares 243 boundaries / 497,664 native values exactly;
+  both arms have identical 243 upstream metric records. The existing strict
+  failure remains row 1/layer 39 hidden. Only 729 compact GPU receipts cross the
+  terminal diagnostic boundary (14,580 B plus existing 4 B finite control), with
+  one final command/wait. The older late-layer prefill gate cannot qualify
+  this changed decode dispatch.
+- All 12 full-request ABBA trajectories/WAV/tapes/reads/waits and corresponding
+  cold/warm allocation counts/bytes match. Request ratios 0.983651/0.952369
+  do not establish benefit; generation ratios disagree and unchanged DAC
+  varies. Warm worker request medians 24.626830/25.464262 s for 2.786395 s audio
+  give observed RTF 8.838/9.139. Keep default off. Do not infer causal slowdown
+  of this kernel or full upstream compatibility from these observations.
+- Correlated mini-Quad review plus root execution supports bounded native
+  parity/local timing. Details `docs/drama3-dense-fusion.md`, index
+  `.landmark/evidence/drama3-dense-fusion.json`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-commands.json`.
+  Refresh on source/compiler/model/input/reference/tolerance/queue/device/OS
+  drift or evidence loss; request timing also decays with host-load drift.
+  Sustained RTF 0.8–0.9 remains open. A separate possible next discriminator is
+  exact-tree tower FFN w1/w3 fusion; no current dominance claim is established.
+
+### 2026-10-17 — opt-in exact-tree tower FFN paired projections
+
+- From `2149cd03`, a frozen `DRAMA3_TOWER_FFN_PAIR_FUSION=1` combines
+  shared-input w1/w3 projections. Equal-row aligned BF16 pairs use two
+  independent original F32 64-lane trees with one shared input load;
+  supported other pairs use combined row domains. Unsupported cases retain
+  the established separate calls. Unset/`0` remains the default and rollback.
+  The two ordinal output allocations, production submissions, waits and reads
+  are unchanged; the new borrowed-buffer observer is normally nil.
+- Twenty release Metal examples pass. The final local probe preserves
+  2,654,208 values per arm bitwise, rejects bit/NaN controls, passes six MLX
+  projection controls at unchanged tolerances, and observes 1.16337 pooled
+  paired command ratio with 21/21 wins. Intervals overlap; they are not
+  isolated kernel times or additive family costs. The first generic variant
+  gave only 1.04135 locally and no reproducible complete-request benefit.
+- On the pinned 87-hidden-row fixture, 674 selected tower trace sites plus
+  the first decode frame give 675 exact off/on comparisons. These are 675
+  comparison triplets (2,025 raw records); the 675 per-arm upstream metrics
+  match across arms and between the two variants.
+  Three residual8 failures already occur in the unfused capture; strict MLX
+  compatibility remains false. This covers prefill row85 and decode row0,
+  not every cache history. Six projection payloads are hashed, not the whole
+  checkpoint; unchanged dispatch.cr was omitted from recorded source maps.
+- Final profiler-off ABBA and complete reverse BAAB preserve all24 codes,
+  sampler tapes, WAVs and allocation/read/wait ledgers. Warm worker request
+  medians separate/fused are 23.175658/24.907944s and 26.576364/28.817057s
+  for2.786395s audio. Mirrored request ratios0.904047/0.960349 and
+  0.787350/1.078039 do not establish request benefit. Unchanged DAC also
+  varies on this active host. Keep default off; sustained realtime is open.
+- The first reverse attempt is excluded after9 exact results because an
+  unfused worker aborted at exit. Its stack reaches the repeating GCD
+  watchdog's process-global mutex in unchanged bridge.mm after drained
+  graphs. Static-mutex teardown racing the callback is a hypothesis, not a
+  proven cause. The full unchanged repeat exits cleanly; this does not fix
+  the captured failure. Keep the strict worker-exit assertion.
+- Correlated mini-Quad review and root execution support bounded native
+  parity and the local observation, not independent replication or default
+  promotion. Details `docs/drama3-tower-pair-fusion.md`, index
+  `.landmark/evidence/drama3-tower-pair-fusion.json`; selected current and
+  historical source scopes remain separate under
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/`.
+  Refresh on source/compiler/bridge/model/reference/input/tolerance/queue/
+  device/OS changes or raw evidence loss; timings also decay with host load.
+  Next performance discriminator: full decode GPU attribution checked
+  against profiler-off WAV requests. Separate reliability return pointer:
+  a minimal watchdog/process-exit reproducer. Standing authority remains
+  serial run_safe,15% memory floor, external scratch/local weights,
+  unrelated processes untouched, exact-path local atomic commit/no push.
+
+### 2026-10-17 — complete decode capture and bounded watchdog teardown fix
+
+- `6ab91a4a` fixes process-lifetime ownership of the Metal watchdog registry.
+  The same final real-bridge teardown probe fails against the recorded source
+  with exit134/invalid mutex after a completed command and empty registry;
+  the candidate exits0 with the actual late callback completed. Normal,
+  disabled, concurrency and terminating-timeout guards pass. This establishes
+  a sufficient matching cause, not every possible shutdown fault. See
+  `.landmark/evidence/metal-watchdog-exit.json` and `docs/metal-watchdog-exit.md`.
+- Eight complete requests on the rebuilt binary (three workers exiting0)
+  preserve full frame codes, sampler tape and WAV against the saved baseline.
+  All five warm requests preserve allocation counts/bytes and read/wait/graph
+  ledgers. The fixed 60-frame request produces2.786395s audio; profiler-off
+  warm observations23.661635–26.733517s give RTF8.492–9.594 on this active host.
+  No new speedup, selector, tolerance, inference wait or activation read.
+- Native command-window unions place decode at11.07–11.23s, prefill4.56–4.62s,
+  DAC2.62–2.69s. They are not additive shader costs. First prefill waits include
+  6.3–8.6s before execution; page-in/resource/driver/contention cause is unknown.
+- Refuted route: phase-specific Shader Timeline family attribution. Despite
+  122 unique order-joined submissions and agreement with native GPU-window
+  unions,5,033 codec-labelled sample rows overlap mapped generation decode.
+  Source invokes DAC only after generation. V2 suppresses family/shader tables
+  and reports phase_attribution_rejected. V1 distributions are superseded;
+  do not infer DAC execution in decode, runtime bounds or a dominant family.
+- The bounded tower GPU replay reproduces all2,025 raw comparison records and
+  ledgers exactly;675 native off/on sites remain exact. The same three late
+  residual8 MLX failures remain at unchanged tolerances. This is no regression
+  at prefillrow85/decode0, not complete backbone/DAC upstream compatibility.
+- Confirmed performance frontier: validate a representative captured-input
+  decode replay with homogeneous production families, batched drains and exact
+  GPU checks before another kernel candidate. Full-WAV profiler-off pairs still
+  decide promotion. An isolated generation/DAC trace can separately test sample
+  semantics. Numerical return pointer: `docs/drama3-native-frontier.md`, late-layer
+  matched-input fidelity and layer39 MoE sections; strict gates remain open.
+- Details `docs/drama3-complete-decode-profile.md`; index
+  `.landmark/evidence/drama3-complete-decode-profile.json`; raw selected exports,
+  pinned executed harness and command receipts under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/`. Raw trace removed.
+  Current capture startup/cleanup refinements are CPU-tested; the recorded
+  experiment used the separately hashed earlier harness. Correlated mini-Quad
+  and root execution support only the declared scope. Refresh on source,
+  compiler/runtime, model/reference/input/tolerance/queue/device/OS or artifact
+  change; timing also decays with host load. Standing authority: serial
+  run_safe,15% memory floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commits/no push. NVIDIA work stays parked.
+
+### 2026-10-18 — GPU projection replay qualifies a bounded decode ranking
+
+- Diagnostic-only capture on the pinned short request covers exact projection
+  names in all40 backbone layers and all4+9 tower blocks at rows0/29/59:
+  597/598/598 calls. The first main head is explicitly omitted. Inputs, expert
+  IDs and outputs are snapshotted and compared on GPU before mutation; snapshots
+  add41,924,840B, with no extra capture wait or activation read.
+- The final role-split replay has423 paired identical-arm cells/rounds,
+  1,269 commands,55,616,202 checked values per arm, no bit/nonfinite mismatch,
+  and negative control[2,1]. Full60 codes/sampler tape/WAV and normal122-command
+  ledgers match. Exact inventory and kernel/reduction homogeneity guard against
+  missing or mixed captures;7 Crystal and13 Python guard examples pass.
+- Local per-row medians: expert down16.14–16.29ms, gate/up12.75–13.05ms,
+  qkv8.61–8.72ms. Other linear roles are separate. Recurrent state, attention
+  execution and sampler remain unranked; command costs are not additive request
+  costs. No production kernel/default changed and no WAV speedup is claimed.
+- Rebuilt bounded tower upstream replay equals all2,025 prior comparisons and
+  ledgers;675 native sites exact, same3 strict failure sites, unchanged tolerances.
+  Numerical return pointer remains late-layer/MoE39 in the native frontier.
+- Next falsifier: varying-input all-layer down and expert weighted-sum fusion
+  pairs preserving reduction order, then profiler-off complete WAV
+  qualification. Previous blanket SIMD/fusion/packing local wins did not admit
+  defaults. The unknown recurrent/sampler remainder can change priorities.
+- Details `docs/drama3-decode-replay.md`, index
+  `.landmark/evidence/drama3-decode-replay.json`, raw receipts/binaries under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/`. Root execution and
+  correlated mini-Quad review qualify only this diagnostic scope. Refresh on
+  source/compiler/runtime/model/input/reference/tolerance/queue/device/OS or
+  artifact change; timings also decay with host load. Standing authority:
+  serial run_safe,15% floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commit/no push. NVIDIA remains parked.
+
+### 2026-10-18 — Ordered expert down-sum fusion remains opt-in
+
+- Native Q4/Q8 group 64 candidate preserves group and rank fold order on GPU.
+  Twelve GPU examples and four offline driver checks pass; 120 actual captures
+  across all 40 layers/rows 0,29,59 and 243 boundary pairs are bit-exact. Saved MLX
+  metrics are identical; strict row 1/layer 39 failure remains open.
+- All 24 full requests across ABBA and reverse blocks preserve full codes,
+  sampler tape, WAV and 122-command/read/wait ledgers. Candidate saves 3,560
+  allocations/dispatches and 222.5MiB cumulative requested bytes per request.
+  No production synchronization or activation read is added.
+- Local paired command median ratio 1.679x is not isolated/additive shader cost.
+  Generation block medians decrease 6.18%/4.53%, but unchanged DAC moves and one
+  mirrored worker contrast regresses. Default stays 0; select
+  `DRAMA3_EXPERT_DOWN_SUM_FUSION=1` in a new Context for the candidate.
+- Details `docs/drama3-expert-down-sum.md`; source/artifact index
+  `.landmark/evidence/drama3-expert-down-sum.json`. Refresh correctness after
+  source/options/model/reference drift and timing after driver/device/load
+  changes. Root execution plus correlated mini-Quad review supports this scope.
+
+### 2026-10-18 — Prefill memory cause remains open; runtime stays stopped
+
+- The private fixed-coarse MLX probe stopped inside its first 269-row prefill
+  without memory counters or row progress. No generation or WAV result exists.
+  The user requires code investigation before any restart: model and Studio
+  must remain stopped. Preserve the aborted private script/log under
+  `/opt/mldata_ssd/cogni-ml/drama3-voice-diagnosis-20261018/`.
+- Source inspection at native base `60a28599` and MLX-audio
+  `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7` rejects KV growth alone as a
+  multi-GiB cause: capacity 256 to 512 adds 23MiB per arm; predictable complete
+  F32 recurrent/KV backing is about 108.81MiB. No obvious rowwise Python
+  retention or causal native Studio defect was found. Cause is IN_PROGRESS;
+  no model/cache/precision/kernel fix or numerical compatibility claim follows.
+- Header arithmetic for checkpoint `5331ab509359c0e4a7e353a19e255ddf3e8152a8`
+  counts 1,167 core tensors and 31,363,559,936 F32-loader bytes. This is neither
+  observed residency nor peak memory. Allocator scratch, reservations, page
+  residency and conversion transients still need discrimination.
+- `scripts/drama3/mlx_memory.py` provides header-only inventory and opt-in
+  stage/row telemetry on existing upstream eval boundaries, with an explicit
+  budget. It rejects chunk schedules other than one before model entry and
+  restores its process-global hook on exceptions. Ten CPU tests pass; no
+  MLX/Torch/model import, weight tensor load or GPU execution was used. The
+  observer is for an isolated single-threaded probe, not Studio, and cannot
+  prevent an intra-eval peak. See `docs/drama3-prefill-memory.md` for limits.
+- Next falsifier, only after runtime investigation is authorized: one bounded
+  first-prefill probe with stage/row active/cached/peak/RSS and cache metadata,
+  Studio off, fresh external output, normal run_safe 15% floor. Do not repeat
+  the full two-arm voice experiment first. Refresh on source, model, precision,
+  chunk schedule, MLX/driver or device change. Voice-quality work returns to
+  the fixed-coarse experiment after memory causality and a causal fix are
+  established; unchanged upstream tolerances and no-push authority remain.
+
+### 2026-10-18 — One bounded upstream prefill completes with stable row memory
+
+- The user authorized one measured first prefill with one MLX model, Studio
+  off. The exact private reference codes and text rebuilt the 269-row prompt;
+  the pinned F32 loader and upstream revision remained unchanged. The process
+  exited 0 under a 40GiB observed budget, 900s timeout and run_safe 15% floor.
+  Postflight found no probe process or Studio listener; free memory returned
+  to 82%. This completed grant does not restart the earlier voice experiment.
+- Core loading accounts for 29.2096GiB active, rising to 31.2396GiB after the
+  codec hook. Across rows 2..256, active-plus-cached spans only 0.375MiB;
+  sampled RSS drifts 7.375MiB. Row 257 adds the predicted 23MiB of logical
+  cache backing. The diagnostic tail copy adds 82.8125MiB of logical backbone
+  state; its physical increment was not isolated. The largest sampled
+  active-plus-cached value is 31.6531GiB. Sparse free-memory polls reached 27%,
+  which is not a continuously sampled minimum or an instantaneous safety cap.
+- The memory guard now includes cumulative MLX peak-active bytes, preventing
+  released transient peaks from escaping the next budget decision. A CPU
+  falsifier failed before the change; all 11 diagnostic CPU tests now pass.
+  The observer adds no GPU eval, wait or activation read at stage/row boundaries;
+  it still cannot interrupt an allocation inside an existing evaluation.
+- Official prompt assembly matches on GPU. One final-row backbone replay from
+  the copied pre-final cache has maximum absolute difference 0.0 and finite
+  endpoint hidden/cache arrays, with a +1 negative control. There is no matching
+  saved full-prompt golden or new independent native/upstream gate; tower and
+  all intermediate rows are outside this numerical check. Existing strict
+  tolerances and the native layer-39 discrepancy remain unchanged.
+- Root execution and correlated mini-Quad review support ROBUST only for this
+  first-prefill observation and numerical scope. Multi-GiB rowwise growth was
+  not reproduced; duplicate historical Studio instances remain plausible but
+  unproven. Repeated requests, generation retention and native worker lifetimes
+  remain open. Next discriminator is ownership/restart/cleanup inspection before
+  any separately authorized Studio run, not another unbounded two-arm probe.
+- Details `docs/drama3-prefill-memory.md`, index
+  `.landmark/evidence/drama3-prefill-memory.json`; private trace, harness and
+  receipts under `/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/`.
+  Refresh after source, checkpoint contents, precision, chunk schedule,
+  MLX/Metal/driver, device, input or concurrent-process changes. Timings include
+  telemetry and are not performance evidence. Model and Studio remain stopped;
+  unrelated projects were untouched, external scratch/local weights and
+  exact-path local atomic commit/no-push constraints remain in force.
+
+### 2026-10-18 — Studio model lease and bounded repeated-request memory control
+
+- The user authorized checking one-model ownership, several serial requests
+  under a stop budget and 15% floor, and automatic frame sizing. This superseded
+  the earlier no-restart restriction only for the bounded Studio/control batch.
+  The cooperating worker now acquires a per-user canonical-checkpoint lease
+  before Engine construction; different libraries, ports and symlink aliases
+  cannot load the same path concurrently. Other users, copies, older binaries
+  and standalone generators remain outside the lease.
+- Native PID 84823 completed three manual 128-frame HTTP jobs. Its fourth,
+  automatic request rejected with InsufficientBudget and the batch stopped.
+  A separate cold-auto-first pilot completed four requests in PID 99716:
+  automatic128 followed by three manual128. Both contenders failed before ready
+  without loading another model. Each worker reused its 566 converted tensor
+  identities (742818696 bytes); pending graph work and retained graph bytes
+  returned to zero, DAC scratch was released, and no extra GPU synchronization
+  or activation readback was introduced.
+- Post-GC tracked bytes in the first pilot were 26610326412, 26610338704 and
+  26610338704. The second measured 26610271116, 26610271116, 26610404364 and
+  26610420748: +149632 bytes across its manual series, including +16KiB in the
+  final pair. The fixed 32MiB warm-pair regression guard passed. This does not
+  establish zero retention or long-run leak freedom. Source review found no
+  unbounded per-job owner in the successful path; individual residual wrapper
+  identities are not observed. Driver allocation drift is a separate metric.
+- Minimum pre-GC sampled free/reclaimable memory was 20.0339%; maximum sampled
+  Metal allocation was 27029962752 bytes. Guards used a 40GiB observed budget,
+  finite request/series/outer deadlines, and the 15% floor; they are sampled,
+  cannot interrupt a GPU operation, and do not constitute a physical peak cap.
+  Both pilot servers/workers and the sequential MLX control exited. Final
+  process/listener checks passed; unrelated projects were untouched.
+- Auto mode is opt-in, uses the existing conservative advisory planner before
+  KV allocation, requires DAC scratch and no reference, and respects the user's
+  frame cap and 4096 total positions. Cold auto admitted 128 generated frames /
+  156 total positions, then emitted 60 and EOS. Exact duration is EOS-defined;
+  sufficient capacity for arbitrary text and mid-generation cache growth are
+  not implemented. Keep warm cold-inventory rejection: wrapper identity does
+  not prove mapped-page residency, so subtracting mapped weights was rejected.
+- All seven native outputs matched in codes and WAV. A fresh upstream control
+  at e7488935ec2ebfafd38ef2b58e290d79f3d05dc7 and checkpoint
+  5331ab509359c0e4a7e353a19e255ddf3e8152a8 used the same 128-frame cap, text,
+  prompt rows, seed, sampler settings and F32 tape prefix. Full 60-frame codes
+  and EOS matched each native output exactly. No new hidden/logit or waveform
+  numeric parity claim follows; layer-39 strict discrepancy and tolerances
+  remain unchanged. Native build, 41 CPU specs and 17 JS tests passed.
+- Evidence: `.landmark/evidence/drama3-studio-memory.json` and
+  `docs/drama3-studio-frontier.md`; private raw reports, harness, comparisons
+  and WAVs in `/opt/mldata_ssd/cogni-ml/drama3-studio-memory-20261018/`.
+  Next discriminator is allocation identity/lifetime tagging for the small
+  residual, followed by a bounded varied-input series if needed. Refresh on
+  source, checkpoint/config, input/tape/capacity, precision/tolerance,
+  allocator/graph policy, runtime/device/driver or concurrent workload change.
+  This batch is finished; Studio and models remain stopped. No background
+  service or push was authorized by this check.
+
+### 2026-10-18 — DRAMA resident KV growth during generation
+
+- The user parked the 149632-byte post-GC residual and prioritized expanding
+  the window during generation. This supersedes the previous growth exclusion;
+  the residual remains unresolved. Studio's optional automatic mode now plans
+  a final frame/position bound, starts at min(final, max(prompt, 64)), and doubles
+  persistent KV buffers as needed up to the admitted bound (at most 4096 total
+  positions). Manual allocation remains the default; auto still requires
+  DRAMA3_DAC_SCRATCH=1 and no reference. EOS determines duration, not text length.
+- Backbone token-major and tower head-major valid prefixes move directly on
+  the GPU. Attention reduction choice is pinned from the final bound, including
+  crossing 1024/1025. Growth occurs after the existing non-EOS scalar read,
+  without additional submit/wait, activation readback or inference-time GC.
+  Persistent allocations bypass the workspace; command leases retain old
+  buffers through copies. Output storage and sampler inputs stay fixed.
+- Admission reserves the conservative cold inventory, downstream DAC memory
+  and all prior KV generations. Studio rechecks host, Metal, process and
+  per-buffer limits before replacement allocations, with the same 15% floor
+  and 40GiB observed budget. Rejection allocates no replacement; allocation or
+  copy failure aborts the single-use generator. These are sampled guards, not
+  a hard physical reservation. Low-level callers own equivalent budget policy.
+- All 49 CPU examples, 17 JS tests, seven generator and five cache Metal
+  examples, native build and formatting/syntax checks passed. Multiple small
+  expansions, EOS/final-frame bounds, head-major strides and synthetic-prefix
+  wide attention at 1024/1025 were checked at graph depths 0 and 2. The three-row
+  pinned diagnostic compared 243 backbone boundaries per arm / 729 comparisons:
+  dynamic 1 -> 2 -> 4 is bit-identical to fixed8, with identical upstream metrics.
+  Strict upstream parity remains red at row1 backbone.layers.39.hidden; no
+  precision or tolerance change was made.
+- Full HTTP pilots completed auto64 -> 128 plus three fixed540 requests at
+  each graph depth, one worker per serial pilot. All eight had identical native
+  codes/WAV/tape, 60 frames and EOS. A fresh same-cap512 pinned MLX F32 core
+  control matched every code frame and EOS. Reads stayed control496/terminal494160;
+  submitted/completed/waits were 182 at depth0 and 122 at depth2, equal within
+  each pair, with pending0. Minimum sampled free memory 20.3375% / 20.2565%,
+  maximum sampled Metal 27052982272 / 27066695680 bytes. Contending model workers
+  rejected before loading; both pilots cleaned up normally, no owned children
+  or listeners left. No speed, general voice-quality or zero-retention claim.
+- Earlier depth2 cap512 and cap128 attempts rejected before growth allocation
+  and before generation respectively. Failure receipts omit numeric admission
+  values, so the exact causes remain open; the final same-binary cap512 recheck
+  passed without weakening guards. Correlated review: ROBUST for the tested
+  guarded no-reference Studio path. Full4096 model generation and automatic
+  reference windows remain unverified.
+- Evidence: .landmark/evidence/drama3-window-growth.json and
+  docs/drama3-studio-frontier.md. Private receipts/harness/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/. Refresh after source,
+  checkpoint/config, precision/tolerance, input/tape/capacity, allocator/graph,
+  runtime/device/driver changes; host workload invalidates admission headroom.
+  The bounded batch is finished; no model or Studio remains running. Serial
+  run_safe, 15% floor, external scratch/local weights, unrelated projects
+  untouched and exact-path local atomic commit/no-push boundaries still apply.
+
+### 2026-10-18 — DRAMA long multi-growth control at graph depths 0 and 2
+
+- Source 811f3c96 / the existing native binary completed serial cold-auto and
+  fixed-capacity pairs at both graph depths: 96 prompt rows, cap512, actual
+  growth 96 -> 192 -> 384 -> 607 at backbone/tower positions 96/95, 192/191,
+  384/383. All four native outputs match in complete codes, WAV bytes and
+  sampler inputs; all 512 code rows match pinned MLX. All runs cap without
+  EOS (23.77723356s); complete text delivery and upstream WAV parity are not
+  established. An independent CPU native Prompt.build matches all 96 MLX IDs.
+- Submit/complete/wait counts match auto/fixed within each depth: 1152 at
+  depth0, 641 at depth2, pending/retained0. Reads remain control4104 and
+  terminal4216832 bytes per job. Production sources and synchronization did
+  not change. Both private servers/workers exited normally, no owned children
+  or listeners remain; second owners reject before loading.
+- Entire-pair minimum sampled free/reclaimable memory is 20.990014% / 22.856045%
+  at depth0/2; automatic-only minima are 23.096251% / 23.554206%. Maximum sampled
+  Metal bytes are 27681030144 / 27680833536. The 15% floor, 40960MiB observed
+  budget and finite deadlines stayed unchanged. An initial MLX run was stopped
+  by the same 15% guard; retry used more headroom. These are sampled observations,
+  not a hard peak bound, physical residency proof or leak-freedom result.
+- Separate fixed608 common-prefix replays captured 1718 stages; four boundary
+  checkpoints and local require-path adjustments were added privately, with
+  arithmetic/cadence/tolerances unchanged.
+  Strict atol6e-5/rtol3e-4 comparison FAILS on 38/6443151 values, confined to 29
+  late tower-logit stages. First captured excess is step385; cause is unlocalized.
+  Captured backbone hidden/main logits/tower hidden pass. Counterfactual step512
+  has zero excess and is excluded. This is not a direct automatic-state trace;
+  old internal layer39 discrepancy remains open. Do not infer that exact sampled
+  codes close numeric parity or that growth caused the strict-logit mismatch.
+- Correlated review: ROBUST for the bounded native growth/output/counter claim;
+  strict numeric common-prefix parity is BROKEN for this captured set. Evidence:
+  .landmark/evidence/drama3-window-long.json and docs/drama3-studio-frontier.md;
+  private receipts/traces/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/. One cold/warm pair per
+  depth is not a speed or retention trend. Full-model 1024/4096, automatic voice
+  reference windows, and the parked 149632-byte residual remain outside scope.
+  Refresh on source/checkpoint/config/input/tape/capacity/precision/tolerance,
+  graph/allocator/runtime/device/driver changes; host workload changes admission.
+  Next numeric discriminator: trace the first excessive tower-logit coordinate
+  on the same prefix against MLX, without weakening the gate. Owned model and
+  Studio processes are stopped; no background service or push was started.
+
+### 2026-10-19 — DRAMA step-385 tower operator localization
+
+- The private fixed608 teacher-forced replay retains the exact 96 prompt IDs
+  and all 512 code rows from the long-window control, at graph depth2. This
+  equalizes the discrete prefix, not floating-point hidden or historical KV.
+  Native detailed snapshots and the passive MLX internal replay both preserve
+  all 1718 original captures / 6449296 values bitwise. MLX also preserves all
+  52 earlier boundaries; 312 unique internal stages per selected step are
+  compared at unchanged atol6e-5/rtol3e-4. Production source is unchanged.
+- At step385, shared-layer-0 embedding/enorm are bit-exact; incoming backbone
+  hidden and hnorm differ within tolerance. The first selected internal excess
+  is eh_proj at coordinates394/636. All 26 normalized layer outputs across
+  steps384/385 pass. Step384 already has internal excesses with passing logits;
+  this does not identify the earliest generation-wide drift or a growth cause.
+- Four-way GPU crossovers reproduce all 36 head and four EH original diagonals
+  bitwise, with independently matching raw BF16 payloads across loaders. Same-
+  input comparisons have zero excesses in 147456 head and 8192 EH values. Input
+  substitution alone reproduces both step385 head failures (head6/644,
+  head8/887) and both EH failures in each stack. For head6/644, total error
+  -7.66515732e-5 decomposes into MLX input effect -7.67111778e-5 and same-input
+  operator effect +5.96046448e-8. This is local attribution, not sole causation
+  through all later tower operations and differing historical KV states.
+- Graph cadence remains 608 submit/complete/waits, pending/retained0; all reads
+  are zero before drain. The 674 extra terminal snapshots explain 2696 extra
+  finite-status bytes (9568 vs6872), with no graph-counter change during reads.
+  GPU work stayed serial with finite deadlines, the 15% floor and 40960MiB
+  observed tree-RSS guard. No Studio was started. These are sampled guards,
+  not physical residency or peak-memory proofs.
+- Correlated mini-Quadrumvirate verdict: ROBUST for captured operator
+  localization. The strict prior38-value late-logit gate and old backbone39
+  discrepancy remain open. Next discriminator: same-input shared-layer-0 hnorm
+  crossover on the captured step385 backbone hidden vectors, before tracing
+  their producer. No precision/tolerance, speed or audio-quality claim changed.
+- Evidence: .landmark/evidence/drama3-tower385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned probes/reports under
+  /opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/. Source and binary hashes
+  are separately observed, not a complete reproducible-build attestation;
+  config/index pins do not establish full five-shard payload integrity.
+  Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
+  prefix/cache/graph/capture-policy/precision/tolerance changes. Missing or
+  changed private artifacts reopen dependent claims. No service or push.
+
+### 2026-10-19 — DRAMA step-385 hnorm contribution isolated
+
+- GPU hnorm crossovers at captured steps 384/385 reproduce eight fixture joins
+  and four original diagonals bitwise. Same original BF16 norm payload,
+  epsilon 1e-6 and F32 arithmetic; all 8192 same-input scalar comparisons pass
+  unchanged atol=6e-5/rtol=3e-4. At 385, norm-operator RMS on native hidden is
+  4.63713349e-7 versus 3.24896306e-6 for hidden input through MLX norm. This
+  local RMS comparison does not make norm arithmetic irrelevant.
+- Fixed-embedding hnorm-to-EH GPU composition at 385 reconstructs two original
+  diagonals and four earlier EH crosses bitwise; 8192 same-input EH values pass.
+  At coordinate 636, incoming hidden through MLX norm/EH alone differs by
+  -8.85725021e-5 against allowed 6.79394102e-5. At 394, the norm effect
+  -4.76837158e-6 contributes to crossing the bound. Replacing only native
+  hnorm at the same captured native hidden, keeping native EH and original
+  MLX reference fixed, resolves 394 but leaves 636 excessive (-9.22679901e-5).
+  Hnorm replacement alone is insufficient for this captured failure.
+- A fixture guard rejected the assumed bit-equal embedding halves at 384
+  before composition GPU execution. Source/log retained; restrict composition
+  to 385 and retain 384 as a standalone norm control. Do not count EXIT1 as pass.
+- Production source is unchanged. Each private native crossover drains once:
+  submit/complete/waits 1 at depth 2, pending/retained 0, no reads before drain,
+  terminal 32768 bytes. Each MLX probe evaluates four GPU outputs once; only
+  drained diagnostic analysis runs on CPU. Serial run_safe, configured 15%
+  memory guard, finite deadlines and tree-RSS guards remain; Studio stays
+  stopped. Graph retained bytes are accounting, not physical-memory readings;
+  run logs retain preflight values, not each run's minimum free percentage.
+- Correlated mini-Quadrumvirate: ROBUST for captured local attribution;
+  prior 38-value late-logit gate still FAIL, old backbone39 remains open.
+  Next discriminator: trace incoming backbone hidden from terminal norm and
+  preceding layer output on captured common inputs; keep historical KV
+  separate. No generation-wide origin, growth causality, speed or quality claim.
+- Evidence: .landmark/evidence/drama3-hnorm385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-hnorm385-20261019/. Selected payload/source/
+  binary pins do not attest full checkpoint or transitive build integrity.
+  Three source supplement hashes are post-run checks only. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/
+  graph/capture-policy/precision/tolerance changes, or missing/changed private
+  artifacts. No service or push.
+
+### 2026-10-19 — DRAMA terminal backbone norm isolated at step 385
+
+- Passive GPU captures at 384/385 preserve both backends' 1718 ordinary traces
+  bitwise, plus native674/MLX702 earlier details; 86 exact joins. Mixed inputs
+  are bit-equal, historical KV/SSM is not. All40 selected layer outputs at385
+  pass unchanged atol6e-5/rtol3e-4. At384, only layer39 output coordinate755
+  exceeds among selected layer outputs. Both terminal norm outputs pass;
+  these boundaries describe drift and do not establish a causal layer.
+- Terminal backbone RMSNorm is ordinary, eps1e-6; its converted BF16 weight
+  already includes the shift. Four GPU crossover diagonals reconstruct
+  bitwise, 8192 same-input values pass. Loaded Qwen/RMSNorm source paths and
+  hashes match passive replay. At385, norm-operator RMS3.16184852e-7 versus
+  incoming-input effect through MLX1.16726309e-6; both telescopes are exact.
+- Substituting only M(H_N) for N(H_N), with captured native pre-norm input,
+  fixed embedding and unchanged native tower HNorm/EH, retains both excessive
+  EH coordinates394/636. Replacement errors -7.46250153e-5/-9.36985016e-5
+  exceed allowed7.14400148e-5/6.79394102e-5. Original native HNorm/EH diagonals
+  reconstruct bitwise. This does not substitute the MLX diagonal M(H_M).
+- Production source is unchanged. Passive cadence remains608 submit/complete/
+  waits at depth2, no pre-drain reads;164 added GPU snapshots are diagnostic
+  work, not performance-neutral. Each standalone native probe drains once,
+  terminal32768/control0/diagnostic0 bytes. Serial run_safe retains configured
+  15% admission/stop threshold, finite deadlines and tree-RSS guards; logs do
+  not establish observed minima, graph retained bytes are accounting.
+- Correlated mini-Quadrumvirate: ROBUST within captured local attribution;
+  recomputed strict late-logit gate remains FAIL38 values in29 stages385–505.
+  Two analyzer schema EXIT1 attempts are retained, not passes. No Studio,
+  speed or quality claim. Next: layer39 attention/residual and stateless
+  norm/router/MoE crosses on identical captured inputs, keeping history separate.
+- Evidence: .landmark/evidence/drama3-backbone385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/. Eighteen source hashes
+  checked before/after runs match production811f3c96. Selected payload/binary
+  pins do not attest full checkpoint or transitive build integrity. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/graph/
+  capture-policy/precision/tolerance changes or missing/changed artifacts.
+  No service or push.

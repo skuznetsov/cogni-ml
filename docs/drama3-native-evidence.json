@@ -1,0 +1,821 @@
+{
+  "format": "cogni-drama3-native-evidence-v1",
+  "status": "VERIFIED within the declared pinned offline CPU smoke and measured fixed-input scopes",
+  "measured_at_utc": "2026-10-14T17:21:47.867738+00:00",
+  "scope": "Offline CPU F32 native text-to-WAV smoke and selected pinned fixed-input activation probes. No claim of stock BF16 equality, general speech quality, or real-time performance.",
+  "base_commit": "7cccdd8bfb02ac388001ab7a61832087d8d1b450",
+  "native_source_sha256": {
+    "examples/drama3_generate.cr": {
+      "sha256": "0467963ea8c36ede8ff60e7a03892ddd47d5cf767f72d6efba2dff46152ff1c0",
+      "bytes": 4050
+    },
+    "examples/drama3_inspect.cr": {
+      "sha256": "9023e290e11b6e0568800d92ec625ffa29b94eaa1314952d946bb5af05b11a71",
+      "bytes": 876
+    },
+    "examples/drama3_trace.cr": {
+      "sha256": "a660a741dc33701fd627444a360062f6485bd09d47673e24e9f6d2c9d6990320",
+      "bytes": 1214
+    },
+    "scripts/drama3/compare_traces.py": {
+      "sha256": "d925b1f1c5af4527652ade973d4cbc14931326d83d6f8ccf632471d1f97933e4",
+      "bytes": 1325
+    },
+    "scripts/drama3/export_reference.py": {
+      "sha256": "5ed4543b847814ecdec758a756c093f09cf11ff90bc2677a167703f189457197",
+      "bytes": 30518
+    },
+    "scripts/drama3/replay_mlx_backbone.py": {
+      "sha256": "21c0a93b24a7b1bfa9e5e0e83355ff6caf0558799b3f7834a23a5f6512cc5b6b",
+      "bytes": 11896
+    },
+    "scripts/drama3/replay_mlx_embedding.py": {
+      "sha256": "598aeed7f1117e381629399ce5387e8d12c993fe189f8a84b20156f4f4d95f29",
+      "bytes": 10135
+    },
+    "scripts/drama3/replay_torch_tower.py": {
+      "sha256": "96ddd652c913b139e9748ca39aec26dd022119d6c5eab6aeb537e757685d2c63",
+      "bytes": 21752
+    },
+    "spec/drama3_backbone_spec.cr": {
+      "sha256": "ecde2dfb485550baeb06ed7099e475d225b242b101d42229ed1ebbbd84b6d96e",
+      "bytes": 2247
+    },
+    "spec/drama3_codec_spec.cr": {
+      "sha256": "60f28cbe970b7e4e328fa57d97148c43b3000fabac930c4726a8a9a45e1e5560",
+      "bytes": 7003
+    },
+    "spec/drama3_generation_spec.cr": {
+      "sha256": "281a5de60b795a9796e9d70ff383ff084643bd06ecdc7af40763e472d4d737c6",
+      "bytes": 1580
+    },
+    "spec/drama3_native_spec.cr": {
+      "sha256": "cb64ab376e4ea0216c6dc845bfd81d1db3578fc9f7ea894502addc6bf351558a",
+      "bytes": 1196
+    },
+    "spec/drama3_reference_spec.py": {
+      "sha256": "19ec54b7374adbb9d9416a75a3716569a8d5405b5b7e3566a5fe0fa68f7f3405",
+      "bytes": 5657
+    },
+    "spec/drama3_tower_spec.cr": {
+      "sha256": "0b2d1fdd4923b112eb74c6e303856862d1d7663aa485f6d6c026d85f3a13ef8a",
+      "bytes": 10065
+    },
+    "spec/support/drama3/codec_reference.py": {
+      "sha256": "28afc5b37bae153dfe31cc769bf4b4580321f017983250cb3b20bd571f5c5bb9",
+      "bytes": 12880
+    },
+    "spec/support/drama3/native_tower_trace.cr": {
+      "sha256": "634dc8ab61bd9a083d5b7e62a7c22b788ba4f992157cedfe77e2e906cff49b60",
+      "bytes": 3505
+    },
+    "spec/support/drama3/reference_compare.py": {
+      "sha256": "4ad251be6a3703e1feab8c3bf010abc5ef222dfc5b1b45634417cf11c3205870",
+      "bytes": 6322
+    },
+    "src/ml/audio/drama3/backbone.cr": {
+      "sha256": "306437c20a842d33c682cb59111e2f3850d28274682c06c548263441b3468529",
+      "bytes": 10835
+    },
+    "src/ml/audio/drama3/codec.cr": {
+      "sha256": "145bc746447f025216385e22a5e50bed9052be972b218068686299254f7a0194",
+      "bytes": 26508
+    },
+    "src/ml/audio/drama3/generator.cr": {
+      "sha256": "2de04af7a8f97d9dd67799f1538fffac11b6277f271f5f059767ac0203cc4d2c",
+      "bytes": 5440
+    },
+    "src/ml/audio/drama3/native.cr": {
+      "sha256": "0d52165c10fb5f61aa4055393f6a5d1b923a34f28f4fd30ec30b2e2400eade23",
+      "bytes": 13851
+    },
+    "src/ml/audio/drama3/prompt.cr": {
+      "sha256": "ccb1597d316c8a92a4c7dda54c437293f3ff4078c7d78119dee962e764ab080b",
+      "bytes": 3479
+    },
+    "src/ml/audio/drama3/tower.cr": {
+      "sha256": "58e2b873742e34ba45ea92fd80ed76273aec25d7de8b32ed732b5dad659097e6",
+      "bytes": 30555
+    },
+    "src/ml/audio/drama3/wav.cr": {
+      "sha256": "44eca9e727af422f3f22cc9ca89593832752168bf8d2a976d66273cc36c0b128",
+      "bytes": 1402
+    }
+  },
+  "pinned_sources": {
+    "mlx_audio": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "checkout_clean_observed": true
+    },
+    "fish_speech": {
+      "repository": "https://github.com/fishaudio/fish-speech",
+      "revision": "541566932abbaebcb0a40e562a1f846738383f38",
+      "checkout_clean_observed": true
+    },
+    "official_model": {
+      "repository": "fishaudio/drama-3",
+      "revision": "e0a9218aa48888270f06ef1ed9ea67622c0e17d2"
+    },
+    "converted_model": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "files": {
+        "config.json": {
+          "sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+          "bytes": 17453
+        },
+        "model.safetensors.index.json": {
+          "sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+          "bytes": 106861
+        },
+        "tokenizer.json": {
+          "sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+          "bytes": 20791070
+        },
+        "codec.safetensors": {
+          "sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+          "bytes": 1874070622
+        },
+        "model-00001-of-00005.safetensors": {
+          "sha256": "bcb7e680d4f07ea21404070a407ab327572cb7d7b577d73e145871b2456b5012",
+          "bytes": 5498947446
+        },
+        "model-00002-of-00005.safetensors": {
+          "sha256": "67ca8709ee770c21fb09b68d08fc50faf3102451f150745dcb6971dbf8e5894a",
+          "bytes": 5390036166
+        },
+        "model-00003-of-00005.safetensors": {
+          "sha256": "0c0e1055b617bbf7e507ab9ac611d290124b985f63cbdb52cb5275d558202e76",
+          "bytes": 5402946528
+        },
+        "model-00004-of-00005.safetensors": {
+          "sha256": "116f376cf435fc7f2dfc09ffa985e5d1c908fd9580877b3fcb9df37e9be029f2",
+          "bytes": 5423590660
+        },
+        "model-00005-of-00005.safetensors": {
+          "sha256": "e20c3406557e2b1e44f446f2e1af8e7832ef545047f8c146c9e704a692a63b2d",
+          "bytes": 2277811252
+        }
+      }
+    }
+  },
+  "precision": "Stored BF16 floating tensors are promoted exactly to F32 in native and reference runs; packed affine Q4/Q8 integer weights stay packed. Trace JSON numbers are canonicalized to their declared IEEE binary32 dtype before subtraction.",
+  "fixture": {
+    "manifest_path": "spec/support/drama3/reference_fixture/manifest.json",
+    "manifest_sha256": "fca7121d5656c01ed2672e8af4c969a04dae40cd85212096ea9587c9dd175790",
+    "fixture_kind": "deterministic_synthetic_tiny_reference",
+    "seed": 340219,
+    "reference_trace_count": 255,
+    "artifacts_sha256": {
+      "config.json": "47406301da31a75ec190b5ecb16b9c50ac85c487f7e074de91e8a4a159dd5967",
+      "inputs.json": "5574bcf52fa0b635ad4017b02d79b289b26bfc566394ed247e133c66151d8c91",
+      "model.safetensors": "bd14937891e1c69756898f274d3171c7b8afceef521ec28e2a0b99269f15bf23",
+      "quantization_expected.json": "b5259f6899842a07243803ecb67f2adbd2ee45d1df257c396ac4bc9cc80bcf49",
+      "reference_traces.json": "2a023b2d8f4327b90bc7d18caa67a0614a0aa25f820dff5adb4da61644eb494f"
+    },
+    "contains_released_checkpoint_weights": false
+  },
+  "observed_checks": {
+    "crystal": {
+      "command": "crystal spec --release -Dcpu_only --link-flags='-fuse-ld=/usr/bin/ld' spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr",
+      "exit_code": 0,
+      "examples": 16,
+      "failures": 0,
+      "errors": 0,
+      "note": "Optional synthetic and real codec parity probes run separately with DRAMA3_CODEC_REFERENCE."
+    },
+    "python": {
+      "command": "python3 -m unittest spec/drama3_reference_spec.py",
+      "exit_code": 0,
+      "tests": 6,
+      "includes": "Seeded defect, malformed/missing traces, nonfinite values, and declared-F32 JSON roundtrip."
+    },
+    "crystal_format": {
+      "command": "crystal tool format --check src/ml/audio/drama3/*.cr examples/drama3_*.cr spec/drama3_*_spec.cr spec/support/drama3/native_tower_trace.cr",
+      "exit_code": 0
+    }
+  },
+  "actual_embedding": {
+    "token_id": 51844,
+    "values": 2048,
+    "max_abs_error": 0.0,
+    "exact_values": 2048,
+    "manifest": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_embedding_row.json.manifest.json",
+      "sha256": "a433db8c79a12eda4c017c887047c5c9a7f7fec245b3cd2ccaa96a029a39725d",
+      "bytes": 2643
+    },
+    "reference_trace": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_embedding_row.json",
+      "sha256": "43b69515af3c782f5eb5700a1ee97fd026f3c58006ed3d3252b4fb16d3f443b1",
+      "bytes": 39862
+    }
+  },
+  "actual_backbone": {
+    "status": "match",
+    "trace_count": 243,
+    "value_count": 497664,
+    "atol": 6e-05,
+    "rtol": 0.0003,
+    "prefixes": [
+      "backbone"
+    ],
+    "max_abs_error": 0.001220703125,
+    "max_relative_error_at_max_abs": 7.131501754492061e-07,
+    "worst_trace": "backbone.row0.layers.37.hidden",
+    "worst_flat_index": 1269,
+    "original_strict_failures": [
+      {
+        "trace": "backbone.row2.layers.21.attention_residual",
+        "flat_index": 952,
+        "reference_f32": 0.005159810185432434,
+        "native_f32": 0.0051279813051223755,
+        "abs_error": 3.1828880310058594e-05
+      },
+      {
+        "trace": "backbone.row2.layers.32.hidden",
+        "flat_index": 1586,
+        "reference_f32": 0.014023452997207642,
+        "native_f32": 0.013980746269226074,
+        "abs_error": 4.270672798156738e-05
+      },
+      {
+        "trace": "backbone.row2.layers.36.hidden",
+        "flat_index": 1586,
+        "reference_f32": 0.06093132495880127,
+        "native_f32": 0.06087827682495117,
+        "abs_error": 5.3048133850097656e-05
+      },
+      {
+        "trace": "backbone.row2.layers.39.hidden",
+        "flat_index": 720,
+        "reference_f32": -0.0002391338348388672,
+        "native_f32": -0.0002715587615966797,
+        "abs_error": 3.24249267578125e-05
+      }
+    ],
+    "reference_runtime": {
+      "mlx": "0.30.0",
+      "numpy": "1.26.4",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "python": "3.12.2",
+      "safetensors": "0.5.3"
+    },
+    "input": {
+      "path": "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+      "sha256": "4936da6d65d264ab6251d5451d022686b884eed2797094832d44015cfb2774de",
+      "bytes": 92119
+    },
+    "reference_trace": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json",
+      "sha256": "1c5d92f82368d1850cd67c65c368eafb9466f7cf60b0ddac357714e71c1b8127",
+      "bytes": 9841119
+    },
+    "reference_manifest": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json.manifest.json",
+      "sha256": "26f31a508f606d3aae89963810a2f95a08e21b6d5806977660a2b1449dc0b787",
+      "bytes": 12338
+    },
+    "threshold_scope": "Observed-pass allowance for these three cached input rows only; original strict failures are retained."
+  },
+  "actual_tower": {
+    "scope": "Selected pinned Q4 checkpoint tower, identical actual-backbone hidden rows and frames; CPU native vs official pinned PyTorch tower. Does not claim whole-model parity.",
+    "provenance": {
+      "fish_speech_source_revision": "541566932abbaebcb0a40e562a1f846738383f38",
+      "float_semantics": "Each JSON value was canonicalized to IEEE-754 float32 before subtraction, matching the trace dtype contract and comparator.",
+      "inputs": {
+        "path": "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+        "sha256": "a6eb8809a66e2c95ebdcdd9fb9fccd442dbdcf0a123c0993775304a69c9db514"
+      },
+      "mlx_audio_source_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "model": {
+        "repository": "cguldogan/drama-3-mlx-q4",
+        "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+      },
+      "model_tower_shards": [
+        "model-00004-of-00005.safetensors",
+        "model-00005-of-00005.safetensors"
+      ],
+      "native_trace": {
+        "path": "/private/tmp/cogni-drama3-reference/native_actual_tower_traces.json",
+        "sha256": "310d002c0aa6c9dc8748fcd25e7b6b7ea1fd82926c0268e8663fdb3029da0db8"
+      },
+      "official_torch_trace": {
+        "path": "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+        "sha256": "784057f0d440401183b8db66c1ab07d34e262525a358c7944207558b5e2debaa"
+      },
+      "runtime": {
+        "numpy": "1.26.4",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "python": "3.12.2",
+        "safetensors": "0.5.3",
+        "torch": "2.6.0"
+      },
+      "tower_tensor_count": 192
+    },
+    "inputs": {
+      "cache_contract": "same cache advances from position 0 prefill to position 1 decode; native helper checks final per-layer cache offset is 2.",
+      "decode_main_token_id": 248102,
+      "decode_previous_frame": [
+        248101,
+        2,
+        1,
+        3,
+        0,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "hidden_rows_shape": [
+        2,
+        2048
+      ],
+      "prefill_next_frame": [
+        248101,
+        2,
+        1,
+        3,
+        0,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "prefill_previous_frame": [
+        248100,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        0
+      ]
+    },
+    "all_trace_error_summary": {
+      "default_tolerance_failed_values": 55,
+      "max_abs_error": 0.004638671875,
+      "max_relative_error_at_max_abs": 1.3144727252098227e-06,
+      "mean_abs_error": 1.2281831909062013e-05,
+      "relative_l2_error": 7.405936065773321e-07,
+      "rms_abs_error": 8.278418881669721e-05,
+      "scoped_tolerance_failed_values": 0,
+      "trace_count": 726,
+      "value_count": 2042880,
+      "worst_flat_index": 1320,
+      "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product"
+    },
+    "tolerances": {
+      "default_strict": {
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "rule": "abs(error) <= atol + rtol * abs(reference)"
+      },
+      "scope_note": "6e-4/3e-4 is an observed-pass allowance for intermediate real-Q4 activations only; strict terminal hidden/head traces remain at 3e-5/3e-4.",
+      "scoped_internal": {
+        "atol": 0.0006,
+        "rtol": 0.0003,
+        "rule": "abs(error) <= atol + rtol * abs(reference)"
+      }
+    },
+    "sampled_codebooks": {
+      "exact_match": true,
+      "meaning": "c0 followed by the nine residual code predictions for the decode input row.",
+      "native": [
+        3,
+        207,
+        99,
+        10,
+        3478,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "official_torch": [
+        3,
+        207,
+        99,
+        10,
+        3478,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "strict_default_comparison": {
+      "failing_trace_count": 33,
+      "failing_value_count": 55,
+      "first_execution_order_failure": {
+        "absolute_error": 7.62939453125e-05,
+        "allowed_default_error": 5.662239074707031e-05,
+        "flat_index": 108,
+        "native_f32": -0.08881759643554688,
+        "reference_f32": -0.08874130249023438,
+        "trace": "tower.prefill.row0.shared_layers.2.ffn_residual"
+      },
+      "first_lexical_failure": {
+        "absolute_error": 4.38690185546875e-05,
+        "allowed_default_error": 3.8133316040039065e-05,
+        "flat_index": 392,
+        "native_f32": 0.027067184448242188,
+        "reference_f32": 0.027111053466796875,
+        "trace": "tower.decode.row0.residual_layers.0.attention.output"
+      },
+      "trace_count": 726,
+      "value_count": 2042880
+    },
+    "strict_terminal_comparison": {
+      "atol": 3e-05,
+      "max_abs_error": 1.1444091796875e-05,
+      "max_relative_error_at_max_abs": 1.1388321845363672e-06,
+      "prefixes": [
+        "tower.prefill.row0.hidden_output",
+        "tower.decode.row0.hidden_output",
+        "tower.prefill.row0.head_logits",
+        "tower.decode.row0.head_logits"
+      ],
+      "rtol": 0.0003,
+      "status": "match",
+      "trace_count": 20,
+      "value_count": 77824,
+      "worst_flat_index": 633,
+      "worst_trace": "tower.decode.row0.head_logits.1"
+    },
+    "head_argmax": {
+      "all_match": true,
+      "head_count": 18,
+      "matches": 18,
+      "minimum_native_top1_margin": 0.029792308807373047,
+      "minimum_reference_top1_margin": 0.029791831970214844
+    },
+    "hidden": {
+      "decode": {
+        "stats": {
+          "default_tolerance_failed_values": 0,
+          "max_abs_error": 2.86102294921875e-06,
+          "max_relative_error_at_max_abs": 3.071975148949835e-07,
+          "mean_abs_error": 4.578104153551976e-07,
+          "relative_l2_error": 8.310469033110237e-07,
+          "rms_abs_error": 5.888655361510532e-07,
+          "scoped_tolerance_failed_values": 0,
+          "trace_count": 1,
+          "value_count": 2048,
+          "worst_flat_index": 790,
+          "worst_trace": "tower.decode.row0.hidden_output"
+        },
+        "trace": "tower.decode.row0.hidden_output"
+      },
+      "prefill": {
+        "stats": {
+          "default_tolerance_failed_values": 0,
+          "max_abs_error": 8.58306884765625e-06,
+          "max_relative_error_at_max_abs": 9.321186653344965e-07,
+          "mean_abs_error": 6.100734992742218e-07,
+          "relative_l2_error": 1.125634718332004e-06,
+          "rms_abs_error": 7.96430141049325e-07,
+          "scoped_tolerance_failed_values": 0,
+          "trace_count": 1,
+          "value_count": 2048,
+          "worst_flat_index": 790,
+          "worst_trace": "tower.prefill.row0.hidden_output"
+        },
+        "trace": "tower.prefill.row0.hidden_output"
+      }
+    },
+    "observed_comparison_commands": {
+      "all_default_strict": {
+        "command": [
+          "python3",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+          "--actual",
+          "/private/tmp/cogni-drama3-reference/native_actual_tower_traces.json"
+        ],
+        "exit_code": 1,
+        "stderr": "{\"error\": \"tower.decode.row0.residual_layers.0.attention.output[392] differs: expected 0.0271110535, actual 0.0270671844, abs=4.39e-05, allowed=3.81e-05\", \"status\": \"mismatch\"}",
+        "stderr_json": {
+          "error": "tower.decode.row0.residual_layers.0.attention.output[392] differs: expected 0.0271110535, actual 0.0270671844, abs=4.39e-05, allowed=3.81e-05",
+          "status": "mismatch"
+        },
+        "stdout": ""
+      },
+      "all_scoped_internal": {
+        "command": [
+          "python3",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+          "--actual",
+          "/private/tmp/cogni-drama3-reference/native_actual_tower_traces.json",
+          "--atol",
+          "6e-4",
+          "--rtol",
+          "3e-4"
+        ],
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "{\"atol\": 0.0006, \"max_abs_error\": 0.004638671875, \"max_relative_error_at_max_abs\": 1.3144727252098227e-06, \"prefixes\": [], \"rtol\": 0.0003, \"status\": \"match\", \"trace_count\": 726, \"value_count\": 2042880, \"worst_flat_index\": 1320, \"worst_trace\": \"tower.prefill.row0.residual_layers.1.feed_forward.product\"}",
+        "stdout_json": {
+          "atol": 0.0006,
+          "max_abs_error": 0.004638671875,
+          "max_relative_error_at_max_abs": 1.3144727252098227e-06,
+          "prefixes": [],
+          "rtol": 0.0003,
+          "status": "match",
+          "trace_count": 726,
+          "value_count": 2042880,
+          "worst_flat_index": 1320,
+          "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product"
+        }
+      },
+      "terminal_default_strict": {
+        "command": [
+          "python3",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+          "--actual",
+          "/private/tmp/cogni-drama3-reference/native_actual_tower_traces.json",
+          "--prefix",
+          "tower.prefill.row0.hidden_output",
+          "--prefix",
+          "tower.decode.row0.hidden_output",
+          "--prefix",
+          "tower.prefill.row0.head_logits",
+          "--prefix",
+          "tower.decode.row0.head_logits"
+        ],
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "{\"atol\": 3e-05, \"max_abs_error\": 1.1444091796875e-05, \"max_relative_error_at_max_abs\": 1.1388321845363672e-06, \"prefixes\": [\"tower.prefill.row0.hidden_output\", \"tower.decode.row0.hidden_output\", \"tower.prefill.row0.head_logits\", \"tower.decode.row0.head_logits\"], \"rtol\": 0.0003, \"status\": \"match\", \"trace_count\": 20, \"value_count\": 77824, \"worst_flat_index\": 633, \"worst_trace\": \"tower.decode.row0.head_logits.1\"}",
+        "stdout_json": {
+          "atol": 3e-05,
+          "max_abs_error": 1.1444091796875e-05,
+          "max_relative_error_at_max_abs": 1.1388321845363672e-06,
+          "prefixes": [
+            "tower.prefill.row0.hidden_output",
+            "tower.decode.row0.hidden_output",
+            "tower.prefill.row0.head_logits",
+            "tower.decode.row0.head_logits"
+          ],
+          "rtol": 0.0003,
+          "status": "match",
+          "trace_count": 20,
+          "value_count": 77824,
+          "worst_flat_index": 633,
+          "worst_trace": "tower.decode.row0.head_logits.1"
+        }
+      }
+    }
+  },
+  "actual_codec_two_frame_probe": {
+    "reference": "Pinned MLX fish_s1_dac, actual codec.safetensors, two fixed frames.",
+    "exit_code": 0,
+    "examples": 2,
+    "command": "DRAMA3_CODEC_REFERENCE=real DRAMA3_CODEC_PYTHON=/opt/homebrew/Caskroom/miniconda/base/bin/python3 DRAMA3_MLX_AUDIO_ROOT=/private/tmp/cogni-drama3-reference/mlx-audio DRAMA3_CODEC_WEIGHTS=/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors crystal spec --release --link-flags='-fuse-ld=/usr/bin/ld' spec/drama3_codec_spec.cr",
+    "internal_gate": {
+      "max_abs_error": 0.001,
+      "rms_error": 0.0002,
+      "normalized_rms_error": 0.0002,
+      "normalization": "RMS error divided by reference stage RMS; no waveform renormalization."
+    },
+    "waveform_gate": "Per sample abs(error) <= max(5e-5, abs(reference) * 1e-3)",
+    "observed_waveform_max_abs_error": 2.8044e-05,
+    "observed_waveform_rms_error": 6.27919e-06,
+    "observed_waveform_normalized_rms_error": 2.95096e-05,
+    "synthetic_probe": "Separately passed strict per-sample gates with unequal [2,3] quantizer upsample rates, two residual books, clipping, and raw weight normalization."
+  },
+  "full_utterance_codec_replay": {
+    "reference_report": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-mlx-codec.json",
+      "sha256": "cdef57a4ced1c390e18db76116d70f2225e0ef663a704247bfffcf6eb4791d86",
+      "bytes": 1143
+    },
+    "comparison": {
+      "samples": 34816,
+      "exact_samples": 34374,
+      "max_abs_pcm_error": 1,
+      "rms_pcm_error": 0.11267347735824966,
+      "max_abs_error_normalized_units": 3.051850947599719e-05,
+      "rms_error_normalized_units": 3.4386265864512975e-06,
+      "one_pcm_lsb_normalized_units": 3.051850947599719e-05,
+      "within_one_pcm_lsb": true
+    },
+    "command": "PYTHONPATH=/private/tmp/cogni-drama3-reference/mlx-audio /opt/homebrew/Caskroom/miniconda/base/bin/python3 spec/support/drama3/codec_reference.py real --codec /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors --codes-json /Users/sergey/.cache/cogni-ml/drama3-runs/hello-native.wav.json --wav-output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-mlx-codec.wav --compare-wav /Users/sergey/.cache/cogni-ml/drama3-runs/hello-native.wav --output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-mlx-codec.json",
+    "meaning": "Same ten codebooks for all 17 native-generated frames; fixed PCM16 scale, no peak/RMS renormalization. Does not test identical stochastic generation.",
+    "reference_runtime": {
+      "python": "3.12.2",
+      "mlx": "0.30.0",
+      "numpy": "1.26.4",
+      "torch": "2.6.0",
+      "safetensors": "0.5.3",
+      "platform": "macOS-26.6.2-arm64-arm-64bit"
+    },
+    "native_wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-native.wav",
+      "sha256": "880f9fae92c4d8c2bf675a74ee5f40910f537ae03b1cbd2117d3942778a2621e",
+      "bytes": 69676
+    },
+    "reference_wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-mlx-codec.wav",
+      "sha256": "856e6f30fabb42a359df2e80d65caa093129897d8fdb612ffb641c5df63f55a0",
+      "bytes": 69676
+    }
+  },
+  "refresh_policy": {
+    "decays_on": [
+      "model/tokenizer/config bytes change",
+      "inference arithmetic or precision changes",
+      "reference source change",
+      "backend change"
+    ],
+    "refresh": "Regenerate fixed-input traces and run scoped and strict-terminal comparisons, then repeat text-to-WAV. A failure reopens the affected claim."
+  },
+  "native_runtime": {
+    "hardware": "Apple M2 Max, 64 GiB RAM",
+    "crystal": "1.21.0",
+    "llvm": "22.1.8",
+    "target": "aarch64-apple-darwin25.6.0",
+    "backend": "Native CPU, Accelerate sgemv plus scalar F32 kernels; no Python/MLX process in inference."
+  },
+  "native_text_to_wav": {
+    "command": "COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /private/tmp/cogni-drama3-reference/drama3_generate_final 1200 40960 --model /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 --text 'Hello.' --output /Users/sergey/.cache/cogni-ml/drama3-runs/hello-native-final.wav --max-frames 128 --seed 0",
+    "build_command": "crystal build --release -Dcpu_only --link-flags='-fuse-ld=/usr/bin/ld' examples/drama3_generate.cr -o /private/tmp/cogni-drama3-reference/drama3_generate_final",
+    "exit_code": 0,
+    "binary": {
+      "path": "/private/tmp/cogni-drama3-reference/drama3_generate_final",
+      "sha256": "0b44c30fbb1d2381fe5a077bd695b8bdc4b6aba78b78abd31717294f3d09d553",
+      "bytes": 988728
+    },
+    "wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-native-final.wav",
+      "sha256": "880f9fae92c4d8c2bf675a74ee5f40910f537ae03b1cbd2117d3942778a2621e",
+      "bytes": 69676
+    },
+    "sidecar": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-native-final.wav.json",
+      "sha256": "abcad735ec9181da0a06394c2b6f0cbcd18cbcbd9eca29348b4742efce20e842",
+      "bytes": 2986
+    },
+    "text": "Hello.",
+    "seed": 0,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "prompt_rows": 23,
+    "stopped_on_eos": true,
+    "truncated": false,
+    "sample_rate": 44100,
+    "samples": 34816,
+    "seconds": 0.7894784580498866,
+    "peak": 0.049669534,
+    "rms": 0.010727364431834932,
+    "elapsed_seconds": 244.136802458,
+    "frame_count": 17,
+    "frame_codes_sha256": "df3f1561c9f4d9308fa78b0833f51503853c33d1c2646cf8337422505a2f3911",
+    "wav_validation": {
+      "channels": 1,
+      "sample_width_bytes": 2,
+      "sample_rate": 44100,
+      "sample_count": 34816,
+      "non_silent": true,
+      "pcm_peak": 1628,
+      "pcm_rms": 351.5053600215096
+    },
+    "repeat": {
+      "original_wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-native.wav",
+        "sha256": "880f9fae92c4d8c2bf675a74ee5f40910f537ae03b1cbd2117d3942778a2621e",
+        "bytes": 69676
+      },
+      "original_sidecar": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-native.wav.json",
+        "sha256": "566cbe665a1ef36dc5f1b5142551287e605c388057f7917ebf9b7818084a3fbd",
+        "bytes": 2984
+      },
+      "prompt_ids_identical": true,
+      "all_code_frames_identical": true,
+      "wav_bytes_identical": true,
+      "reference_codec_comparison_reused_by_exact_identity": true
+    },
+    "subjective_listening_evaluated": false
+  },
+  "final_source_trace_refresh": {
+    "results": {
+      "backbone_final_vs_reference": {
+        "status": "match",
+        "trace_count": 243,
+        "value_count": 497664,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "prefixes": [
+          "backbone"
+        ],
+        "max_abs_error": 0.001220703125,
+        "max_relative_error_at_max_abs": 7.131501754492061e-07,
+        "worst_trace": "backbone.row0.layers.37.hidden",
+        "worst_flat_index": 1269
+      },
+      "backbone_final_vs_previous_native": {
+        "status": "match",
+        "trace_count": 243,
+        "value_count": 497664,
+        "atol": 0,
+        "rtol": 0,
+        "prefixes": [],
+        "max_abs_error": 0.0,
+        "max_relative_error_at_max_abs": 0.0,
+        "worst_trace": "",
+        "worst_flat_index": 0
+      },
+      "tower_final_vs_reference": {
+        "status": "match",
+        "trace_count": 726,
+        "value_count": 2042880,
+        "atol": 0.0006,
+        "rtol": 0.0003,
+        "prefixes": [],
+        "max_abs_error": 0.004638671875,
+        "max_relative_error_at_max_abs": 1.3144727252098227e-06,
+        "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product",
+        "worst_flat_index": 1320
+      },
+      "tower_final_terminals_vs_reference": {
+        "status": "match",
+        "trace_count": 20,
+        "value_count": 77824,
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "prefixes": [
+          "tower.prefill.row0.hidden_output",
+          "tower.decode.row0.hidden_output",
+          "tower.prefill.row0.head_logits",
+          "tower.decode.row0.head_logits"
+        ],
+        "max_abs_error": 1.1444091796875e-05,
+        "max_relative_error_at_max_abs": 1.1388321845363672e-06,
+        "worst_trace": "tower.decode.row0.head_logits.1",
+        "worst_flat_index": 633
+      },
+      "tower_final_vs_previous_native": {
+        "status": "match",
+        "trace_count": 726,
+        "value_count": 2042880,
+        "atol": 0,
+        "rtol": 0,
+        "prefixes": [],
+        "max_abs_error": 0.0,
+        "max_relative_error_at_max_abs": 0.0,
+        "worst_trace": "",
+        "worst_flat_index": 0
+      }
+    },
+    "backbone": {
+      "path": "/private/tmp/cogni-drama3-reference/native_final_backbone.json",
+      "sha256": "21d7b5c5b3cfc2a938aef9101b27e0d0aa4aed830d46b932945a3378153211e4",
+      "bytes": 5502259
+    },
+    "tower": {
+      "path": "/private/tmp/cogni-drama3-reference/native_final_tower.json",
+      "sha256": "9f16f71b8df8e9e7d5a94d273c82ade993c9a05df279554ac15c44b3c12b1353",
+      "bytes": 39540756
+    },
+    "native_commands": [
+      "/private/tmp/cogni-drama3-reference/drama3_trace_final /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 /private/tmp/cogni-drama3-reference/actual_inputs.json /private/tmp/cogni-drama3-reference/native_final_backbone.json",
+      "/private/tmp/cogni-drama3-reference/drama3_tower_trace_final /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 /private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json /private/tmp/cogni-drama3-reference/native_final_tower.json"
+    ],
+    "execution_guard": "Both native trace commands ran through scripts/run_safe.sh with 1200s timeout, 40960 MiB RSS cap and 25% minimum free-memory preflight.",
+    "meaning": "Final-source native traces are elementwise identical as declared Float32 to the earlier native traces; scoped upstream and strict terminal comparisons were rerun and passed."
+  },
+  "adversary": {
+    "verdict": "ROBUST within the declared pinned smoke scope",
+    "checks": [
+      "Final-source backbone/tower activation replay and exact equality to measured native traces.",
+      "Strict terminal tower logits plus 18/18 upstream argmax agreement; intermediate tolerance failures retained.",
+      "Complete exact-code MLX DAC replay with no waveform renormalization; maximum one PCM16 count difference.",
+      "Final-source independent repeat produced identical code frames and WAV bytes.",
+      "Unsupported tower architecture flags and nonfinite numeric settings reject; seeded comparator defect rejects.",
+      "Primary checkout and existing Qwen edits preserved in a separate worktree."
+    ],
+    "residual_limits": [
+      "Only one complete short English utterance measured.",
+      "CPU F32 execution with stored BF16 values promoted; no stock MLX BF16 equality claim.",
+      "Internal tolerances are observed probe allowances, not universal guarantees.",
+      "No subjective listening, broad intelligibility, voice cloning, streaming, long-form, Metal, or real-time performance evaluation."
+    ]
+  }
+}

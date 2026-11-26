@@ -1,0 +1,602 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-dense-fusion-20261017",
+  "base_revision": "932e7b6b2cc4e5237238e85e1e2b0945824116ec",
+  "created_at_utc": "2026-10-17T00:14:00.338234+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Guarded opt-in four-projection dispatch preserves exact native GPU outputs at tested inputs/geometries; local paired command improvement only.",
+    "default": "DRAMA3_BACKBONE_DENSE_FUSION=0 (unset also off)",
+    "rollback": "DRAMA3_BACKBONE_DENSE_FUSION=0",
+    "not_established": [
+      "full-request benefit or performance non-regression",
+      "general upstream compatibility",
+      "realtime generation"
+    ],
+    "overall_realtime_goal": "IN_PROGRESS"
+  },
+  "definition_of_done": {
+    "commands_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-commands.json",
+      "sha256": "e3c84bad7fccc01a3cc2bb0c3e987374197c5811be7cd54ec972d161d39cc94c"
+    },
+    "executed": [
+      {
+        "name": "build-dense-fusion-r2",
+        "exit_code": 0,
+        "log_sha256": "d7b7c24ff4f30df3d04cc75dc9294ec29b12b6e4aa8606c6ba3effba6d369fed"
+      },
+      {
+        "name": "dense-fusion-r2",
+        "exit_code": 0,
+        "log_sha256": "737e5d2e01bfdd5ad14824bc37b0a1bfc27cdddd507cca1b7df84d420c31ecee"
+      },
+      {
+        "name": "build-studio-dense-fusion-r1",
+        "exit_code": 0,
+        "log_sha256": "91041027999ecb86827188c2a41346f784cf42334afcd6122e9d2cb5687242c4"
+      },
+      {
+        "name": "dense-fusion-request-abba-r1",
+        "exit_code": 0,
+        "log_sha256": "7e0f8a4ac2e24fb8d8e0148d954f28d05db1c87a2c1e540689ecb6c9d2ac543c"
+      },
+      {
+        "name": "dense-fusion-spec-r1",
+        "exit_code": 0,
+        "log_sha256": "be2d46716bd399e0ad7a6e3f5a0d64fc5ec337793f9d59d436d6da100c0d4efe"
+      },
+      {
+        "name": "build-dense-decode-r1",
+        "exit_code": 0,
+        "log_sha256": "f24030fc095df1c926ec42b76d19c063c685352513dcef7916876fe8fdc01674"
+      },
+      {
+        "name": "dense-decode-r1",
+        "exit_code": 0,
+        "log_sha256": "aeac92680334ef35c410d08971170f80206b843bc4f5f9dc98e36a17bd76aaf5"
+      }
+    ],
+    "expected_signals": "17 Metal examples pass, local GPU exact/finite with rejecting negative controls, 243 decode boundaries exact with identical MLX metrics, all 12 requests exact with unchanged allocation/read/wait controls. Request benefit qualifies separately.",
+    "decode_exit_scope": "Exit zero qualifies native parity and metric preservation; strict upstream remains false."
+  },
+  "final_source_sha256": {
+    "src/ml/audio/drama3/resident.cr": "4765b18e8a0a3414247503df2761a95a91c0476d52386d713702a61259ddd39f",
+    "src/ml/audio/drama3/backbone_resident.cr": "8e0d10e42e6d3f1d57f06298c09784edf410f18d4ad2addf430386d1c06123e3",
+    "src/ml/audio/drama3/kernels/resident.metal": "dccab5693e535ca491fbffade21a28e866fdd11830b61d2bd4053a581d906b93",
+    "scripts/drama3/measure_host_pairs.py": "debf05310b7c1afe6254b39e6ce84aca061cd57f45f6fa3b689324168b70819c",
+    "examples/drama3_dense_fusion_benchmark.cr": "df38ff41936f9aecc6eeff3f3821f87779413baf141f27f197d8f3ae91defc2d",
+    "examples/drama3_dense_decode_compare.cr": "c62720621fdbf24a1450bbe26d4dc7f5eefd694b855c07db5775c883bdf83803",
+    "examples/support/drama3_dense_fusion.metal": "8411dabfdedee24603221337d759fff038d8348955f9e4d59dfe6f162c30cff7",
+    "spec/drama3_dense_fusion_spec.cr": "bae6861e9309ef832a1dfce024d8cbda495f4062edffc6626be562482f2a7bfd"
+  },
+  "lineage": {
+    "model": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "input_rows": 3,
+      "hidden_width": 2048,
+      "layers": 40,
+      "full_attention_interval": 4,
+      "linear_attention_layers": 30
+    },
+    "upstream_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+      "sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79",
+      "manifest_path": "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json.manifest.json",
+      "manifest_sha256": "a82b5940c42ffa92eb3f405b0b79dd91c83fab14ab1d8c5fbf7b115eba035686",
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "trace_count": 243,
+      "shard_sha256_recorded": false
+    },
+    "local_operands": {
+      "event": "dense_fusion_invocation",
+      "id": "6cf43549cf3c73329ea541584be7b6d7",
+      "model": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "fixture": "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json",
+      "fixture_sha256": "991fe333ba796841b7aff627a14816dc94bec0b3e107a77b4b8d5f0804a3298e",
+      "shapes": [
+        [
+          8192,
+          2048
+        ],
+        [
+          4096,
+          2048
+        ],
+        [
+          32,
+          2048
+        ],
+        [
+          32,
+          2048
+        ]
+      ],
+      "reference": "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/dense_inputs.reference.json",
+      "reference_sha256": "ab7bb6324a1afcb6e111636a5b34c4cae0b5887225787a60a40d11ce1709acf1",
+      "mapped_weights_sha256": "f6499c3a8b9915deb6788881444d198870a2cb07bb8af9fa08d7293498770cae",
+      "model_repository": "cguldogan/drama-3-mlx-q4",
+      "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "source_sha256": {
+        "benchmark": "df38ff41936f9aecc6eeff3f3821f87779413baf141f27f197d8f3ae91defc2d",
+        "support": "8411dabfdedee24603221337d759fff038d8348955f9e4d59dfe6f162c30cff7",
+        "tolerance": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+        "resident_cr": "4765b18e8a0a3414247503df2761a95a91c0476d52386d713702a61259ddd39f",
+        "resident_metal": "dccab5693e535ca491fbffade21a28e866fdd11830b61d2bd4053a581d906b93"
+      },
+      "queue_depth": 2,
+      "warmups": 2,
+      "measured_pairs": 7,
+      "repeats": 8,
+      "timing_scope": "paired overlapping command intervals, not isolated kernels or additive family costs"
+    },
+    "decode_input": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+      "sha256": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3",
+      "provenance": "pinned three-row dense-20261014 input_embeddings; row order is file order"
+    },
+    "source_build_binary_join": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-final-analysis.json",
+      "sha256": "d7cc04d8b93fd2ff17447a0e6876ab14a0545c2114cb1c61a8a4e73943337af0"
+    },
+    "bridge": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/bridge.o",
+      "sha256": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49"
+    },
+    "whole_checkpoint_shards_hashed": false,
+    "studio_selector_limit": "Studio records requested controls, not actual frozen dispatch receipts. The selector is observed in the separate decode harness and specs."
+  },
+  "numerics": {
+    "metal_examples_passed": 17,
+    "local_values_per_arm": 2668032,
+    "local_bit_mismatches": 0,
+    "local_nonfinite_pairs": 0,
+    "negative_control_receipt": [
+      2,
+      1
+    ],
+    "mlx_projection_values": 37056,
+    "mlx_projection_tolerance_failures": 0,
+    "decode_boundaries": 243,
+    "decode_values": 497664,
+    "decode_native_exact": true,
+    "decode_upstream_metrics_identical": true,
+    "decode_strict_upstream_pass": false,
+    "known_failed_boundary": {
+      "row": 1,
+      "stage": "backbone.layers.39.hidden",
+      "metrics": {
+        "bit_differences": 2017,
+        "tolerance_failures": 1,
+        "max_abs": 0.01953125,
+        "max_ratio": 2.4254475,
+        "nonfinite": 0
+      }
+    },
+    "tolerances": "Unchanged intermediate 6e-5/3e-4, final hidden 3e-5/3e-4. Prior strict backbone/DAC gates remain open.",
+    "coverage_limit": "Three captured decode rows and tested geometries, not arbitrary trajectories. Nonzero output offsets use a direct test invocation of the production kernel."
+  },
+  "timing": {
+    "local_pooled_median_paired_ratio": 1.1682353005457182,
+    "local_candidate_faster_pairs": 21,
+    "local_row_median_ratios": {
+      "0": 1.1901839198104336,
+      "1": 1.158113568733776,
+      "2": 1.1632949391538638
+    },
+    "local_scope": "local counterbalanced paired command intervals; not isolated kernel durations or end-to-end throughput",
+    "request": {
+      "status": "PASS",
+      "format": "drama3-dense-fusion-request-analysis-v1",
+      "source": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-abba-r1-worker.json",
+      "source_sha256": "3553e352e54ac7dc060ca2923334d7d8c67a544ba9da492208b7a5bbcdfaff32",
+      "binary_sha256": "a02b85c0d9ea53dce47c2b43d19cf49dbb528f3b6d542ce7eb25b361247ab121",
+      "order": [
+        "0",
+        "1",
+        "1",
+        "0"
+      ],
+      "unit": "per-worker median of two correlated warm requests; one cold excluded per worker",
+      "all_complete_codes_sampler_wav_graph_reads_equal": true,
+      "exact_requests": 12,
+      "cold_and_warm_allocation_counts_and_requested_bytes_unchanged": true,
+      "warm_allocation_stats": {
+        "allocations": 135590,
+        "requested_bytes": 4079562724,
+        "allocation_profile": false,
+        "allocation_ns": 0
+      },
+      "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "speech_seconds": 2.786394557823129,
+      "workers": [
+        {
+          "arm": 0,
+          "fusion": "0",
+          "warm_samples": 2,
+          "samples_seconds": {
+            "request_wall": [
+              27.03741562506184,
+              20.18633724981919
+            ],
+            "generation": [
+              24.292997,
+              17.340064083
+            ],
+            "codec": [
+              2.691415583,
+              2.793696042
+            ]
+          },
+          "median_seconds": {
+            "request_wall": 23.611876437440515,
+            "generation": 20.8165305415,
+            "codec": 2.7425558125
+          },
+          "cold_request_seconds": 33.44958308385685,
+          "host_load_before": [
+            [
+              15.666015625,
+              15.92333984375,
+              15.796875
+            ],
+            [
+              14.484375,
+              15.58642578125,
+              15.67724609375
+            ],
+            [
+              13.056640625,
+              15.1572265625,
+              15.5185546875
+            ]
+          ],
+          "host_load_after": [
+            [
+              14.484375,
+              15.58642578125,
+              15.67724609375
+            ],
+            [
+              13.056640625,
+              15.1572265625,
+              15.5185546875
+            ],
+            [
+              12.43017578125,
+              14.89794921875,
+              15.41796875
+            ]
+          ]
+        },
+        {
+          "arm": 1,
+          "fusion": "1",
+          "warm_samples": 2,
+          "samples_seconds": {
+            "request_wall": [
+              25.151692541781813,
+              22.85693654185161
+            ],
+            "generation": [
+              21.980334042,
+              18.236394917
+            ],
+            "codec": [
+              3.123948333,
+              4.518500375
+            ]
+          },
+          "median_seconds": {
+            "request_wall": 24.00431454181671,
+            "generation": 20.108364479499997,
+            "codec": 3.821224354
+          },
+          "cold_request_seconds": 34.13439154205844,
+          "host_load_before": [
+            [
+              12.43017578125,
+              14.89794921875,
+              15.41796875
+            ],
+            [
+              11.36962890625,
+              14.3984375,
+              15.21728515625
+            ],
+            [
+              10.95654296875,
+              14.0078125,
+              15.046875
+            ]
+          ],
+          "host_load_after": [
+            [
+              11.36962890625,
+              14.3984375,
+              15.21728515625
+            ],
+            [
+              10.95654296875,
+              14.0078125,
+              15.046875
+            ],
+            [
+              12.35791015625,
+              14.1474609375,
+              15.07373046875
+            ]
+          ]
+        },
+        {
+          "arm": 2,
+          "fusion": "1",
+          "warm_samples": 2,
+          "samples_seconds": {
+            "request_wall": [
+              27.074214540887624,
+              26.774205207824707
+            ],
+            "generation": [
+              21.577468125,
+              23.171420209
+            ],
+            "codec": [
+              5.395777042,
+              3.560183209
+            ]
+          },
+          "median_seconds": {
+            "request_wall": 26.924209874356166,
+            "generation": 22.374444167,
+            "codec": 4.4779801255
+          },
+          "cold_request_seconds": 34.400633624754846,
+          "host_load_before": [
+            [
+              12.35791015625,
+              14.1474609375,
+              15.07373046875
+            ],
+            [
+              12.13720703125,
+              13.95556640625,
+              14.96923828125
+            ],
+            [
+              11.08447265625,
+              13.501953125,
+              14.767578125
+            ]
+          ],
+          "host_load_after": [
+            [
+              12.13720703125,
+              13.95556640625,
+              14.96923828125
+            ],
+            [
+              11.08447265625,
+              13.501953125,
+              14.767578125
+            ],
+            [
+              9.951171875,
+              13.08056640625,
+              14.5810546875
+            ]
+          ]
+        },
+        {
+          "arm": 3,
+          "fusion": "0",
+          "warm_samples": 2,
+          "samples_seconds": {
+            "request_wall": [
+              24.88024316634983,
+              26.403323790989816
+            ],
+            "generation": [
+              20.39970275,
+              23.112172417
+            ],
+            "codec": [
+              4.4157775,
+              3.241713958
+            ]
+          },
+          "median_seconds": {
+            "request_wall": 25.641783478669822,
+            "generation": 21.7559375835,
+            "codec": 3.828745729
+          },
+          "cold_request_seconds": 32.5082153333351,
+          "host_load_before": [
+            [
+              9.951171875,
+              13.08056640625,
+              14.5810546875
+            ],
+            [
+              9.83056640625,
+              12.681640625,
+              14.37255859375
+            ],
+            [
+              8.53076171875,
+              12.15673828125,
+              14.134765625
+            ]
+          ],
+          "host_load_after": [
+            [
+              9.83056640625,
+              12.681640625,
+              14.37255859375
+            ],
+            [
+              8.53076171875,
+              12.15673828125,
+              14.134765625
+            ],
+            [
+              9.06494140625,
+              12.0224609375,
+              14.0302734375
+            ]
+          ]
+        }
+      ],
+      "mirrored_pairs": [
+        {
+          "baseline_arm": 0,
+          "candidate_arm": 1,
+          "baseline_over_candidate": {
+            "request_wall": 0.9836513513563343,
+            "generation": 1.035217486868311,
+            "codec": 0.7177165113660845
+          }
+        },
+        {
+          "baseline_arm": 3,
+          "candidate_arm": 2,
+          "baseline_over_candidate": {
+            "request_wall": 0.9523690239501593,
+            "generation": 0.972356560954831,
+            "codec": 0.855016239843738
+          }
+        }
+      ],
+      "worker_median_summary_seconds": {
+        "0": {
+          "request_wall": 24.62682995805517,
+          "generation": 21.2862340625,
+          "codec": 3.2856507707500002
+        },
+        "1": {
+          "request_wall": 25.46426220808644,
+          "generation": 21.24140432325,
+          "codec": 4.14960223975
+        }
+      },
+      "summary_baseline_over_candidate": {
+        "request_wall": 0.9671134296690781,
+        "generation": 1.0021104884859675,
+        "codec": 0.79179896792902
+      },
+      "request_rtf": {
+        "0": 8.83824219686062,
+        "1": 9.138785509249772
+      },
+      "readbacks": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "graph": {
+        "depth": 2,
+        "submitted": 122,
+        "completed": 122,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 122,
+        "retained_bytes": 0,
+        "max_retained_bytes": 31892098828
+      },
+      "limitations": [
+        "active host; ABBA controls linear drift, not abrupt workload or paging changes",
+        "two warm requests per worker are correlated; no independent replication",
+        "phase measurements do not establish additive shader family costs"
+      ]
+    },
+    "decision": "Do not promote default. Both mirrored request pairs fail to show benefit; variation in unchanged DAC prevents attributing a causal kernel regression."
+  },
+  "execution": {
+    "saved_dispatches_per_backbone_decode_step": 90,
+    "additional_production_gpu_allocations_submissions_waits_reads": 0,
+    "same_four_output_allocations_in_original_order": true,
+    "local_graph": {
+      "depth": 2,
+      "submitted": 84,
+      "completed": 84,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 84,
+      "retained_bytes": 0,
+      "max_retained_bytes": 1194016
+    },
+    "local_readbacks": {
+      "terminal": 464
+    },
+    "decode_graph": {
+      "depth": 2,
+      "submitted": 1,
+      "completed": 1,
+      "pending": 0,
+      "max_pending": 1,
+      "completion_waits": 1,
+      "retained_bytes": 0,
+      "max_retained_bytes": 21939460832
+    },
+    "decode_readbacks": {
+      "control": 4,
+      "terminal": 14580
+    },
+    "controls": "Serial run_safe; 15 percent free-memory floor; quiet-host 0; external scratch; local weights; unrelated processes untouched."
+  },
+  "adversary": {
+    "verdict": "ROBUST within tested native parity/local timing; VULNERABLE for full-request speedup or full upstream compatibility.",
+    "review": "Correlated same-lineage mini-Quad source review plus root builds and GPU execution; not independent replication. Opposite performance framing and preserved strict failure prevent promotion."
+  },
+  "trust": {
+    "F": "Executable GPU bit/finite/tolerance guards and hashed command receipts; no formal proof.",
+    "G": "Pinned local model, three upstream inputs, tested formats/offsets, one short request workload.",
+    "R": "Root execution and correlated review on an active host; no independent replication."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-r2-analysis.json",
+      "sha256": "fb1db47b0d304062170db7fdd98132936923506e0269b88b485cce28f44a461b"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-abba-r1-analysis.json",
+      "sha256": "81f309284ca27f2325fbe103f433bf3bcec4d673a4529eb178a2651bb48ad0c3"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-decode-r1.json",
+      "sha256": "6e663fa1acf13c6096bad9f3f0a007871a3b11c373dbce37c062bbfc966bd790"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-abba-r1-worker.json",
+      "sha256": "3553e352e54ac7dc060ca2923334d7d8c67a544ba9da492208b7a5bbcdfaff32"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/analyze_dense_fusion.py",
+      "sha256": "4cd5204abd6a33e0683ba38c0644ccf7da017c2d3f0fa6139cf825a738599016"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/analyze_dense_request.py",
+      "sha256": "1058f64815e32b2eb49e393eccb74dd05aebaf8799ee8f785781e33c1b76fdac"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-final-analysis.json",
+      "sha256": "d7cc04d8b93fd2ff17447a0e6876ab14a0545c2114cb1c61a8a4e73943337af0"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/make_dense_fusion_packet.py",
+      "sha256": "ce5f832f49717fc0ea54683693341c228195db3ae49396d40f86cea2723f65fa"
+    }
+  ],
+  "refresh_on": [
+    "source/compiler/model/input/reference/tolerance/queue/device/OS drift",
+    "text/length/host-load change for timing generalization",
+    "raw evidence loss"
+  ],
+  "failure_policy": "Keep selector off and reopen any dependent claim after a failed refresh; never widen tolerances to pass.",
+  "next_signal": "Capture current tower FFN w1/w3 operands before exact-tree shared-input dispatch probe; dominance and expected RTF gain are unproven."
+}

@@ -1,0 +1,943 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-allocation-reuse",
+  "created_at_utc": "2026-10-16T12:37:29.717502+00:00",
+  "base_revision": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+  "allowed_paths": [
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/generator_resident.cr",
+    "src/ml/audio/drama3/tower_resident.cr",
+    "src/ml/audio/drama3/studio/engine.cr",
+    "spec/drama3_workspace_spec.cr",
+    "spec/drama3_tower_workspace_spec.cr",
+    "spec/drama3_generator_workspace_spec.cr",
+    "docs/drama3-allocation-reuse.md",
+    "docs/drama3-native-frontier.md",
+    "docs/drama3-window-memory.md",
+    "docs/drama3-studio.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-allocation-reuse.json"
+  ],
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "Opt-in per-generation GPU backing reuse, reduced backing construction/counts and unchanged bounded numeric/lifetime behavior on the pinned native Metal cases.",
+    "default": "DRAMA3_GENERATION_SCRATCH=0",
+    "excluded": [
+      "Stable request-to-WAV speedup or default promotion",
+      "Whole-pipeline allocation/GC removal or cross-job pooling",
+      "Generic foreign-queue/hardware-loss recovery or concurrent workspace entry",
+      "Stock MLX RNG parity, newly regenerated MLX waveform, general MoE39/DAC/long-output/voice-quality parity"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Overwriting a still-live input/residual/escaped frame/diagnostic alias, or releasing a current/retired backing before checked terminal completion.",
+    "guards": "Separate ordinal per call allocation and four phase plans; serial tracked GPU ordering; persistent escaping frames; fresh uploads/static weights/finite status; trace bypass/late-enable rejection; retained replaced backings; existing terminal release and abort quarantine.",
+    "rollback": "DRAMA3_GENERATION_SCRATCH=0 or revert isolated feature commit. No shader/model/precision/tolerance change."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+    "crystal": "Crystal 1.22.0 (2026-10-12)\n\nLLVM: 23.1.3\nDefault target: aarch64-apple-darwin25.6.0",
+    "python_mlx": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]\n0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "upstream_worktree_clean": true,
+    "upstream_control_source_hashes_rechecked": true,
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer_sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+      "indexed_shards": "model-00001-of-00005.safetensors,model-00002-of-00005.safetensors,model-00003-of-00005.safetensors,model-00004-of-00005.safetensors,model-00005-of-00005.safetensors",
+      "shard_sizes_bytes": "5498947446,5390036166,5402946528,5423590660,2277811252"
+    },
+    "execution": "Serial run_safe; physical free-memory floor15%; quiet-host off; unrelated processes untouched. Shared-host timings.",
+    "native_fixed_options": {
+      "DRAMA3_BACKEND": "metal",
+      "DRAMA3_DAC_SCRATCH": "0",
+      "DRAMA3_MEMORY_PROFILE": "0",
+      "DRAMA3_MOE_BATCH": "1",
+      "DRAMA3_DENSE_REDUCTION": "tree",
+      "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+      "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+      "DRAMA3_MMAP_SHARED": "0",
+      "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+      "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+      "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+      "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "MLX_ENABLE_TF32": "0",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "HF_HUB_DISABLE_TELEMETRY": "1",
+      "DRAMA3_ALLOCATION_PROFILE": "0",
+      "DRAMA3_METAL_TIMELINE": "1",
+      "DRAMA3_PROBE_BINARY": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final"
+    },
+    "worker_fixed_options": {
+      "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+      "DRAMA3_GENERATION_SCRATCH": "per-arm 0 or 1"
+    }
+  },
+  "source_state": {
+    "production_sha256": {
+      "src/ml/audio/drama3/resident.cr": "14ca0d3fe35faac0e3c20c7c44a4560be9b7feef81685f186f041d5d9839f585",
+      "src/ml/audio/drama3/generator_resident.cr": "24babe84df0a819c9f5e57b224f00b029abc0b82d261cae4c99b54586f82911a",
+      "src/ml/audio/drama3/tower_resident.cr": "1607ceeaedb2f3295434287714fec37d009a1517ad3e0051e9312c10bd64eda1",
+      "src/ml/audio/drama3/studio/engine.cr": "103fed4c91c8f7ea9d43c32825e39f2b435e02f60f27a52d2429cd7382059ee1"
+    },
+    "new_specs_sha256": {
+      "spec/drama3_workspace_spec.cr": "1bf48142acb793e0ae51844b4f07a24cbe0a43fc788d743b7b79af2181ed3a08",
+      "spec/drama3_tower_workspace_spec.cr": "a09000509cf4302781fd57738c3bee52198b8144d09f9ebe36850438811c9992",
+      "spec/drama3_generator_workspace_spec.cr": "dc4f206db79d5fd07e970caa7710b9342f8e21392f80b7be320ae6f9dfd9646f"
+    },
+    "final_studio_binary": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final",
+      "bytes": 2543656,
+      "sha256": "aff21601015fb05ba6721209bcf6952a8b9536f5d120f892cc56c040e5452502"
+    },
+    "final_source_matches_build_spec_cpu_manifests": true,
+    "all_final_jobs_match_final_binary_sha256": true,
+    "v1_scope": "Six timer-on and eight timer-off jobs precede retired-backing retention and fresh-only capacity-validation fixes. Four final-source jobs and final tests cover the completed implementation.",
+    "v1_worker_helper_bytes_recovered_and_hash_matched": true,
+    "source_seal": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/source-seal.json",
+      "bytes": 1268,
+      "sha256": "3f269d49b512171ea00ed7c788af5acaf3b211c29548bfff1c8da8b292a03a11"
+    }
+  },
+  "allocation_measurement": {
+    "timer_scope": "Optional monotonic clocks around MetalBuffer.new only; excludes wrappers/encoding/GC. Off for timing experiments. No added GPU sync.",
+    "warm_generation_fresh_allocations": 135139,
+    "warm_generation_reuse_allocations": 1894,
+    "reduction_percent": 98.59848008346961,
+    "warm_generation_requested_bytes_fresh": 1596632160,
+    "warm_generation_requested_bytes_reuse": 22125244,
+    "v1_warm_allocator_ms_fresh": [
+      819.430455,
+      892.223253
+    ],
+    "v1_warm_allocator_ms_reuse": [
+      7.149623,
+      9.372604
+    ],
+    "short_job_workspace_peak_bytes_sum": 22110080,
+    "final_released_workspaces": {
+      "backbone": {
+        "slots": 0,
+        "retired_slots": 0,
+        "bytes": 0,
+        "peak_bytes": 13932708,
+        "uses": 89,
+        "reuses": 103664,
+        "released": 1,
+        "quarantined": 0
+      },
+      "tower.prefill": {
+        "slots": 0,
+        "retired_slots": 0,
+        "bytes": 0,
+        "peak_bytes": 4080468,
+        "uses": 28,
+        "reuses": 9045,
+        "released": 1,
+        "quarantined": 0
+      },
+      "tower.sample": {
+        "slots": 0,
+        "retired_slots": 0,
+        "bytes": 0,
+        "peak_bytes": 4080504,
+        "uses": 60,
+        "reuses": 20296,
+        "released": 1,
+        "quarantined": 0
+      },
+      "main": {
+        "slots": 0,
+        "retired_slots": 0,
+        "bytes": 0,
+        "peak_bytes": 16400,
+        "uses": 61,
+        "reuses": 240,
+        "released": 1,
+        "quarantined": 0
+      }
+    },
+    "remaining": "Slots allocate on first use per job. Inputs, state, metadata/wrappers and codec allocations/GC remain."
+  },
+  "timing": {
+    "v1_timer_off_order": "fresh/reuse/reuse/fresh; each cold then warm; two warm samples per mode",
+    "v1_warm_generation_seconds_fresh_reuse": [
+      22.515020396,
+      21.7236174585
+    ],
+    "v1_warm_request_to_wav_seconds_fresh_reuse": [
+      28.588354979,
+      29.546276999500016
+    ],
+    "final_timer_off_order": "reuse/fresh; each cold then warm; one warm sample per mode",
+    "final_warm_generation_seconds_fresh_reuse": [
+      21.562620333,
+      25.768575708
+    ],
+    "final_warm_request_to_wav_seconds_fresh_reuse": [
+      27.618282459,
+      31.934610208000002
+    ],
+    "decision": "Keep DRAMA3_GENERATION_SCRATCH=0. Allocation cost/count reduction is observed; timer-off request-to-WAV speedup is not stable, including a slower final-source warm reuse job.",
+    "next_falsifier": "Separate host encoding/bookkeeping/GC from DAC host-time variation with interleaved pairs and existing completed-command timestamps before any default promotion.",
+    "fixed_gpu_partition_scope": "Only this 29-row/60-frame/EOS/32-DAC-command trajectory: first 90 completed timeline commands are generation; last 32 are DAC. No new synchronization or phase marker added."
+  },
+  "verification": {
+    "metal_examples": 49,
+    "metal_failures": 0,
+    "cpu_examples": 29,
+    "cpu_failures": 0,
+    "release_build": true,
+    "format_check": true,
+    "metal_scope": [
+      "Depths0/2",
+      "Two pending commands and forced GC",
+      "Real slot growth, retired backing retention and abort quarantine",
+      "Fresh upload/static weights/finite status and zero refill",
+      "Foreign/nested/released/active-release guards",
+      "Tower nonzero offsets and persistent output frame handoff",
+      "Generator EOS/three-frame equality, retained traces and late trace rejection",
+      "Reference prompt and existing resident regression suites"
+    ],
+    "paired_full_jobs": 18,
+    "v1_timer_on_jobs": 6,
+    "v1_timer_off_jobs": 8,
+    "final_timer_off_jobs": 4,
+    "all_paired_frames_wav_tape_ledgers_exact": true,
+    "frames": 60,
+    "frame_width": 11,
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+    "native_sampler_inputs": {
+      "dtype": "float32-le",
+      "uniform_count": 704,
+      "sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "provenance": "host input tape uploaded once"
+    },
+    "readback_bytes_per_job": {
+      "control": 496,
+      "terminal": 494160
+    },
+    "graph_counts_per_job": {
+      "submitted": 122,
+      "completed": 122,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 122
+    },
+    "graph_retained_bytes_note": "Alias-counting ledger is not physical GPU memory or a peak allocation bound.",
+    "upstream_full_code_comparison": {
+      "native_frames": 60,
+      "mlx_frames": 60,
+      "main_token": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebooks": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_tokens": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "helper_sha256": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da",
+      "sampler_prefix_sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "scope": "Shared F32 sampler input tape, F32 MLX core control; full codes compared on GPU. Existing native numerical frontier remains open if outputs differ."
+    },
+    "upstream_control": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json",
+      "bytes": 27638,
+      "sha256": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+      "created_at_utc": "2026-10-16T04:05:08.465417+00:00",
+      "kind": "Saved pinned upstream F32-core shared-uniform inverse-CDF control. Fresh GPU code comparison this turn; upstream generation itself was not rerun.",
+      "control_uniform_tape_count": 8448,
+      "native_uniform_prefix_count": 704,
+      "sampler_relation": "Native704 F32 values equal the saved control tape prefix; common effective draws identical. Unused tape lengths differ; no stock RNG parity claim."
+    },
+    "prefill": {
+      "rows": 158,
+      "capacity": 2205,
+      "workspace_execution": "Direct real scopes, with diagnostic observer disabled; do not infer usage from generator environment flag.",
+      "stages": [
+        {
+          "name": "prompt.backbone.hidden",
+          "shape": [
+            1,
+            2048
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 2048,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.05126616,
+          "passes": true
+        },
+        {
+          "name": "prompt.main_logits",
+          "shape": [
+            1,
+            4097
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 4097,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.0079710195,
+          "passes": true
+        }
+      ],
+      "tolerances": {
+        "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+      },
+      "zero_post_first_backbone_allocations": true,
+      "zero_post_first_tower_prefill_allocations": true,
+      "graph": {
+        "fresh_arm": {
+          "submitted": 159,
+          "completed": 159,
+          "completion_waits": 159,
+          "pending": 0,
+          "max_pending": 2
+        },
+        "workspace_arm": {
+          "submitted": 159,
+          "completed": 159,
+          "completion_waits": 159,
+          "pending": 0,
+          "max_pending": 2
+        },
+        "submits_and_waits_equal": true,
+        "before_metric_reads": {
+          "depth": 2,
+          "submitted": 319,
+          "completed": 319,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 319,
+          "retained_bytes": 0,
+          "max_retained_bytes": 32565096380
+        },
+        "after_metric_reads": {
+          "depth": 2,
+          "submitted": 319,
+          "completed": 319,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 319,
+          "retained_bytes": 0,
+          "max_retained_bytes": 32565096380
+        }
+      },
+      "readbacks": {
+        "control": 16,
+        "diagnostic": 40
+      },
+      "scope": "158-row resident prefill; token embedding, tower.embed_backbone, and backbone.step use the backbone workspace; the 157 non-final teacher_force calls use a separate tower.prefill workspace. Teacher-force outputs are discarded. Final hidden/logits are copied to persistent buffers before both workspaces are released. No activation CPU reads; only terminal reduced GPU comparison metrics are read.",
+      "arm_comparison_limit": "Arms share the Context-level immutable converted-weight cache; scope counts isolate repeated backbone and tower.prefill scratch requests.",
+      "fixture": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+        "bytes": 125152,
+        "sha256": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66"
+      },
+      "source_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json",
+        "bytes": 230396,
+        "sha256": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19"
+      },
+      "sampler_capture": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json.sampler_logits.npz",
+        "bytes": 164372,
+        "sha256": "5577c320dbbcb5d7e5f1892b2eca2a49a5b9438355c5bf9632b476fcd59b6686"
+      }
+    }
+  },
+  "dod_commands": [
+    {
+      "name": "profile-paired-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/usr/bin/python3",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/paired_worker.py",
+        "profile",
+        "0,1",
+        "3"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "1",
+        "DRAMA3_METAL_TIMELINE": "1"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:13:33.076820+00:00",
+      "finished_at_utc": "2026-10-16T12:16:50.799612+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 197.65158962504938,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/profile-paired-v1.log",
+      "log_sha256": "4f3596b9cc6ccb203abd1946a70f01bdb51b3b5695e5dc3cd63eadde44a2358a"
+    },
+    {
+      "name": "timing-paired-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/usr/bin/python3",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/paired_worker.py",
+        "timing",
+        "0,1,1,0",
+        "2"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0",
+        "DRAMA3_METAL_TIMELINE": "1"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:17:59.087094+00:00",
+      "finished_at_utc": "2026-10-16T12:22:19.499940+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 260.3890958339907,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/timing-paired-v1.log",
+      "log_sha256": "8e7f61054032b0b372c3af7d1e7b78d21cbe69f82f11b5c1dd26b34fc64cfa21"
+    },
+    {
+      "name": "metal-spec-final-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "spec",
+        "spec/drama3_workspace_spec.cr",
+        "spec/drama3_tower_workspace_spec.cr",
+        "spec/drama3_generator_workspace_spec.cr",
+        "spec/drama3_graph_resident_spec.cr",
+        "spec/drama3_graph_generator_spec.cr",
+        "spec/drama3_generator_resident_spec.cr",
+        "spec/drama3_reference_prompt_spec.cr",
+        "spec/drama3_tower_resident_spec.cr",
+        "spec/drama3_resident_spec.cr",
+        "-Ddrama3_metal",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_GENERATION_SCRATCH": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:35:32.761976+00:00",
+      "finished_at_utc": "2026-10-16T12:35:38.301746+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 5.5323267499916255,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/metal-spec-final-v2.log",
+      "log_sha256": "ecdb99d912466613ed412acbee5bdbd85b6bf686b9247af1b6a971b54d6c541c"
+    },
+    {
+      "name": "build-final",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "build",
+        "examples/drama3_studio.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "-o",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:23:26.673550+00:00",
+      "finished_at_utc": "2026-10-16T12:23:43.213389+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 16.532900500111282,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/build-final.log",
+      "log_sha256": "650df73775c35fa5eaf10d22aa82e02dd4198b87c2434eda6737c84ab8d96c5f"
+    },
+    {
+      "name": "timing-final",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/usr/bin/python3",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/paired_worker.py",
+        "final",
+        "1,0",
+        "2"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0",
+        "DRAMA3_METAL_TIMELINE": "1",
+        "DRAMA3_PROBE_BINARY": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:24:23.954380+00:00",
+      "finished_at_utc": "2026-10-16T12:26:36.685750+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 132.69967858307064,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/timing-final.log",
+      "log_sha256": "f1030da9f9e93ad1445d74dd655df3d28676567b80d406137d73a86f853b1d5a"
+    },
+    {
+      "name": "build-prefill-workspace-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "build",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill_workspace.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "-o",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace-v2",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:30:34.849295+00:00",
+      "finished_at_utc": "2026-10-16T12:30:43.443500+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 8.553010750096291,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/build-prefill-workspace-v2.log",
+      "log_sha256": "394f23521298010dd996648f46f8bea690cdc6a7007e70fccc3561cdbdf50b5e"
+    },
+    {
+      "name": "prefill-workspace-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace-v2",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace.json"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0",
+        "DRAMA3_METAL_TIMELINE": "0"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:31:15.926547+00:00",
+      "finished_at_utc": "2026-10-16T12:32:18.502418+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 62.56742795929313,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace-v2.log",
+      "log_sha256": "80b8c6b29ca95a7ce175a047001f3ca543c5d75a7b9819794d450070a0ae51ed"
+    },
+    {
+      "name": "upstream-full-codes",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/compare_worker_upstream.py"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0",
+        "DRAMA3_METAL_TIMELINE": "0"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:29:03.851028+00:00",
+      "finished_at_utc": "2026-10-16T12:29:04.628992+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7396793337538838,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/upstream-full-codes.log",
+      "log_sha256": "50c607ffc3ab49134552b1229bcfd1ed30d9218ab759c0171abe37258e9bea37"
+    },
+    {
+      "name": "cpu-contract-final",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "spec",
+        "-Dcpu_only",
+        "spec/drama3_studio_store_spec.cr",
+        "spec/drama3_studio_media_spec.cr",
+        "spec/drama3_studio_http_spec.cr",
+        "spec/drama3_studio_worker_spec.cr",
+        "spec/drama3_profile_spec.cr",
+        "spec/drama3_window_budget_spec.cr"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "DRAMA3_ALLOCATION_PROFILE": "0",
+        "DRAMA3_METAL_TIMELINE": "0"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:29:41.746322+00:00",
+      "finished_at_utc": "2026-10-16T12:29:50.911563+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 9.156702833250165,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/cpu-contract-final.log",
+      "log_sha256": "6f74bfbe5017b27f02ae38f5a411961267068a5f26b879e55d5e99abd9ae273a"
+    },
+    {
+      "name": "final-format-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "tool",
+        "format",
+        "--check",
+        "src/ml/audio/drama3/resident.cr",
+        "src/ml/audio/drama3/generator_resident.cr",
+        "src/ml/audio/drama3/tower_resident.cr",
+        "src/ml/audio/drama3/studio/engine.cr",
+        "spec/drama3_workspace_spec.cr",
+        "spec/drama3_tower_workspace_spec.cr",
+        "spec/drama3_generator_workspace_spec.cr"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_DAC_SCRATCH": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1"
+      },
+      "git_head": "ce59282556491c8c230b4a8303cb2c2da3c34f43",
+      "started_at_utc": "2026-10-16T12:35:32.022413+00:00",
+      "finished_at_utc": "2026-10-16T12:35:32.745883+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7161203753203154,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/final-format-v2.log",
+      "log_sha256": "2a2cef139744843e41b43281456c041c2f851227ce163ec2716a476fc9398ca4"
+    }
+  ],
+  "falsifiers_and_repairs": [
+    {
+      "probe": "Initial workspace compile control",
+      "result": "Undefined new_workspace before implementation; receipt retained in workspace-red.log."
+    },
+    {
+      "finding": "A grown ordinal dropped the replaced backing from workspace ownership before abort quarantine.",
+      "repair": "Retain every retired backing until terminal release/quarantine; tested with real pending growth and GC."
+    },
+    {
+      "finding": "Disabled scratch must not validate full configured score capacity.",
+      "repair": "Fresh path validates current active length; only active workspace reserves full capacity; final regression suite passes."
+    },
+    {
+      "probe": "prefill-workspace",
+      "result": "Helper KeyError num_codebooks before inference; native TowerConfig nested parsing fixes the harness; corrected v2 run passes. No production change or tolerance adjustment."
+    },
+    {
+      "probe": "final-format",
+      "result": "One new spec needed formatter changes; repaired, final-format-v2 and all49 Metal examples rerun successfully."
+    }
+  ],
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Known native queue/workspace lifetimes and stated bounded correctness/allocation evidence; no stable overall speed claim.",
+    "independence": "Correlated same-lineage mini-Quadrumvirate; root executed tests/probes and source/hash checks independently of worker assertions.",
+    "native_wait_semantics": "bridge waitUntilCompleted precedes checked command error status; generic opaque failed-wait/hardware-loss recovery untested."
+  },
+  "raw_artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/commands.json",
+      "bytes": 357931,
+      "sha256": "2d6f953d96162ecc3b0f106d695b877392e18fca6ab48fdf2a8fdfe77d307116"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/run.py",
+      "bytes": 3362,
+      "sha256": "29328613a6b39ca2f6a988d54903adefe81a57c3bbc0867383818a54fb828e23"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/allocation-analysis.json",
+      "bytes": 23743,
+      "sha256": "f7d4273fb59de2c58b68d9e230ba83cbd2f7924d7f33b2867c8bd08ba8391229"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/analyze_allocations.py",
+      "bytes": 5401,
+      "sha256": "1a472ea60cb682f1395cf9285cab2d2ade5c5035ca228fdf1890e4266179638e"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/source-seal.json",
+      "bytes": 1268,
+      "sha256": "3f269d49b512171ea00ed7c788af5acaf3b211c29548bfff1c8da8b292a03a11"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/profile-worker.json",
+      "bytes": 86220,
+      "sha256": "eb5c0487b66449baf488f39087e53dd0c13e5eaea7381c3b0b50926c8016a207"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/timing-worker.json",
+      "bytes": 114743,
+      "sha256": "66b7199d742451bfbe01ba449379e0316df52cf4d799e5e957e5b1461b8104a6"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/final-worker.json",
+      "bytes": 57980,
+      "sha256": "07be6f6aae707ec1f82e3f3edc49dd80a0a60ab15b6640f64640746393fad500"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/paired_worker-v1.py",
+      "bytes": 3930,
+      "sha256": "98684ba48ab29e6366134e2b8242ac7127c1b0d1382f283455dea2eac9cc4fed"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/paired_worker.py",
+      "bytes": 4040,
+      "sha256": "bd9435b277de2e94a6bb66511821c7a6be0ab75ea1e9e6e6a68faa7a6b235d78"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace",
+      "bytes": 2543648,
+      "sha256": "00e35ed92002da6bc41c5f7ab17ddfe18585cb7a8de1a7667309bb71aa814b1b"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/studio-workspace-final",
+      "bytes": 2543656,
+      "sha256": "aff21601015fb05ba6721209bcf6952a8b9536f5d120f892cc56c040e5452502"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/bridge.o",
+      "bytes": 66808,
+      "sha256": "a355b555dd78966f34623b3897d0b1176cff8e4bd7059f5c2d84c55283ab2d30"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill_workspace.cr",
+      "bytes": 26740,
+      "sha256": "679cfd0a3661690ec26c1e5d34328bce98d187efd7d570768a954aef519cd574"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace-v2",
+      "bytes": 1188600,
+      "sha256": "ada6903d1109704ebf309fc888b91c054d6ab4619643ee58bbb70957f3ec4c87"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/prefill-workspace.json",
+      "bytes": 7979,
+      "sha256": "81a1540f0e1759a65b6f804bda180b633cb3a20657043e0a5be9ff809a64dbcd"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/compare_worker_upstream.py",
+      "bytes": 1462,
+      "sha256": "c6323c5d956da36e37548b1edb6b27805e178b946805ba9b6742e023ccc7eac0"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/worker-upstream-comparison.json",
+      "bytes": 1181,
+      "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/workspace-red.log",
+      "bytes": 423,
+      "sha256": "015e2325fde1b00ba61ea2363ee1a2828455ac5bf349057e0b1c6dc8b8ef940d"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/workspace_red.cr",
+      "bytes": 193,
+      "sha256": "6a2c7048df32ced166edafe4e01e884dc0410f0b7d29f0ea2d2f3276db9fb749"
+    }
+  ],
+  "lineage_and_refresh": {
+    "assumptions": "Pinned source/checkpoint/inputs/tape/precision/gates; native serial tracked Metal queue; generator-controlled borrowed-buffer lifetimes.",
+    "consumer": "This bounded native generation storage claim and opt-in rollout; not a general speed or voice certificate.",
+    "decay_triggers": "Source/shader/model/fixture/text/tape/precision/tolerance/graph-policy/runtime/device/OS changes, or contradictory output/lifetime/performance evidence.",
+    "refresh": "Rebuild, run focused Metal/CPU guards, repeat identical-input fresh/reuse pairs and pinned GPU upstream comparisons. Re-measure timing with construction clocks off.",
+    "failure_policy": "Keep flag0; retain explicit numeric frontiers; abort/quarantine uncertain workspaces. Reopen dependent claims instead of widening gates."
+  }
+}

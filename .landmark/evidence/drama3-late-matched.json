@@ -1,0 +1,229 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-late-matched-20261016",
+  "created_at_utc": "2026-10-16T23:07:53.123792+00:00",
+  "base_revision": "d05bc45dc9db222e82d4df453705285a82cd4d1d",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded GPU diagnostic: earliest full-boundary tolerance witnesses and selected layer34-39 matched-input replay on one158-row chunk16 fixture.",
+    "result": "Same318 numerical reports at graph0/2. Shared controls pass; exact MoE/residual additions are bitwise. Local native down/whole-MoE failure remains at39. Earlier cumulative crossings35/37 have an unresolved cause.",
+    "exclusions": [
+      "No complete upstream compatibility, single-cause attribution, default promotion or speed gain.",
+      "No new production source, arithmetic, precision, synchronization or readback behavior.",
+      "No general scalar/sequence MLX-Q4 equivalence, long-utterance or realtime claim.",
+      "Same-lineage review is correlated; no independent model or build replication."
+    ]
+  },
+  "risk_and_recovery": {
+    "tier": "CAUTION for diagnostic attribution",
+    "guard": "Original upstream return capture; complete raw fixture/source SHA checks; route stable-order/permutation checks; GPU strict comparison negative oracle; exact operand lineage; separate full-boundary and local replay findings.",
+    "rollback": "Omit new diagnostics or revert this isolated slice.",
+    "execution": "Serial run_safe,15 percent floor, quiet-host off, unrelated processes untouched, external scratch/local weights."
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/commands.json",
+    "executed_commands": [
+      {
+        "name": "checkpoint-sha256",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/checkpoint-sha256.log",
+        "log_sha256": "d15f2d82e2fdf06c35194a91fde094f091a7e72002c2a6a124b19e9f5bd77456"
+      },
+      {
+        "name": "late-capture-offline",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-capture-offline.log",
+        "log_sha256": "8612205adc2d3541de880ebc33dfa089e4dac42667adcf5c0b60859a6deece5a"
+      },
+      {
+        "name": "capture-late-mlx",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/capture-late-mlx.log",
+        "log_sha256": "9e6a28d84502724151cd41e903eb21b22a6f204c8a18d05b569d0075af097880"
+      },
+      {
+        "name": "late-capture-offline-r2",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-capture-offline-r2.log",
+        "log_sha256": "ec274b1689e00b8d4bdcc8241ca48ed1bd57f8a2cb2a3442f4782d8f1a46c79a"
+      },
+      {
+        "name": "capture-late-mlx-r2",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/capture-late-mlx-r2.log",
+        "log_sha256": "6225a42c5e9649b44f8c58f498d5fdbde1d23178d2b4dbd525e8762fc138dc2e"
+      },
+      {
+        "name": "capture-fidelity",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/capture-fidelity.log",
+        "log_sha256": "087a1e0fe2a9e1cd5c0ea32be7e1cd023551d94dc8802b20d4d643538d6caee2"
+      },
+      {
+        "name": "build-late",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/build-late.log",
+        "log_sha256": "bf5706cabc18408229dcb51b3eb20dc749b03043198e3440369a3fc9e1ff1bd3"
+      },
+      {
+        "name": "late-fixture-validate",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-fixture-validate.log",
+        "log_sha256": "4d800536bac53842eb04bda3d6d21c85a8c9ae62297828f35d5e2f641b08c7f5"
+      },
+      {
+        "name": "late-analysis-tests",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-analysis-tests.log",
+        "log_sha256": "8e2b8da41b11c339ab5c7ac89b141312147e5be6fbe5d72f33c2572eae322894"
+      },
+      {
+        "name": "build-late-r2",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/build-late-r2.log",
+        "log_sha256": "70dde3b76e328b3d7dcadd522436675d455458f906c1569f5e60063cb8e39ab5"
+      },
+      {
+        "name": "build-late-r3",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/build-late-r3.log",
+        "log_sha256": "e62ef03e47d4e2ea9bcb11164caf2c030d04361488289de36c3e1912de683993"
+      },
+      {
+        "name": "late-gpu-spec",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-gpu-spec.log",
+        "log_sha256": "e96da100b58599ed38e98114d04b56ac5c726f7f8e4dab8d59cfe9a12f9c6bb3"
+      },
+      {
+        "name": "late-native-depth0",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-native-depth0.log",
+        "log_sha256": "1ef32748181906147745e3ee1c2e9b5f1673ad88a6bea4d8f49036bdc3947f59"
+      },
+      {
+        "name": "late-native-depth2",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-native-depth2.log",
+        "log_sha256": "48d1acfabf3f86276d9f9f8da8fa038f48d26d9f23e56d6b01d7da748a7db7f6"
+      },
+      {
+        "name": "weight-identity-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/weight-identity-final.log",
+        "log_sha256": "60030eadc50bb5e1c4a0e60d12fab3688d129cbbf4b42a7f998f258b7788643a"
+      },
+      {
+        "name": "late-offline-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-offline-final.log",
+        "log_sha256": "8266fd661cbfda1107ce14172a85af586bd5bbc429ec6f501e99b19e2a300d3c"
+      },
+      {
+        "name": "late-final-crosscheck",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/late-final-crosscheck.log",
+        "log_sha256": "2f1ac680c6256dcf1a5077ba26d9aaa9e7c614ee62725bd6aff8abb266ad0775"
+      }
+    ],
+    "expected_nonzero": "late-native-depth0/2 write complete318-group reports then exit1 because strict full-boundary gate is red. Build/capture setup failures are retained separately.",
+    "observed": "One GPU comparator oracle/16 offline examples pass; prior strict boundary metrics, graph invariance and actual build/run source/binary identity verified."
+  },
+  "numerical_results": {
+    "tolerance_intermediate": {
+      "atol": 6e-05,
+      "rtol": 0.0003,
+      "strict_greater_than": true
+    },
+    "tolerance_final_hidden": {
+      "atol": 3e-05,
+      "rtol": 0.0003
+    },
+    "first_tolerance_sequence": {
+      "stage": "backbone.layers.35.hidden",
+      "row": 154,
+      "channel": 1277,
+      "error": 7.4863434e-05,
+      "allowance": 6.1382445e-05
+    },
+    "first_tolerance_scalar": {
+      "stage": "backbone.layers.37.hidden",
+      "row": 154,
+      "channel": 1557,
+      "error": 6.592274e-05,
+      "allowance": 6.5157314e-05
+    },
+    "native_down_matched_failures": {
+      "scalar": 7,
+      "sequence": 1,
+      "layers": [
+        39
+      ]
+    },
+    "mlx_q4_down_matched_failures": {
+      "scalar": 0,
+      "sequence": 7,
+      "layers": [
+        39
+      ],
+      "scalar_bitwise_values": 15532032
+    },
+    "exact_moe_sum_and_residual_controls": "Bitwise exact in both arms throughout34-39.",
+    "shared_controls": "All within existing tolerance.",
+    "full_strict_gate": "OPEN"
+  },
+  "gpu_boundary": {
+    "terminal_compact_bytes": 66144,
+    "existing_finite_control_bytes": 4,
+    "activation_readbacks": 0,
+    "groups": 318,
+    "partial_receipts": 1776,
+    "commands_per_depth": 11,
+    "completed_per_depth": 11,
+    "completion_waits_per_depth": 11,
+    "depth2_max_pending": 2,
+    "depth2_max_retained_bytes": 22928410032,
+    "note": "Retained accounting is not measured residency. One terminal metrics read, no intermediate finish/read; no production changes."
+  },
+  "provenance": {
+    "input_sha256": "ebb4d8b91d069fd4070d756e73137152cb7e42ea65cf0097a741754a611b2f56",
+    "manifest_sha256": "51ef96a8eda3048b905f3ab6e8cdbe50df12fb03d5e83e116fcb887da068194c",
+    "reference_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "checkpoint_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "checkpoint_identity": "Actual SHA of config,index,all5shards; matching finalstat identities, assuming immutablefiles.",
+    "capture_overlap_bitwise_arrays": 219,
+    "source_sha256": {
+      "examples/drama3_late_compare.cr": "5dff052953447b4301aef5ce3b8118c1cfaea42062212aa59998947449b75b39",
+      "examples/support/drama3_late_compare.metal": "492f4edbb5757c8fff01667b42bfcd3af6addee3ba683ae4b4d3a8bfeed885bf",
+      "scripts/drama3/analyze_late_compare.py": "dc6104aee3f4b5b4fb0082fe3093d9139840a2d35706742798d9790876363966",
+      "scripts/drama3/late_mlx_capture.py": "cfc4e45bdaad40a75622a2eced5f34aeb05d75a892632e3c3679ccdbfe2b166d",
+      "spec/drama3_late_analysis_spec.py": "f222fcbcac6859cd06be4787a7322a4168a05ee0201d84b7ee7b0943dd5cddef",
+      "spec/drama3_late_compare_spec.cr": "af518055a7c256c0af05c7929398706a31a687e4afa2f6f8d16a901931d3ac65",
+      "spec/drama3_late_mlx_capture_spec.py": "99f39d30ebccdcbfa75f3cfb841051da59176adf1fb11a3c291abcf25629f4f2"
+    },
+    "binary_sha256": "26ed41eda740545c363f8e77f981226b7e5e4611e0006ac8002674ec65cfdb6d",
+    "bridge_sha256": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49",
+    "artifacts_sha256": {
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/commands.json": "b3a049b3c484b1a1a335de55d1e065fba2d9cdbace59175aa5a656d889d1799e",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/checkpoint-sha256.json": "66e3ae9edc9cd080953225281bf7667be9f7ca17670baf19a3df9d91bc39e7fd",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/capture-fidelity.json": "17668bb10bbb25588014ad7ce88d5723f19caed1ff34e6a10d84ba997d88b2ce",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/final-verification.json": "b6921119ab9a1b329a37a1269056c3e37e3cba39c5b91bf356183a0f43bd4c27",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/verify_final.py": "e7338ac44a51f5bc73fbc988ff2c083c5aa24cf52d63052cf39954c998aca22d",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/native-depth0.json": "0472a0187f08725f3803bff3e265da5b8a3c323e981c461535dd3c7632a5c19f",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/native-depth2.json": "cee6b1f404d6be0642a3357f914fb3b9e681edec8d641b36e489eb87ad59bd68",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/analysis-depth0.json": "a2364ee25d54ca8114c6ab1192616f65cf7485c3c95aa75f927c6291d24c0693",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/analysis-depth2.json": "3e3617b41ea0ec20f750cf4fcdd4737ce74d994ecaac015f2cdd76b0edee740b",
+      "/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/upstream-late/manifest.json": "51ef96a8eda3048b905f3ab6e8cdbe50df12fb03d5e83e116fcb887da068194c"
+    }
+  },
+  "adversary": {
+    "bounded_diagnostics": "ROBUST",
+    "single_cause_or_upstream_promotion": "VULNERABLE",
+    "method": "Correlated mini-Quad review; root-executed Metal negative oracle, exact-input replay, graph0/2 comparison and cross-artifact fallback."
+  },
+  "continuation": {
+    "numerical": "Inspect sequence upstream quantized reduction on exact operands, then decompose earlier cumulative failing coordinates; layer39 cannot explain earlier35/37 crossings.",
+    "performance": "Target sustainedRTF0.8-0.9 plus first-audio latency. Paired aligned packed-word load candidate; only exact arithmetic/output and later full-request timing admit promotion.",
+    "refresh": "Source/model/input/reference/tolerance/queue/device/OS drift, contradiction or raw-artifact loss."
+  }
+}

@@ -1,0 +1,805 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-prefill-startup",
+  "created_at_utc": "2026-10-16T18:18:03.300926+00:00",
+  "base_revision": "ccb0d17888e173848528d35e8d756e43ba913218",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded first-prefill interval/counter attribution and default-off telemetry transparency under the fixed pinned workload.",
+    "excluded": [
+      "Exact page-in duration, physical-media traffic, purged-cache or pure GPU queue-delay decomposition.",
+      "Identification of work below the IOKit kernel trap, exclusion of concurrent GPU contention, or end-to-end speed improvement.",
+      "Zero observer overhead, uninterrupted memory guarding of the interrupted pair wrapper, or reproducible-build attestation.",
+      "Closure of the known full intermediate MoE39 failure, general voice/DAC/prosody/long-speech parity, or fresh stock MLX audio/RNG parity."
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Mistake overlapping process counters or unaligned clocks for an additive causal budget; change inference waits/readbacks or mask completion status.",
+    "guards": "Pair-local Metal timestamp durations; nullable API groups and validated nonadditive process windows; fake-command status tests; exact full trajectory/read/wait checks and unchanged saved upstream gates.",
+    "rollback": "Disable DRAMA3_METAL_RESOURCES and timeline, or revert the isolated diagnostic commit; graph/precision/kernel defaults unchanged."
+  },
+  "boundary": {
+    "fixed_input": {
+      "text": "Hello, this is a voice test.",
+      "reference": null,
+      "seed": 1,
+      "max_frames": 64,
+      "temperature": 0.8,
+      "top_k": 30,
+      "top_p": 0.9
+    },
+    "sampler_inputs": {
+      "dtype": "float32-le",
+      "uniform_count": 704,
+      "sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "provenance": "host input tape uploaded once"
+    },
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+    "frames": 60,
+    "ids_per_frame": 11,
+    "samples": 122880,
+    "sample_rate": 44100,
+    "graph": {
+      "depth": 2,
+      "submitted": 122,
+      "completed": 122,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 122,
+      "retained_bytes": 0,
+      "max_retained_bytes": 31892098828
+    },
+    "readback_bytes": {
+      "control": 496,
+      "terminal": 494160
+    },
+    "inference": "Metal computations and activations; no new inference synchronization or activation CPU reads. Input tape upload and existing control/terminal boundaries retained.",
+    "observer": "Default off; resource flag implies timeline and requires graph depth 1 or 2; four command and four request snapshots; process syscalls can perturb pacing.",
+    "host": "Apple M2 Max; macOS 26.6.2 (25G83); weights local, scratch external SSD. 15% configured memory floor, quiet-host off; unrelated processes untouched."
+  },
+  "experiments": {
+    "paired_matrix": {
+      "schedule": [
+        0,
+        1,
+        1,
+        0
+      ],
+      "requests": 12,
+      "warm_repeats_per_worker": 2,
+      "commands": 1464,
+      "valid_gpu_and_driver_pairs": 1464,
+      "controls": "Host/timeline on in both arms; dense tree, expert64, MAP_PRIVATE, graph2, generation/DAC scratch off.",
+      "cold_definition": "New process and mappings after load; filesystem cache was not purged or controlled.",
+      "all_full_codes_wav_sampler_reads_waits_exact": true,
+      "first_commands": [
+        {
+          "arm": 0,
+          "repeat": 0,
+          "resources": false,
+          "request_wall_seconds": 39.508657708764076,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 14.69383087521419,
+          "pre_gpu_wait_seconds": 14.68702245876193,
+          "gpu_seconds": 0.16454412508755922,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        },
+        {
+          "arm": 0,
+          "repeat": 1,
+          "resources": false,
+          "request_wall_seconds": 28.49158633314073,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 5.607684124726802,
+          "pre_gpu_wait_seconds": 5.597860667388886,
+          "gpu_seconds": 0.16819254122674465,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        },
+        {
+          "arm": 0,
+          "repeat": 2,
+          "resources": false,
+          "request_wall_seconds": 23.17905416712165,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 0.386695499997586,
+          "pre_gpu_wait_seconds": 0.3793996670283377,
+          "gpu_seconds": 0.16624933341518044,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        },
+        {
+          "arm": 1,
+          "repeat": 0,
+          "resources": true,
+          "request_wall_seconds": 36.64785258285701,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.018068999983370304,
+            "upper": 0.018095333129167557
+          },
+          "driver_scheduling_seconds": 11.958318707998842,
+          "pre_gpu_wait_seconds": 11.951147458981723,
+          "gpu_seconds": 0.1695625833235681,
+          "system_cpu_seconds": 3.511171,
+          "pageins": 1464429,
+          "disk_read_bytes": 23994392576
+        },
+        {
+          "arm": 1,
+          "repeat": 1,
+          "resources": true,
+          "request_wall_seconds": 27.94415945885703,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.010707666631788015,
+            "upper": 0.010735916439443827
+          },
+          "driver_scheduling_seconds": 4.832552624866366,
+          "pre_gpu_wait_seconds": 4.825534750241786,
+          "gpu_seconds": 0.1632017083466053,
+          "system_cpu_seconds": 4.816479,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        },
+        {
+          "arm": 1,
+          "repeat": 2,
+          "resources": true,
+          "request_wall_seconds": 24.349971792194992,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.011262124869972467,
+            "upper": 0.011291124857962132
+          },
+          "driver_scheduling_seconds": 0.3496253751218319,
+          "pre_gpu_wait_seconds": 0.34118354227393866,
+          "gpu_seconds": 0.19539720797911286,
+          "system_cpu_seconds": 0.348348,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        },
+        {
+          "arm": 2,
+          "repeat": 0,
+          "resources": true,
+          "request_wall_seconds": 35.94650104222819,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.024709708523005247,
+            "upper": 0.02473229169845581
+          },
+          "driver_scheduling_seconds": 11.380426458083093,
+          "pre_gpu_wait_seconds": 11.371934709139168,
+          "gpu_seconds": 0.16623470839112997,
+          "system_cpu_seconds": 3.510943,
+          "pageins": 1464429,
+          "disk_read_bytes": 23994269696
+        },
+        {
+          "arm": 2,
+          "repeat": 1,
+          "resources": true,
+          "request_wall_seconds": 28.131725416053087,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.011221083346754313,
+            "upper": 0.011247916612774134
+          },
+          "driver_scheduling_seconds": 3.9096055417321622,
+          "pre_gpu_wait_seconds": 3.9022545837797225,
+          "gpu_seconds": 0.16863170824944973,
+          "system_cpu_seconds": 3.908995,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        },
+        {
+          "arm": 2,
+          "repeat": 2,
+          "resources": true,
+          "request_wall_seconds": 29.820958917029202,
+          "entry_to_before_commit_bounds_seconds": {
+            "lower": 0.013850291725248098,
+            "upper": 0.013880624901503325
+          },
+          "driver_scheduling_seconds": 4.634916250128299,
+          "pre_gpu_wait_seconds": 4.625647083856165,
+          "gpu_seconds": 0.16843437496572733,
+          "system_cpu_seconds": 4.618335,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        },
+        {
+          "arm": 3,
+          "repeat": 0,
+          "resources": false,
+          "request_wall_seconds": 37.47211099974811,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 11.18708183337003,
+          "pre_gpu_wait_seconds": 11.178892250638455,
+          "gpu_seconds": 0.16322649968788028,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        },
+        {
+          "arm": 3,
+          "repeat": 1,
+          "resources": false,
+          "request_wall_seconds": 26.56815474992618,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 3.677124624606222,
+          "pre_gpu_wait_seconds": 3.668909875676036,
+          "gpu_seconds": 0.16195983346551657,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        },
+        {
+          "arm": 3,
+          "repeat": 2,
+          "resources": false,
+          "request_wall_seconds": 24.13098237523809,
+          "entry_to_before_commit_bounds_seconds": null,
+          "driver_scheduling_seconds": 0.3628486250527203,
+          "pre_gpu_wait_seconds": 0.35488462541252375,
+          "gpu_seconds": 0.17124420823529363,
+          "system_cpu_seconds": null,
+          "pageins": null,
+          "disk_read_bytes": null
+        }
+      ],
+      "observer_collection": "492 snapshots/request; nonoverlapping capture calls total 4.34-4.95 ms. Excludes serialization/logging and pacing; no total-overhead bound."
+    },
+    "cpu_stacks": {
+      "separate_worker_requests": 3,
+      "all_full_codes_wav_sampler_reads_waits_exact": true,
+      "capture": "/usr/bin/sample own-child-PID 8 10 -file PATH during each warm request; excluded from paired timings.",
+      "first_commands": [
+        {
+          "repeat": 0,
+          "request_begin_utc": "2026-10-16T18:01:50.524305+00:00",
+          "request_wall_seconds": 37.11049137497321,
+          "driver_scheduling_seconds": 11.787580874748528,
+          "pre_gpu_wait_seconds": 11.779086084105074,
+          "gpu_seconds": 0.1660452918149531,
+          "system_cpu_seconds": 3.661414,
+          "pageins": 1464429,
+          "disk_read_bytes": 23994392576
+        },
+        {
+          "repeat": 1,
+          "request_begin_utc": "2026-10-16T18:02:27.636880+00:00",
+          "request_wall_seconds": 28.1481489171274,
+          "driver_scheduling_seconds": 5.202388166449964,
+          "pre_gpu_wait_seconds": 5.193806250579655,
+          "gpu_seconds": 0.16903804149478674,
+          "system_cpu_seconds": 5.17298,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        },
+        {
+          "repeat": 2,
+          "request_begin_utc": "2026-10-16T18:02:55.788244+00:00",
+          "request_wall_seconds": 23.265364167280495,
+          "driver_scheduling_seconds": 0.3423146246932447,
+          "pre_gpu_wait_seconds": 0.3344540009275079,
+          "gpu_seconds": 0.16474637482315302,
+          "system_cpu_seconds": 0.341098,
+          "pageins": 0,
+          "disk_read_bytes": 0
+        }
+      ],
+      "observed_driver_stack": "com.Metal.CommandQueueDispatch -> IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap",
+      "main_thread": "Observed in the existing completion wait.",
+      "limit": "Stack counts are not CPU time or exact interval durations; kernel work below the trap and concurrent GPU contention remain unresolved."
+    }
+  },
+  "verification": {
+    "native": "Fake-command observer test PASS; one commit/wait and authoritative failed status, nullable scheduling metrics and no-device process capture.",
+    "metal": "63 examples, 0 failures/errors/pending; includes depth1/2 observer output/queue/read transparency and depth0 guard.",
+    "cpu": "6 examples, 0 failures/errors/pending; independent resource availability and explicit JSON nulls.",
+    "offline": "23 tests PASS, including overlapping-process-window counterexample and malformed/reset/legacy metrics.",
+    "format": "Final Crystal format check PASS. Test cleanup was formatter-only after the 63-case run; production bytes remain sealed.",
+    "upstream_full_codes": {
+      "native_frames": 60,
+      "mlx_frames": 60,
+      "main_token": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebooks": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_tokens": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "helper_sha256": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da",
+      "sampler_prefix_sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "scope": "Shared F32 sampler input tape, F32 MLX core control; full codes compared on GPU. Existing native numerical frontier remains open if outputs differ."
+    },
+    "prefill": {
+      "prompt_rows": 158,
+      "prompt_ids_exact": true,
+      "tolerances": {
+        "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+      },
+      "stages": [
+        {
+          "name": "prompt.backbone.hidden",
+          "shape": [
+            1,
+            2048
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 2048,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.05126616,
+          "passes": true
+        },
+        {
+          "name": "prompt.main_logits",
+          "shape": [
+            1,
+            4097
+          ],
+          "fresh_vs_reuse_bitwise_mismatches": 0,
+          "exact_element_count": 4097,
+          "reused_vs_mlx_pointwise_failures": 0,
+          "nonfinite": 0,
+          "worst_error_to_allowance": 0.0079710195,
+          "passes": true
+        }
+      ],
+      "graph": {
+        "fresh_arm": {
+          "submitted": 159,
+          "completed": 159,
+          "completion_waits": 159,
+          "pending": 0,
+          "max_pending": 2
+        },
+        "workspace_arm": {
+          "submitted": 159,
+          "completed": 159,
+          "completion_waits": 159,
+          "pending": 0,
+          "max_pending": 2
+        },
+        "submits_and_waits_equal": true,
+        "before_metric_reads": {
+          "depth": 2,
+          "submitted": 319,
+          "completed": 319,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 319,
+          "retained_bytes": 0,
+          "max_retained_bytes": 32565096380
+        },
+        "after_metric_reads": {
+          "depth": 2,
+          "submitted": 319,
+          "completed": 319,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 319,
+          "retained_bytes": 0,
+          "max_retained_bytes": 32565096380
+        }
+      },
+      "readbacks": {
+        "control": 16,
+        "diagnostic": 40
+      },
+      "scope": "158-row resident prefill; token embedding, tower.embed_backbone, and backbone.step use the backbone workspace; the 157 non-final teacher_force calls use a separate tower.prefill workspace. Teacher-force outputs are discarded. Final hidden/logits are copied to persistent buffers before both workspaces are released. No activation CPU reads; only terminal reduced GPU comparison metrics are read."
+    },
+    "upstream_scope": "Saved pinned F32 MLX core with common F32 sampler tape; fresh native execution and GPU comparisons, not fresh stock MLX audio or RNG parity.",
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    },
+    "upstream": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+    },
+    "known_failure": "Full intermediate gate MoE39 hidden[33] remains open; no tolerance expansion."
+  },
+  "lineage": {
+    "production_source_sha256": {
+      "src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+      "src/ml/audio/drama3/backbone_resident.cr": "ec22729b4fd4d3b1def99123f79d7d71e43d92fc2ffbe451db72be5000908044",
+      "src/ml/audio/drama3/codec.cr": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+      "src/ml/audio/drama3/codec_encoder_resident.cr": "01075f057ec834d36601f936fdc06e0be146c8ca59b903c551ae4758833d0114",
+      "src/ml/audio/drama3/codec_metal.cr": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+      "src/ml/audio/drama3/codec_resident.cr": "df8da27a87137eccc9087c3e9e0e54fc74208a8e89d154e905e127a85d3e5485",
+      "src/ml/audio/drama3/generator.cr": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+      "src/ml/audio/drama3/generator_resident.cr": "24babe84df0a819c9f5e57b224f00b029abc0b82d261cae4c99b54586f82911a",
+      "src/ml/audio/drama3/host_profile.cr": "4c04a84cdef2ecb39ca4acb9e1f7bdf9b4dbf33925853cd3d4231c5fad9b9af5",
+      "src/ml/audio/drama3/kernels/affine.metal": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+      "src/ml/audio/drama3/kernels/backbone_resident.metal": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d",
+      "src/ml/audio/drama3/kernels/codec.metal": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+      "src/ml/audio/drama3/kernels/codec_encoder_resident.metal": "3aea85f418bef4c25ffa4b664b8cb2ddece84756d811ad0aa4c38461b6d6a252",
+      "src/ml/audio/drama3/kernels/codec_resident.metal": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+      "src/ml/audio/drama3/kernels/generator_resident.metal": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+      "src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+      "src/ml/audio/drama3/kernels/prompt_resident.metal": "2d26d357fce08f2f7925ed76be2542734cfa5123d7611f2bcdaed958e0f305a6",
+      "src/ml/audio/drama3/kernels/reference_audio.metal": "c629d3a4d26460cc3a3fbe430bcc44dcbc1784817e994a5b192e20bd6b4f9d5f",
+      "src/ml/audio/drama3/kernels/resident.metal": "1f09b932798a1e76d285a5c085ab7b47d791ddb7005ae9cb2badf29bce99da69",
+      "src/ml/audio/drama3/kernels/tower_resident.metal": "392089ec29e1883d7eac581367748eea78a7d20df217c3fe4b0f7de4ecafdc86",
+      "src/ml/audio/drama3/metal.cr": "254dcfb1b76c7db84c4811945f53386d3171ab9f8aca4a65cfb5a3a567aa6d42",
+      "src/ml/audio/drama3/native.cr": "5b70f4cf69f1c9f02d4e0f1abcb4064ba8c8fdc51f1a5f88e5f57329ec2afd5e",
+      "src/ml/audio/drama3/profile.cr": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+      "src/ml/audio/drama3/prompt.cr": "1a91b258b2343e8f5a44c520224bfe046aa1d08a01ca101e8f963c725c25c2a1",
+      "src/ml/audio/drama3/prompt_resident.cr": "b4b352408220ea67d3f09046cb023e18b2877f3dacc1ba6b2fb07b98e023a65e",
+      "src/ml/audio/drama3/reference_audio.cr": "3962548d28aefbbde84d26f7ccefe0be299f02fa5bf4fb746f9222e72ef24d3f",
+      "src/ml/audio/drama3/resident.cr": "131975030f584060a7f2390bb683b8446512670bf07c1a537d62e9669a528fda",
+      "src/ml/audio/drama3/resident_host_encoder.cr": "59c08582b95e8493d3893ea2d466b5feb23b3b5da5521c2868869d15f0ca7bd6",
+      "src/ml/audio/drama3/studio/backend.cr": "6859826a22c8744d2169fd72e2e5fbf072a28f4eb2889e05b1925b50b4824a59",
+      "src/ml/audio/drama3/studio/engine.cr": "d86e2daca5cbc2047d7cdc1ee5da60c42a4ab81aa3a8f7eae168459b44877cee",
+      "src/ml/audio/drama3/studio/media.cr": "534ede6b3dd196d0c60f5c8f59714039cd28a9a227fd7fe2b2bb9903443b59d6",
+      "src/ml/audio/drama3/studio/server.cr": "644a3f119a1571f36d786bfaad71a724218d319f1d5094c2161b50615af32b01",
+      "src/ml/audio/drama3/studio/store.cr": "256ca84e613e1f2eb0dbd747039f8f1ada87dd55c0559b30ca7dc8bed497c919",
+      "src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+      "src/ml/audio/drama3/tower_resident.cr": "1607ceeaedb2f3295434287714fec37d009a1517ad3e0051e9312c10bd64eda1",
+      "src/ml/audio/drama3/wav.cr": "766db1245d1493bbad68e8f27cb5c4dd7dd4e17b092dca4ce6962ecc68cf47ed",
+      "src/ml/audio/drama3/window_budget.cr": "6dfe46cd9ab2e012ea15a2400d1373f5f4cf37e28f156ec695c6ae5a4ff2b367",
+      "src/ml/audio/drama3/window_memory.cr": "a2d1bce59e3046bb16156e6d215b498dd73818f9841acd0e509c9a518621c8a0",
+      "src/ml/core/buffer.cr": "a28570a5b7163eef67aef7ad96af66d2168da68f104afbacc9714bbefb55334d",
+      "src/ml/metal/bridge.mm": "edef19096f3bf4d1acfd1858c2b96d130614879e065ba026b49ff9d7b1fdc0c3",
+      "src/ml/metal/compute_graph.cr": "8d5d308fac91629a502de1ed085786047c5b6f0f530253ae265c7f95098cb970",
+      "src/ml/metal/device.cr": "43711e4ddb51d2c31cc7b262f72efcbe9ca35d50bc3ce85be402b13e9126df32"
+    },
+    "source_sealed_commands": [
+      "host-resource-cpu-v2",
+      "studio-build",
+      "resident-resource-regressions-v2",
+      "prefill-build",
+      "upstream-fullcode",
+      "upstream-prefill",
+      "sample-warm-driver",
+      "final-format-v2",
+      "final-timeline-offline"
+    ],
+    "source_sealed_command_count": 9,
+    "native_only_source_scope": {
+      "native-observer-test": "Native bridge bytes match. The unrelated Crystal JSON-null fix occurred later; this native command does not compile Crystal.",
+      "native-observer-run": "Native bridge bytes match. The unrelated Crystal JSON-null fix occurred later; this native command does not compile Crystal.",
+      "bridge-build": "Native bridge bytes match. The unrelated Crystal JSON-null fix occurred later; this native command does not compile Crystal."
+    },
+    "binary_sha256": "29822d5efe6873ed4d8b769c5c1f0302c9a8b829b2bf7f459b9612ab969914e0",
+    "analyzer_sha256": "c71d83261f94b37db71af162edf485988f28b6b8692a0face12c1b3c6c579524",
+    "pair_recovery": "The run_safe parent was interrupted; the paired child completed independently. PASS is from the driver log and validated manifests; no wrapper exit status is claimed. All production source hashes match studio-build and the worker binary hash is verified.",
+    "guard_limit": "The interrupted parent does not establish uninterrupted memory guarding after its interruption. The child driver PASS and validated 12 manifests establish output completion.",
+    "test_failures_retained": [
+      {
+        "name": "host-resource-cpu",
+        "exit_code": 1,
+        "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/host-resource-cpu.log",
+        "log_sha256": "a37139b8e2860b8f397e9e03962ecbe8e34c13d5458437fdbbeb770dcea5fc89"
+      },
+      {
+        "name": "resident-resource-regressions",
+        "exit_code": 1,
+        "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/resident-resource-regressions.log",
+        "log_sha256": "4898357cbe5e280d882f620e0a6161f1dd2cf0db81da3582bab9b753e3965dd6"
+      },
+      {
+        "name": "final-format",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/final-format.log",
+        "log_sha256": "cc9ececc2bf817018423f0e4214d891e6ba6c342acf659893708e352a7649a53"
+      }
+    ]
+  },
+  "commands": [
+    {
+      "name": "native-observer-test",
+      "argv": [
+        "scripts/run_safe.sh",
+        "clang++",
+        "900",
+        "40960",
+        "-std=c++17",
+        "-O2",
+        "-fobjc-arc",
+        "spec/metal_submit_profile_test.mm",
+        "-framework",
+        "Metal",
+        "-framework",
+        "Foundation",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/native-observer-test"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:49:00.683567+00:00",
+      "finished_at_utc": "2026-10-16T17:49:02.252378+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/native-observer-test.log",
+      "log_sha256": "030f32392295de6f8f837e5c4fc3db60096132a4626f21f985063e20d3fc40ab"
+    },
+    {
+      "name": "native-observer-run",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/native-observer-test",
+        "900",
+        "40960"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:49:32.905880+00:00",
+      "finished_at_utc": "2026-10-16T17:49:33.651180+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/native-observer-run.log",
+      "log_sha256": "39bde2becf1a2c1079abb6d3b3862e6d9cd89ed881980395571ad9d5e9c8948f"
+    },
+    {
+      "name": "bridge-build",
+      "argv": [
+        "scripts/run_safe.sh",
+        "clang++",
+        "900",
+        "40960",
+        "-std=c++17",
+        "-O3",
+        "-fobjc-arc",
+        "-c",
+        "src/ml/metal/bridge.mm",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/bridge.o"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:49:33.666991+00:00",
+      "finished_at_utc": "2026-10-16T17:49:34.398135+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/bridge-build.log",
+      "log_sha256": "2a2cef139744843e41b43281456c041c2f851227ce163ec2716a476fc9398ca4"
+    },
+    {
+      "name": "host-resource-cpu-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "spec",
+        "-Dcpu_only",
+        "spec/drama3_host_profile_spec.cr"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:50:10.642617+00:00",
+      "finished_at_utc": "2026-10-16T17:50:15.196507+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/host-resource-cpu-v2.log",
+      "log_sha256": "96234b05a8baea89da1d5062251a4d17aa805927ceffeda074763fe92dd8b444"
+    },
+    {
+      "name": "studio-build",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+        "examples/drama3_studio.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/studio"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:50:15.214444+00:00",
+      "finished_at_utc": "2026-10-16T17:50:32.203893+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/studio-build.log",
+      "log_sha256": "b2f20152e9ada61aeb446a63e46f02f350501d5539d855ad8cb8711e96a6caf0"
+    },
+    {
+      "name": "resident-resource-regressions-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "spec",
+        "-Ddrama3_metal",
+        "--link-flags",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+        "spec/metal_device_resource_spec.cr",
+        "spec/drama3_dense_spec.cr",
+        "spec/drama3_workspace_spec.cr",
+        "spec/drama3_tower_workspace_spec.cr",
+        "spec/drama3_generator_workspace_spec.cr",
+        "spec/drama3_graph_resident_spec.cr",
+        "spec/drama3_graph_generator_spec.cr",
+        "spec/drama3_generator_resident_spec.cr",
+        "spec/drama3_reference_prompt_spec.cr",
+        "spec/drama3_tower_resident_spec.cr",
+        "spec/drama3_resident_spec.cr",
+        "spec/drama3_host_profile_resident_spec.cr"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:59:08.209789+00:00",
+      "finished_at_utc": "2026-10-16T17:59:15.224507+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/resident-resource-regressions-v2.log",
+      "log_sha256": "e5df8d402e2af814f210a974b8a8f420f983bdc55af6946eccb5039fa5fe8324"
+    },
+    {
+      "name": "prefill-build",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill_workspace.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill-workspace"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:59:15.242273+00:00",
+      "finished_at_utc": "2026-10-16T17:59:24.445145+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/prefill-build.log",
+      "log_sha256": "bef98d0298ccac0d599d20c9f9d98f93e81c6f3ef08ac7b77e65b36b30705747"
+    },
+    {
+      "name": "upstream-fullcode",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/gpu-kernels-20261016/compare_worker_upstream.py",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-arm1-repeat1.wav.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/upstream-fullcode.json"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:59:24.461736+00:00",
+      "finished_at_utc": "2026-10-16T17:59:25.242233+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/upstream-fullcode.log",
+      "log_sha256": "42e89cdd81d186d2741626e41a936584d899825e5ab0934be2c07b7e052062f7"
+    },
+    {
+      "name": "upstream-prefill",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill-workspace",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill.json"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T17:59:25.256819+00:00",
+      "finished_at_utc": "2026-10-16T18:00:30.675370+00:00",
+      "log": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-prefill-start-20261016/upstream-prefill.log",
+      "log_sha256": "5f212e3931d84bee4920fd9a84a67f81a0635f3ddd9a28222829287fac4235af"
+    },
+    {
+      "name": "sample-warm-driver",
+      "argv": [
+        "scripts/run_safe.sh",
+        "python3",
+        "900",
+        "40960",
+        "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/sample_warm_driver.py"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T18:01:49.892451+00:00",
+      "finished_at_utc": "2026-10-16T18:03:19.504903+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/sample-warm-driver.log",
+      "log_sha256": "916f533e4baa20d78a8749ed7ac33653abad4793035770ae4b639da962a74110"
+    },
+    {
+      "name": "final-format-v2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "120",
+        "4096",
+        "tool",
+        "format",
+        "--check",
+        "src/ml/audio/drama3/host_profile.cr",
+        "src/ml/audio/drama3/resident.cr",
+        "src/ml/audio/drama3/studio/engine.cr",
+        "src/ml/metal/device.cr",
+        "spec/drama3_host_profile_resident_spec.cr",
+        "spec/drama3_host_profile_spec.cr",
+        "spec/metal_device_resource_spec.cr"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T18:08:02.137429+00:00",
+      "finished_at_utc": "2026-10-16T18:08:02.881433+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/final-format-v2.log",
+      "log_sha256": "eed969b87e6429febb5f2e99561ff49fdaf752381dbe58be5dace3ef6f6c3d30"
+    },
+    {
+      "name": "final-timeline-offline",
+      "argv": [
+        "scripts/run_safe.sh",
+        "python3",
+        "120",
+        "4096",
+        "spec/drama3_command_timeline_spec.py"
+      ],
+      "exit_code": 0,
+      "started_at_utc": "2026-10-16T18:08:02.904950+00:00",
+      "finished_at_utc": "2026-10-16T18:08:03.648142+00:00",
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/final-timeline-offline.log",
+      "log_sha256": "ea46e733d2d77759f9677565a17d6a47a5f25e76243a9b69ea31f1565e44fd72"
+    }
+  ],
+  "local_artifacts_sha256": {
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/commands.json": "512dea9cd47b8013e4e283e967f3eaa7d96853304a2427af3d44843a84fb6453",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/curate_evidence.py": "bb3b970ad4cf1134a80385164881518fa215b5a2ed1f5b321dd615d96b65f0fa",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/run.py": "befc19407c7511cc54fc1fcdb2c7cfa625916d0e62cc3a0a13e748f55cb71359",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/analyze_startup.py": "279978bde9390104fcd04b419cb46c2b3155a038ddfcecb56f6d1e22f66927d5",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/analyze_cpu_sample.py": "ed391cc76ea012e383c77a5f52a1bdfd9834c6cf3e4b9eea1b5247e733861c79",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/sample_warm_driver.py": "f003ff2e073c865b75bece3a852964a1e4d3ef5f816fa64e8bdded6af181f7f2",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-pairs.log": "68785a79e9cb04f8ade20afa7246e9689845f0dbe19d7735b11c97a6ca8b64a4",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-worker.json": "4485635e86b4433981961e6dd5fbd55060aa1c27eef9b72b8b1290341e13a9cf",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/startup-analysis.json": "abdf1c7c264722a632a204c9592fa0dacf8386b43429b366e75d709b2eded413",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/cpu-stack-analysis.json": "b7e4f7177c5b47f76e3cfe3c2f825e9899302fe3c3b4bb432ccce698d3d97a1b",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/sample-worker.json": "88b55f44a972066c82916cda7908be72a17770c0a69c19a635f04a51bcc1d902",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/sample-worker.stderr": "1c1c7c16b03e968d64705349ea9835bf27badad9779a9a2b31d010d25994ec57",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/warm1-cpu-sample.txt": "c8335c0461df2958b57e7b0366c3141ba183058a11a19c6618902962a615d10f",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/warm2-cpu-sample.txt": "c1ed2e0ce53a4b90ac755b70b4c0802dbadd03cde128cd27100e4cfa5f561710",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/upstream-fullcode.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill.json": "a486766ec89ebc16efd34cfadaa33e5c91d682fc8f31fe3d656e37b81c1bd441",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill_workspace.cr": "48e1e22938c79463ff4459334cd28be206bd4e9a8120070d4ed252b371fc63a3",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/studio": "29822d5efe6873ed4d8b769c5c1f0302c9a8b829b2bf7f459b9612ab969914e0",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/prefill-workspace": "ad351d2a9608a9adf7566a9e48b34886ef368c4e8e8f1d80fb49d5add6bd7eec",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/bridge.o": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-arm0.stderr": "414d70d70012992692172d272d6aac2f0b8717f0aac8fc92f0b2c5663fdd69ec",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-arm1.stderr": "e5593f7b91857e9400125de1bf3caa7c1561aaad6bdec951c3bbf986bd9d4e53",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-arm2.stderr": "322211952ea195cbe6170b40d9600559e63628616ec217024bbd3ecc5b07f5d5",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/resources-arm3.stderr": "2b3c5f49116f7e722be4388ad9119c92f1258fd6c8c7ef5bc9a575b87461cc02",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/apple-kernelstarttime.md": "4da48e1e181d274b653c9398a002ed379866f4e4fdf68a50269a7c664013723d",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/apple-kernelendtime.md": "ded6a93113fc3dd46907c729ffd14da4c041617f73fc1dbed9e76d987ff321a6",
+    "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/apple-gpustarttime.md": "71e9b5a6b542335cb12c3b29273b639af6194750bbed653cece8a3cb181915b3"
+  },
+  "saved_upstream_and_baseline_sha256": {
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json.sampler_logits.npz": "5577c320dbbcb5d7e5f1892b2eca2a49a5b9438355c5bf9632b476fcd59b6686",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/gpu-kernels-20261016/compare_worker_upstream.py": "6f4bc0445bc93860934ee93df52da0ce8e43ad0808e1494921a449ca07b5b78b"
+  },
+  "mini_quad": {
+    "verdict": "ROBUST",
+    "independence": "Same-lineage review is correlated; measurement and tests provide the evidence.",
+    "rejected_route": "Summing overlapping command process windows double-counts activity; analyzer now reports nonadditive distributions and the duplication falsifier passes.",
+    "review_path": "/opt/mldata_ssd/cogni-ml/drama3-prefill-start-20261016/final-adversary.txt",
+    "review_sha256": "e009e0bba671f3432e75e6876e4063dc5c636fb41b4b76ad4a7bedc17c03c515"
+  },
+  "continuation": {
+    "next_falsifier": "Establish resources revalidated in the submission corridor, then compare stable resource identity/registration with fresh wrappers over identical weight mappings and sampler inputs. Preserve numeric/queue gates before considering an optimization.",
+    "numeric_return_pointer": "Known MoE39/common-prefix forks and DAC post-module checks.",
+    "decay_trigger": "Source, shaders, checkpoint, inputs/tape, fixtures, tolerances, graph, storage, runtime, device or OS changes; contradiction or evidence eviction.",
+    "refresh": "Rerun fixed-input observer pairs, native status/queue/read guards and pinned upstream checks in the changed context; withdraw dependent claims if evidence fails.",
+    "artifact_role": "Curated source-linked evidence index, not proof merely from its structure or hashes."
+  }
+}

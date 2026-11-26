@@ -1,0 +1,497 @@
+{
+  "format": "drama3-decode-replay-v1",
+  "base_revision": "0f9d6d3a08c9390646cee1238f9768761ffb42af",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Diagnostic GPU capture/replay and local projection-family cost ranking on one pinned short request at decode rows0/29/59. No production change, complete-decode bottleneck, request speedup, or strict upstream parity claim."
+  },
+  "adversary": {
+    "verdict": "ROBUST within the declared diagnostic scope",
+    "review": "Root execution plus correlated same-lineage Luna Max audit; not independent replication.",
+    "attacks": [
+      "Snapshot aliasing and pre-call/post-call mutation ordering checked against serial queue ownership.",
+      "Actual capture checked for exact projection-name inventory, all40 backbone layers, all4+9 tower blocks, and one explicitly omitted row0 main head.",
+      "All47 cells checked for one kernel/reduction/dtype/bits/group/threadgroup signature.",
+      "All1269 unique GPU timings checked valid, completion status0, finite-positive duration; counters and consecutive graph/readback ledgers checked.",
+      "Seeded bit/NaN control rejected; all replay outputs checked against immutable captured outputs.",
+      "Artifact durability gap closed by hashing capture.json and analysis-root.json in this packet and final-validation.json."
+    ],
+    "remaining_boundary": "Kernel labels correspond to current Context branches by source inspection, not independently recorded pipeline IDs. Analyzer checks event metadata and cannot authenticate raw manifest or checkpoint bytes alone."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-decode-replay.md",
+      "examples/drama3_decode_replay.cr",
+      "examples/support/drama3_decode_replay.cr",
+      "examples/support/drama3_decode_replay_coverage.cr",
+      "scripts/drama3/analyze_decode_replay.py",
+      "spec/drama3_decode_replay_coverage_spec.cr",
+      "spec/drama3_decode_replay_spec.py",
+      ".landmark/evidence/drama3-decode-replay.json"
+    ]
+  },
+  "changed_paths": [
+    "LANDMARKS.md",
+    "docs/drama3-native-frontier.md",
+    "docs/drama3-decode-replay.md",
+    "examples/drama3_decode_replay.cr",
+    "examples/support/drama3_decode_replay.cr",
+    "examples/support/drama3_decode_replay_coverage.cr",
+    "scripts/drama3/analyze_decode_replay.py",
+    "spec/drama3_decode_replay_coverage_spec.cr",
+    "spec/drama3_decode_replay_spec.py",
+    ".landmark/evidence/drama3-decode-replay.json"
+  ],
+  "source_sha256": {
+    "LANDMARKS.md": "e9a5879fcec28298594ad3b5e6697d677e3ac9c7be75a85ca7f4b8d89d306f35",
+    "docs/drama3-native-frontier.md": "dd32aed93bb73d75fec324ef89ba1729dcb249485c97ab9b298f342a68eb4dcd",
+    "docs/drama3-decode-replay.md": "be4544075b448b9f6525d772490c9c512c29b58ec9828e94f316774a06cac873",
+    "examples/drama3_decode_replay.cr": "387c2f07966dfd25b32eaccaae8bb6307a8cb244100961086a524874238f99d6",
+    "examples/support/drama3_decode_replay.cr": "4199a7ffe1e959cdb480f0e1a7da7cb4c4b8de16fd7cde5695d33b91b0c7ffae",
+    "examples/support/drama3_decode_replay_coverage.cr": "48a5bb4bdd5c4b37038ac0e5d72d06a884b12370782ba0af57cda7d90444b50f",
+    "scripts/drama3/analyze_decode_replay.py": "4dce89f5f5a1f49143d85f2057b619ff052a79ad34f68696c93ac79ea66812cb",
+    "spec/drama3_decode_replay_coverage_spec.cr": "bd321b3dd62b51a2a9f0731cc7c74f1e831a4b2b2189e809548883fd80eaf5de",
+    "spec/drama3_decode_replay_spec.py": "f7ae7e733b02c9825a804bb4728c7192f3341a2d3c69ab2e0dc8403aad8c00f1"
+  },
+  "runtime_source_binding": {
+    "receipt": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/run-receipt.json",
+    "state": "Base revision plus the source hashes above; all runtime input hashes rechecked by final-validation.json.",
+    "production_paths_changed": [],
+    "checkpoint": "cguldogan/drama-3-mlx-q4@5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "weight_binding_limit": "Config, safetensors index and tokenizer are hashed; full checkpoint payloads are not newly authenticated.",
+    "device": "Apple M2 Max"
+  },
+  "verification": {
+    "expected_signal": "Exact complete trajectory/WAV and normal capture ledgers; exact GPU replay with seeded rejection; representative rows and complete fixed projection inventory; valid counterbalanced identical-arm timings; unchanged bounded upstream metrics.",
+    "release_build": {
+      "observed_returncode": 0,
+      "command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "900",
+        "40960",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags",
+        "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld",
+        "examples/drama3_decode_replay.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/decode-replay-roles"
+      ],
+      "provenance": "Root-observed build exit0; executed binary and runtime input hashes bound by run receipt."
+    },
+    "capture_and_replay_command": [
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/decode-replay-roles",
+      "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/capture"
+    ],
+    "capture_and_replay_returncode": 0,
+    "diagnostic_total_wall_seconds": 44.36723925033584,
+    "heavy_run_environment": {
+      "TMPDIR": "/opt/mldata_ssd/cogni-ml/tmp",
+      "CRYSTAL_CACHE_DIR": "/opt/mldata_ssd/cogni-ml/crystal-cache",
+      "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+      "COGNI_RUN_SAFE_REQUIRE_QUIET": "0"
+    },
+    "heavy_run_wrapper": [
+      "scripts/run_safe.sh",
+      "python3",
+      "600",
+      "40960",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/run_probe.py",
+      "attempt3-roles"
+    ],
+    "upstream_command": [
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/tower-pair-compare",
+      "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/tower-pair-fixture-v3.json",
+      "f358f3ca42cf932d97b7ac313d4addf751c723835fc1bec67c0f7dfbb4920698",
+      "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/upstream-tower-replay.json"
+    ],
+    "final_checks": [
+      {
+        "name": "crystal-guards",
+        "command": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "300",
+          "8192",
+          "spec",
+          "spec/drama3_decode_replay_coverage_spec.cr"
+        ],
+        "returncode": 0,
+        "wall_seconds": 3.0997964167036116,
+        "output": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-crystal-guards.log",
+        "sha256": "204c52f14f424d41f1ba04e3462f56eff1d37d5ef3b0a2658f34040988dc7c69"
+      },
+      {
+        "name": "python-guards",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "spec/drama3_decode_replay_spec.py",
+          "-v"
+        ],
+        "returncode": 0,
+        "wall_seconds": 0.15590645885095,
+        "output": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-python-guards.log",
+        "sha256": "c67009f7b94f6cef7ffa3ed2c9ab56cd509c45173618cbb52659643827864262"
+      },
+      {
+        "name": "format-check",
+        "command": [
+          "crystal",
+          "tool",
+          "format",
+          "--check",
+          "examples/drama3_decode_replay.cr",
+          "examples/support/drama3_decode_replay.cr",
+          "examples/support/drama3_decode_replay_coverage.cr",
+          "spec/drama3_decode_replay_coverage_spec.cr"
+        ],
+        "returncode": 0,
+        "wall_seconds": 0.0193573753349483,
+        "output": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-format-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "analyzer-recheck",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/drama3/analyze_decode_replay.py",
+          "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/events.jsonl",
+          "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/timeline.jsonl",
+          "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/analysis-final-check.json"
+        ],
+        "returncode": 0,
+        "wall_seconds": 0.08285716595128179,
+        "output": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-analyzer-recheck.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "returncode": 0,
+        "wall_seconds": 0.06788574997335672,
+        "output": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-diff-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "cpu_examples": {
+      "crystal": 7,
+      "python": 13,
+      "failures": 0
+    },
+    "analyzer_deterministic_recheck": "analysis-final-check.json matches analysis-root.json byte-for-byte",
+    "generic_landmark_validator": "unavailable: template and validator do not exist in this repository",
+    "validation_limit": "JSON/hash checks and receipts index observed evidence; packet shape is not a substantive proof or independent review."
+  },
+  "observations": {
+    "projection_records": 1793,
+    "records_per_frame": {
+      "0": 597,
+      "29": 598,
+      "59": 598
+    },
+    "snapshot_bytes": 41924840,
+    "homogeneous_cells": 47,
+    "warmup_rounds": 2,
+    "measured_rounds": 7,
+    "repeats_per_arm": 1,
+    "pairs": 423,
+    "diagnostic_commands": 1269,
+    "verified_values_per_arm": 55616202,
+    "bit_mismatches": 0,
+    "nonfinite_pairs": 0,
+    "seeded_bit_nan_receipt": [
+      2,
+      1
+    ],
+    "full_generated_frames": 60,
+    "full_codes_and_sampler_tape_equal_to_saved_native": true,
+    "wav_samples": 122880,
+    "sample_rate": 44100,
+    "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+    "capture_command_counts": {
+      "submitted": 122,
+      "completed": 122,
+      "completion_waits": 122
+    },
+    "capture_read_bytes": {
+      "control": 496,
+      "terminal": 494160
+    },
+    "final_command_counts": {
+      "submitted": 1391,
+      "completed": 1391,
+      "completion_waits": 1391
+    },
+    "final_read_bytes": {
+      "control": 496,
+      "terminal": 497552
+    },
+    "extra_replay_receipt_bytes": 3392,
+    "extra_capture_waits": 0,
+    "activation_readbacks": 0,
+    "graph_depth": 2,
+    "max_pending": 2,
+    "final_pending_and_retained_bytes": 0,
+    "selected_local_costs": [
+      {
+        "frame": 0,
+        "family": "backbone.experts.down",
+        "median_paired_mean_ms": 16.292187618091702,
+        "median_identical_arm_difference_pct": 2.6870014598773606
+      },
+      {
+        "frame": 0,
+        "family": "backbone.experts.gate_up",
+        "median_paired_mean_ms": 12.752937385812402,
+        "median_identical_arm_difference_pct": 1.9858681878225533
+      },
+      {
+        "frame": 0,
+        "family": "backbone.linear_attention.qkv",
+        "median_paired_mean_ms": 8.605041773989797,
+        "median_identical_arm_difference_pct": 3.1875311649892555
+      },
+      {
+        "frame": 29,
+        "family": "backbone.experts.down",
+        "median_paired_mean_ms": 16.142479376867414,
+        "median_identical_arm_difference_pct": 2.893070579866447
+      },
+      {
+        "frame": 29,
+        "family": "backbone.experts.gate_up",
+        "median_paired_mean_ms": 13.046729378402233,
+        "median_identical_arm_difference_pct": 1.5675480052223345
+      },
+      {
+        "frame": 29,
+        "family": "backbone.linear_attention.qkv",
+        "median_paired_mean_ms": 8.719187462702394,
+        "median_identical_arm_difference_pct": 3.3334160725725233
+      },
+      {
+        "frame": 59,
+        "family": "backbone.experts.down",
+        "median_paired_mean_ms": 16.24225010164082,
+        "median_identical_arm_difference_pct": 2.590512676618347
+      },
+      {
+        "frame": 59,
+        "family": "backbone.experts.gate_up",
+        "median_paired_mean_ms": 12.96706241555512,
+        "median_identical_arm_difference_pct": 0.9726553423332858
+      },
+      {
+        "frame": 59,
+        "family": "backbone.linear_attention.qkv",
+        "median_paired_mean_ms": 8.648499846458435,
+        "median_identical_arm_difference_pct": 3.3628144780068268
+      }
+    ],
+    "bounded_upstream": {
+      "fixture_sha256": "f358f3ca42cf932d97b7ac313d4addf751c723835fc1bec67c0f7dfbb4920698",
+      "mlx_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "comparison_records": 2025,
+      "all_prior_metrics_and_ledgers_equal": true,
+      "native_exact_sites": 675,
+      "strict_upstream_pass": false,
+      "unchanged_failure_sites": 3,
+      "mirrored_failed_comparison_records": 6,
+      "tolerances": {
+        "internal_atol": 0.0006000000284984708,
+        "hidden_and_logits_atol": 2.9999999242136255e-05,
+        "rtol": 0.0003000000142492354
+      }
+    }
+  },
+  "refutations_and_limits": [
+    "Initial misclassified tower projection run failed closed and supplies no admitted timings.",
+    "Earlier coarse attempt2 and final split-role command/cache domains are different; do not add split costs or interpret their sum as an improvement.",
+    "Identical arms measure local command cost and noise, not a candidate speedup.",
+    "Attention execution, recurrent delta state, routing/reduction, sampler, normalization, embeddings and other direct paths remain unranked.",
+    "No additive request cost, subtraction from old decode windows, full-request speedup or default promotion is justified.",
+    "Snapshots add GPU copies and allocations; diagnostic wall time is not normal-request throughput.",
+    "Known strict MLX/backbone/DAC numerical frontiers remain open at unchanged tolerances. This tower fixture is bounded no regression, not fresh complete MLX generation.",
+    "Small a/b/router commands have roughly12-15% identical-arm variation and do not support precise ordering."
+  ],
+  "next_falsifier": "Test varying-input all40-layer expert down plus weighted-sum fusion preserving original lane subtotals and expert accumulation order. Require exact captured outputs, unchanged bounded upstream metrics and profiler-off complete-WAV pairs before accepting a performance/default claim.",
+  "rollback": "Omit the standalone diagnostic executable; no production path or selector changed.",
+  "trust": {
+    "F": "Executed runtime assertions, adversarial CPU guards and source review; no formal proof.",
+    "G": "One fixed checkpoint/request/device, three selected decode rows and bounded tower fixture.",
+    "R": "Root-executed GPU/CPU checks plus correlated source/artifact audit; no independent device or agent lineage replication."
+  },
+  "refresh": {
+    "decay_triggers": [
+      "source/dispatch mapping",
+      "compiler/runtime/bridge",
+      "checkpoint/reference/input/tolerance",
+      "queue/device/OS",
+      "host load for timings",
+      "artifact loss or hash mismatch"
+    ],
+    "operation": "Rebuild and rerun capture/replay, CPU guards, bounded upstream comparison and scoped adversary; qualify any candidate separately on profiler-off full-WAV requests.",
+    "failure_policy": "Reopen the dependent diagnostic claim; do not promote a selector/default from stale evidence."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/run-receipt.json",
+      "sha256": "d5b2a72af25c525171169a1dc5ed02ca57f7b4d303aba8d7e340744cac31ecbd",
+      "bytes": 9964,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/capture/capture.json",
+      "sha256": "c3bed8788a6819999b36b6d65ec69b3bc4ac3416074be71677575114bd21019e",
+      "bytes": 1031145,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/analysis-root.json",
+      "sha256": "38b73b0afe4130e943f364263fe740958ada56e78a1fdc4da4744101a8b8cc57",
+      "bytes": 293738,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/events.jsonl",
+      "sha256": "65b4c44879b215764901f57d809b8b5ab139a090b575808953f4f7ad13d598eb",
+      "bytes": 334464,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/timeline.jsonl",
+      "sha256": "b9696fd568258d204cc457f887dec5314fefd83af42bc4691e7dcb09dff1162c",
+      "bytes": 583004,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/attempt3-roles/capture/drama3-decode-capture.wav",
+      "sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "bytes": 245804,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/upstream-run-receipt.json",
+      "sha256": "93dc063f591d7e7cad92c0d3d5a19bbb678dbdfeeb89c3ac6b27654cb979b931",
+      "bytes": 8773,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/upstream-no-regression.json",
+      "sha256": "eb49832d86035c36988657baf2d885b0937a61e5df7a2e39b94d8489bc1d7c25",
+      "bytes": 3703,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/upstream-tower-replay.json",
+      "sha256": "a69bd16111967a59fe90474ea8b3f148a1aebca37b3291d1febeaafe6e5c2c0d",
+      "bytes": 543859,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/validate_final_evidence.py",
+      "sha256": "b0c3be1e1935fa526f782b2402e0175d972d1bf697844c7215372b799ac71045",
+      "bytes": 6427,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-validation.json",
+      "sha256": "8c899a74eb0882991858db322276e059c176280070d7bae4f1aed930d9b07cb4",
+      "bytes": 6266,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/build_final_packet.py",
+      "sha256": "ac06b30fc1f38da7f824faf4ade2986dc5c1b686adffdf3feeffec9c5fed21bb",
+      "bytes": 11111,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/run_probe.py",
+      "sha256": "76c4568801130a9a13cc01d3262fcb282d866e8f013c8a5e767ef596e7df53ca",
+      "bytes": 2660,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/run_upstream.py",
+      "sha256": "8aee146a3075bb89eb101e9e4e97b147d7b802c48c0790f5c100c746d0a2a30e",
+      "bytes": 2187,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/compare_upstream_replay.py",
+      "sha256": "1ce1bfb4e96434fa075be6ad1a02de8f131d7362c4fab3925c06174cd289a514",
+      "bytes": 1969,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/decode-replay-roles",
+      "sha256": "57e7f53b5c35b26b8db587fc1bac5c0ea88df8fedaed10fb58f08bee2352be85",
+      "bytes": 1574160,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/tower-pair-compare",
+      "sha256": "4c4c23168eb6e4d0ef7d23f6bb8d24d01ade7aecb3c675e7f981dd8f67715564",
+      "bytes": 1117904,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+      "sha256": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "bytes": 41228,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/tower-pair-fixture-v3.json",
+      "sha256": "f358f3ca42cf932d97b7ac313d4addf751c723835fc1bec67c0f7dfbb4920698",
+      "bytes": 42214676,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-crystal-guards.log",
+      "sha256": "204c52f14f424d41f1ba04e3462f56eff1d37d5ef3b0a2658f34040988dc7c69",
+      "bytes": 175,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-python-guards.log",
+      "sha256": "c67009f7b94f6cef7ffa3ed2c9ab56cd509c45173618cbb52659643827864262",
+      "bytes": 2078,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-format-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-analyzer-recheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "availability": "local external SSD at qualification"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/final-diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "availability": "local external SSD at qualification"
+    }
+  ]
+}

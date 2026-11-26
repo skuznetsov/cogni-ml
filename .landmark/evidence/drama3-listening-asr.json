@@ -1,0 +1,758 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-listening-asr-20261015",
+  "created_at_utc": "2026-10-15T14:11:30.297791+00:00",
+  "base_revision": "3156210bfe5684831b4515203e24f05f79840ace",
+  "claim": {
+    "level": "IN_PROGRESS",
+    "scope": "Observed listening feedback, local blind GPU ASR controls and a failed silence-content guard. No direct audio perception or transcript accuracy certification.",
+    "silence_cause_established": false,
+    "speech_fixed": false,
+    "seed3_english_omission_established": false,
+    "asr_empty_silence_guard": "FAIL",
+    "production_precision_tolerances_defaults_changed": false
+  },
+  "feedback": {
+    "source": "Direct user replies in this Codex thread; preserved as listening reports, not ASR output",
+    "recorded_at_utc": "2026-10-15T14:11:30.294733+00:00",
+    "named_first_chunks": {
+      "files": [
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-first-chunk.wav",
+          "sha256": "ab196dc33e3b04419327f6fd273c32c2838058d746e47453e62e25b8d9d3995e"
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-styled.chunk-001.wav",
+          "sha256": "412aa9829188c6f1a0ade8132cda7665fecfd5b773e2518937dde657e2adf6df"
+        }
+      ],
+      "question": "В двух новых первых частях выше слышна фраза «Ах, это всего лишь наш кот уронил коробку!» после шёпота? Укажи отдельно для нативного файла и MLX.",
+      "answer": "Не слышна в обоих",
+      "binding": "The two files were named and rendered together in the preceding final response."
+    },
+    "ambiguous_delayed_reply": {
+      "question": "В новых двух файлах «30 слов без тегов» слышен весь текст, включая «Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник»?",
+      "answer": "В первом текст оканчивается на слове \"шорох\", потом тишина.\nВо втором шепот оканчивается на \"происходит, и потом тишина",
+      "binding": "Unresolved: whisper description conflicts with the no-tags question label. Do not assign to both no-cue WAVs."
+    },
+    "prior_bilingual_feedback_path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/listening-feedback.json",
+    "prior_bilingual_feedback_sha256": "49982c00f09be8969c844f108d689048b9f0c926ce5860e559194dbebd2bea5f",
+    "seed3_status": "Human Russian-only report conflicts with blind whole-file and isolated English ASR candidates. Content is unresolved; neither account is promoted over the other."
+  },
+  "asr": {
+    "model_manifest": {
+      "model_id": "mlx-community/whisper-large-v3-turbo-asr-fp16",
+      "revision": "624c19c9af5603fa73b83bce14d4aeea96156d18",
+      "download_path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9",
+      "recorded_at_utc": "2026-10-15T14:03:03.787706+00:00",
+      "files": [
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/added_tokens.json",
+          "bytes": 34648,
+          "sha256": "3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/config.json",
+          "bytes": 1301,
+          "sha256": "47ef28115e4b7e08c604546cc98eb1ead8ff72152cfaeb5d7bcb7ef1640a5bdd",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/generation_config.json",
+          "bytes": 3772,
+          "sha256": "cce11bfe3aaa6ae9e072ea2637caaec8795e68d9b67e655a5af16ee509681a4c",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/merges.txt",
+          "bytes": 493869,
+          "sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/model.safetensors",
+          "bytes": 1613977443,
+          "sha256": "a76ee3af9c01b616ab7caf1eed663dceb7d68e9dc62c990dac48112db6e57e34",
+          "hub_lfs_sha256": "a76ee3af9c01b616ab7caf1eed663dceb7d68e9dc62c990dac48112db6e57e34"
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/model.safetensors.index.json",
+          "bytes": 37633,
+          "sha256": "9cf894da1061ccc1657c6dabf1fa19dfcf1f0603df4194ab4fb913a554da789d",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/normalizer.json",
+          "bytes": 52666,
+          "sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/preprocessor_config.json",
+          "bytes": 340,
+          "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/special_tokens_map.json",
+          "bytes": 2186,
+          "sha256": "baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/tokenizer.json",
+          "bytes": 2710337,
+          "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/tokenizer_config.json",
+          "bytes": 282843,
+          "sha256": "844b642c73a91359722f47b35705f7174686df33d252695d8572cf9ac03a6389",
+          "hub_lfs_sha256": null
+        },
+        {
+          "path": "/Users/sergey/.cache/cogni-ml/whisper-large-v3-turbo-asr-fp16-624c19c9/vocab.json",
+          "bytes": 1036558,
+          "sha256": "e2aa043ef015641d363d8288e7c241c85e36a5c761fb303598e0710233344387",
+          "hub_lfs_sha256": null
+        }
+      ]
+    },
+    "options": {
+      "temperature": 0.0,
+      "language": null,
+      "task": "transcribe",
+      "condition_on_previous_text": false,
+      "initial_prompt": null,
+      "hotwords": null,
+      "return_timestamps": true,
+      "word_timestamps": false,
+      "verbose": null
+    },
+    "full_cases": 10,
+    "isolated_cases": 7,
+    "case_summaries": [
+      {
+        "name": "positive_bilingual_seed1",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-1.wav",
+        "source_sha256": "d24a30bb0f8463ac0f43722945033b67b1350f7b6ec96ff5bce5235ac4c7b876",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 146379,
+        "input_rms": 0.10159991678119146,
+        "text": " Я живу в Голливуде, Флорида, США. I live in Hollywood, Florida, USA.",
+        "language": "ru"
+      },
+      {
+        "name": "reported_russian_only_seed3",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-3.wav",
+        "source_sha256": "b6d18fd159828f3122eb790760ece720a09df43e59a7c5574f332951847a57b6",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 133004,
+        "input_rms": 0.11078446078335731,
+        "text": " Я живу в Голливуде, Флорида, США. I live in Hollywood, Florida, USA.",
+        "language": "ru"
+      },
+      {
+        "name": "native_no_cues_full",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-no-cues.wav",
+        "source_sha256": "1747bb314eed344930ed91d076275f13c4236bd638f022fefec4e50596ba407d",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 570654,
+        "input_rms": 0.030789927137239895,
+        "text": " Тише, кажется, за дверью снова шорох. Продолжение следует...",
+        "language": "ru"
+      },
+      {
+        "name": "mlx_no_cues_full",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-shared-original-no-cues.wav",
+        "source_sha256": "e8c8f073411bfa71256942c1dcb1a008a72fc45239808a4e9aa3b6f884dbc657",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 570654,
+        "input_rms": 0.03079206941964131,
+        "text": " Тише, кажется, за дверью снова шорох. Продолжение следует...",
+        "language": "ru"
+      },
+      {
+        "name": "native_styled_first_chunk",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-first-chunk.wav",
+        "source_sha256": "ab196dc33e3b04419327f6fd273c32c2838058d746e47453e62e25b8d9d3995e",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 317278,
+        "input_rms": 0.002587918885228456,
+        "text": " Тише. Кажется, за дверью снова шорох. Продолжение следует...",
+        "language": "ru"
+      },
+      {
+        "name": "mlx_styled_first_chunk",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-styled.chunk-001.wav",
+        "source_sha256": "412aa9829188c6f1a0ade8132cda7665fecfd5b773e2518937dde657e2adf6df",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 550592,
+        "input_rms": 0.003283744060008624,
+        "text": " Тише, кажется, за дверью снова шорох. Давай подождем немного и послушаем, что происходит. Продолжение следует...",
+        "language": "ru"
+      },
+      {
+        "name": "mlx_no_cues_last_chunk",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-nocues.chunk-002.wav",
+        "source_sha256": "d5dc5ce4fc7d4bb5233f567d937969d7a2d3deeccf221513fd35a44958476f6b",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 66131,
+        "input_rms": 0.14962195443285944,
+        "text": " Ну и напугал же он нас сегодня, маленький проказник.",
+        "language": "ru"
+      },
+      {
+        "name": "mlx_styled_last_chunk",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-styled.chunk-002.wav",
+        "source_sha256": "a5775d49d9aec304eb267335bd95008f0d2d9c165104dc03c64f263fa2125473",
+        "offset_seconds": null,
+        "clip_seconds": null,
+        "input_samples": 57957,
+        "input_rms": 0.03418972273107923,
+        "text": " Ну и напугал же он нас сегодня, маленький проказник.",
+        "language": "ru"
+      },
+      {
+        "name": "negative_actual_quiet_tail",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-no-cues.wav",
+        "source_sha256": "1747bb314eed344930ed91d076275f13c4236bd638f022fefec4e50596ba407d",
+        "offset_seconds": 10.0,
+        "clip_seconds": 10.0,
+        "input_samples": 160000,
+        "input_rms": 9.568138985194747e-06,
+        "text": " Thank you.",
+        "language": "en"
+      },
+      {
+        "name": "negative_digital_silence",
+        "source": null,
+        "source_sha256": null,
+        "offset_seconds": null,
+        "clip_seconds": 10.0,
+        "input_samples": 160000,
+        "input_rms": 0.0,
+        "text": " Thank you.",
+        "language": "en"
+      },
+      {
+        "name": "seed1_first_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-1.wav",
+        "source_sha256": "d24a30bb0f8463ac0f43722945033b67b1350f7b6ec96ff5bce5235ac4c7b876",
+        "offset_seconds": 0.0,
+        "clip_seconds": 4.0,
+        "input_samples": 64000,
+        "input_rms": 0.10509216172307584,
+        "text": " Я живу в Голливуде, Флорида, США.",
+        "language": "ru"
+      },
+      {
+        "name": "seed1_from_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-1.wav",
+        "source_sha256": "d24a30bb0f8463ac0f43722945033b67b1350f7b6ec96ff5bce5235ac4c7b876",
+        "offset_seconds": 4.0,
+        "clip_seconds": null,
+        "input_samples": 82379,
+        "input_rms": 0.09880163851047513,
+        "text": " I live in Hollywood, Florida, USA.",
+        "language": "en"
+      },
+      {
+        "name": "seed3_first_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-3.wav",
+        "source_sha256": "b6d18fd159828f3122eb790760ece720a09df43e59a7c5574f332951847a57b6",
+        "offset_seconds": 0.0,
+        "clip_seconds": 4.0,
+        "input_samples": 64000,
+        "input_rms": 0.11191217416155134,
+        "text": " Я живу в Голливуде, Флорида, США.",
+        "language": "ru"
+      },
+      {
+        "name": "seed3_from_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-3.wav",
+        "source_sha256": "b6d18fd159828f3122eb790760ece720a09df43e59a7c5574f332951847a57b6",
+        "offset_seconds": 4.0,
+        "clip_seconds": null,
+        "input_samples": 69004,
+        "input_rms": 0.10972816722912687,
+        "text": " I live in Hollywood, Florida, USA.",
+        "language": "en"
+      },
+      {
+        "name": "native_styled_after_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-first-chunk.wav",
+        "source_sha256": "ab196dc33e3b04419327f6fd273c32c2838058d746e47453e62e25b8d9d3995e",
+        "offset_seconds": 4.0,
+        "clip_seconds": null,
+        "input_samples": 253278,
+        "input_rms": 0.0006833775407206741,
+        "text": " Thank you.",
+        "language": "en"
+      },
+      {
+        "name": "mlx_styled_after_4_seconds",
+        "source": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-styled.chunk-001.wav",
+        "source_sha256": "412aa9829188c6f1a0ade8132cda7665fecfd5b773e2518937dde657e2adf6df",
+        "offset_seconds": 4.0,
+        "clip_seconds": null,
+        "input_samples": 486592,
+        "input_rms": 0.0028419997833953213,
+        "text": " Давай подождем немного И послушаем, что происходит Продолжение следует...",
+        "language": "ru"
+      },
+      {
+        "name": "negative_digital_silence",
+        "source": null,
+        "source_sha256": null,
+        "offset_seconds": null,
+        "clip_seconds": 10.0,
+        "input_samples": 160000,
+        "input_rms": 0.0,
+        "text": " Thank you.",
+        "language": "en"
+      }
+    ]
+  },
+  "sequence_binding": {
+    "sequence": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voices-native-sequence.wav",
+    "sequence_sha256": "f289e3c9807a4cb2d5e9235992104e7222d3975d165c4e008774adbc0b9541d3",
+    "params": [
+      1,
+      2,
+      44100,
+      1117252
+    ],
+    "segments": [
+      {
+        "seed": 1,
+        "start_sample": 0,
+        "source_samples": 403456,
+        "source_pcm_sha256": "430124297f95ca9b182a3aaf0d7a4da8b4289dbbd7b46d18c43ba37d2af71a56",
+        "sequence_segment_equal": true
+      },
+      {
+        "seed": 2,
+        "start_sample": 425506,
+        "source_samples": 303104,
+        "source_pcm_sha256": "a6a65aa30ddc208aa451075eb0948cb1d501f1770fa0259ef9147fa53a6564e7",
+        "sequence_segment_equal": true
+      },
+      {
+        "seed": 3,
+        "start_sample": 750660,
+        "source_samples": 366592,
+        "source_pcm_sha256": "db0a9ae5efbddf59176bf8f0b628eac7c24e3d8f317df22a9f291f80117e93e0",
+        "sequence_segment_equal": true
+      }
+    ],
+    "gaps_exact_zero_seconds": 0.5,
+    "whole_sequence_consumed": true
+  },
+  "supersession": {
+    "historical_packet": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/.landmark/evidence/drama3-sampler-voices.json",
+    "historical_packet_sha256": "3dd95930cdbfd9dfc2b730d8ca09a59c4885c761b8a6d1adbca150ec64beeb2c",
+    "reopen": "Seed3 as an established English omission; ASR and human content feedback now conflict.",
+    "preserve": [
+      "179 exact emitted code frames and same EOS for seed3 versus MLX",
+      "Original quiet-onset/common-code-prefix observation",
+      "Unchanged strict sampler and DAC negative gates"
+    ],
+    "not_closed": [
+      "Full text delivery",
+      "Unique silence/omission cause",
+      "New first-chunk frame111 arithmetic fork",
+      "Full-stream cross-decoder parity"
+    ]
+  },
+  "adversary": {
+    "review": "Correlated source review plus parent-executed falsifier; no direct hearing by agents.",
+    "bounded_verdict": "ROBUST for retaining contradictory evidence and refusing ASR-content certification; VULNERABLE for any definitive transcript or silence root-cause claim.",
+    "strongest_counterexample": "Digital zero produces Thank you in both full and isolated runs.",
+    "guards": [
+      "No initial text or hotwords",
+      "Actual PCM arrays rather than filenames enter the model",
+      "Automatic language detection and no earlier-text conditioning",
+      "Full and isolated source-byte binding",
+      "Exact listening-sequence segment comparison"
+    ],
+    "limits": [
+      "An ASR candidate is not a listener observation.",
+      "Absence from an ASR transcript does not establish absent speech.",
+      "Agreement on a candidate phrase is not a transcript guarantee.",
+      "Original human/ASR seed3 disagreement remains open.",
+      "Local hashes/receipts are consistency evidence, not execution attestation."
+    ]
+  },
+  "observed_dod_commands": [
+    {
+      "name": "asr-pinned-download",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "600",
+        "8192",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/download.py"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0"
+      },
+      "unset_environment": [
+        "DRAMA3_PROFILE",
+        "DRAMA3_METAL_TIMELINE"
+      ],
+      "source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/run.py": "f302de22718d3c2ed067ab8c09522cd9472984cbc3b47e9d744eb89dcf3bade2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_backbone_gpu_trace.cr": "26460d555c3f504c33984e63ae1ae7447de0872e97ac866764b2f5f65f9c36ce",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_resident_trace.cr": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_trace.cr": "a6394eb259120fc670dadcc21e4c11405c871dd41a0a67e18baf601e1b52ae70",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_delta_benchmark.cr": "5ffdd4259cd631a3fab3dfdfca2640f7974fb5845d46f3fde70ca161ebe20078",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_benchmark.cr": "c56e7da4a3d6c0db7381b82f1499d4c64f7e6600fe81e7eed8ff0ddebac47c06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_trace.cr": "5b6ba998abb9213d35fa6e1f2034feeac0566dc20802c34449ea15804459e623",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr": "ebddf597fbab4ffaf3840118c3b343a049ca21f6b0c1913381fe5a7a36a871ef",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generation_replay.cr": "4ff6a7b5674cb17b4bca4d8051ab9f12beaf14c7f37edd199f1226765060115c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_inspect.cr": "9023e290e11b6e0568800d92ec625ffa29b94eaa1314952d946bb5af05b11a71",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_mlx_q4_probe.cr": "a6309b36ff63cae7b745f8ae81f68c7c43c923ae1f6b17d90f7c162db35cab52",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_ablation.cr": "e45074f4fdb8b043d0d3f27067fe58baf29c479f0277aebe0d10b4689a538e3f",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_resident_trace.cr": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_benchmark.cr": "bdf0fb8f6ab6ea8e817da1882a16e10ccdb50f9ac13ac626f87bf20e7f06b5ad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_compare.cr": "38a81ba1453bbd9b5827b5aa3cff2eba16c6920acbce5da3955517cfbb7a673d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_startup_probe.cr": "5533fd57b296e88caee78b0d449030e7c8cee0fdbb2da52bf159e4e9d223c476",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_tower_resident_trace.cr": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_trace.cr": "9486aa43973ed1a9d83f47b40d61a8555d148b7865e939363131f2f0f8a963e6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_generation_replay.py": "fa2aad3606808305d28ad13371a738b1cecb2a5c9d23937de16ace858eb214f0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_sampler_common.py": "4ca0d032b38d13068226bfad1235b3448396f695b651f9eb40027688b869bb45",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py": "d925b1f1c5af4527652ade973d4cbc14931326d83d6f8ccf632471d1f97933e4",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/dense_reference.py": "fd1647b8071ba16bb8831219c6ab9a9c37bef095cb55100cbfba51a09709993c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/export_reference.py": "5ed4543b847814ecdec758a756c093f09cf11ff90bc2677a167703f189457197",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/generate_mlx_control.py": "102979afbebc88d97a3c0cebaf2d2b248983bc21b92e76d15e861a0a19260dd7",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/moe_compare.py": "24f89687d7669db43a9ab832f23b12299671a7c2f6d3d61bea832243fba530a8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/probe_mlx_expert_down.py": "51d234ebbb07af12772cd1298c3018ffbb58421d73be5d0f3eb39935efeca5a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_embedding.py": "598aeed7f1117e381629399ce5387e8d12c993fe189f8a84b20156f4f4d95f29",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_torch_tower.py": "96ddd652c913b139e9748ca39aec26dd022119d6c5eab6aeb537e757685d2c63",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/sampler_common_reference.py": "e1a45fd8eca2071051f0d9e1cbbe651dbc1d74eab334ccc9bbefef3419576a69",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr": "b701d14617261a5c72f3deff25ed0728d8abbb4c609dd375e4668bb3779fc3dc",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec.cr": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_metal.cr": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr": "f80f860a7739f7cfb858ce6dbe10e7d6c25b5b0ae66c09325fd99990147d0612",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator.cr": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr": "bdc660571ff883e03abd0076f09fc00134ad841da2ae433b8e3551012bfdf3a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/affine.metal": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/backbone_resident.metal": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec.metal": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec_resident.metal": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/generator_resident.metal": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal": "85c73b17de6832787497d88112b1ae00422af4e3287170009d9dac36c55a2395",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/tower_resident.metal": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/native.cr": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/profile.cr": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/prompt.cr": "ccb1597d316c8a92a4c7dda54c437293f3ff4078c7d78119dee962e764ab080b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr": "ebaf0b544334f6a0c14276efe8a3fca10273725dfd887037425af33f1ec27f24",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower_resident.cr": "e41089e564c41ced168511ebd71c1557c34a942b402b9280760b4dc1f8fddd06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/wav.cr": "44eca9e727af422f3f22cc9ca89593832752168bf8d2a976d66273cc36c0b128"
+      },
+      "external_source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/download.py": "27b35783184c5ebf183e5ceaa504594e75c0d042252644067de6b09df17f411c"
+      },
+      "git_head": "3156210bfe5684831b4515203e24f05f79840ace",
+      "started_at_utc": "2026-10-15T14:02:32.110163+00:00",
+      "memory_before": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 88%",
+      "finished_at_utc": "2026-10-15T14:03:04.413201+00:00",
+      "wrapper_seconds": 32.2990689589642,
+      "exit_code": 0,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr-pinned-download.log",
+      "log_sha256": "3b4d24dabe1dd844fa48018134a66a5f2a5966e93a99ac1fd3a0230230900033",
+      "memory_after": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 87%"
+    },
+    {
+      "name": "asr-blind-gpu-controls",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "600",
+        "12288",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe.py"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0"
+      },
+      "unset_environment": [
+        "DRAMA3_PROFILE",
+        "DRAMA3_METAL_TIMELINE"
+      ],
+      "source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/run.py": "f302de22718d3c2ed067ab8c09522cd9472984cbc3b47e9d744eb89dcf3bade2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_backbone_gpu_trace.cr": "26460d555c3f504c33984e63ae1ae7447de0872e97ac866764b2f5f65f9c36ce",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_resident_trace.cr": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_trace.cr": "a6394eb259120fc670dadcc21e4c11405c871dd41a0a67e18baf601e1b52ae70",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_delta_benchmark.cr": "5ffdd4259cd631a3fab3dfdfca2640f7974fb5845d46f3fde70ca161ebe20078",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_benchmark.cr": "c56e7da4a3d6c0db7381b82f1499d4c64f7e6600fe81e7eed8ff0ddebac47c06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_trace.cr": "5b6ba998abb9213d35fa6e1f2034feeac0566dc20802c34449ea15804459e623",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr": "ebddf597fbab4ffaf3840118c3b343a049ca21f6b0c1913381fe5a7a36a871ef",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generation_replay.cr": "4ff6a7b5674cb17b4bca4d8051ab9f12beaf14c7f37edd199f1226765060115c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_inspect.cr": "9023e290e11b6e0568800d92ec625ffa29b94eaa1314952d946bb5af05b11a71",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_mlx_q4_probe.cr": "a6309b36ff63cae7b745f8ae81f68c7c43c923ae1f6b17d90f7c162db35cab52",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_ablation.cr": "e45074f4fdb8b043d0d3f27067fe58baf29c479f0277aebe0d10b4689a538e3f",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_resident_trace.cr": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_benchmark.cr": "bdf0fb8f6ab6ea8e817da1882a16e10ccdb50f9ac13ac626f87bf20e7f06b5ad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_compare.cr": "38a81ba1453bbd9b5827b5aa3cff2eba16c6920acbce5da3955517cfbb7a673d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_startup_probe.cr": "5533fd57b296e88caee78b0d449030e7c8cee0fdbb2da52bf159e4e9d223c476",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_tower_resident_trace.cr": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_trace.cr": "9486aa43973ed1a9d83f47b40d61a8555d148b7865e939363131f2f0f8a963e6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_generation_replay.py": "fa2aad3606808305d28ad13371a738b1cecb2a5c9d23937de16ace858eb214f0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_sampler_common.py": "4ca0d032b38d13068226bfad1235b3448396f695b651f9eb40027688b869bb45",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py": "d925b1f1c5af4527652ade973d4cbc14931326d83d6f8ccf632471d1f97933e4",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/dense_reference.py": "fd1647b8071ba16bb8831219c6ab9a9c37bef095cb55100cbfba51a09709993c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/export_reference.py": "5ed4543b847814ecdec758a756c093f09cf11ff90bc2677a167703f189457197",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/generate_mlx_control.py": "102979afbebc88d97a3c0cebaf2d2b248983bc21b92e76d15e861a0a19260dd7",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/moe_compare.py": "24f89687d7669db43a9ab832f23b12299671a7c2f6d3d61bea832243fba530a8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/probe_mlx_expert_down.py": "51d234ebbb07af12772cd1298c3018ffbb58421d73be5d0f3eb39935efeca5a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_embedding.py": "598aeed7f1117e381629399ce5387e8d12c993fe189f8a84b20156f4f4d95f29",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_torch_tower.py": "96ddd652c913b139e9748ca39aec26dd022119d6c5eab6aeb537e757685d2c63",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/sampler_common_reference.py": "e1a45fd8eca2071051f0d9e1cbbe651dbc1d74eab334ccc9bbefef3419576a69",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr": "b701d14617261a5c72f3deff25ed0728d8abbb4c609dd375e4668bb3779fc3dc",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec.cr": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_metal.cr": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr": "f80f860a7739f7cfb858ce6dbe10e7d6c25b5b0ae66c09325fd99990147d0612",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator.cr": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr": "bdc660571ff883e03abd0076f09fc00134ad841da2ae433b8e3551012bfdf3a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/affine.metal": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/backbone_resident.metal": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec.metal": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec_resident.metal": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/generator_resident.metal": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal": "85c73b17de6832787497d88112b1ae00422af4e3287170009d9dac36c55a2395",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/tower_resident.metal": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/native.cr": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/profile.cr": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/prompt.cr": "ccb1597d316c8a92a4c7dda54c437293f3ff4078c7d78119dee962e764ab080b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr": "ebaf0b544334f6a0c14276efe8a3fca10273725dfd887037425af33f1ec27f24",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower_resident.cr": "e41089e564c41ced168511ebd71c1557c34a942b402b9280760b4dc1f8fddd06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/wav.cr": "44eca9e727af422f3f22cc9ca89593832752168bf8d2a976d66273cc36c0b128"
+      },
+      "external_source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe.py": "f1141e70581505169f61a404ff50d39e861df48c98f9729b08c67d1abef37c12"
+      },
+      "git_head": "3156210bfe5684831b4515203e24f05f79840ace",
+      "started_at_utc": "2026-10-15T14:03:48.240757+00:00",
+      "memory_before": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 87%",
+      "finished_at_utc": "2026-10-15T14:04:02.187841+00:00",
+      "wrapper_seconds": 13.944482374936342,
+      "exit_code": 0,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr-blind-gpu-controls.log",
+      "log_sha256": "2036989132aa1b1a798d81e090c60d2d18bdcd553e05fb77a871fde17bf129a6",
+      "memory_after": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 87%"
+    },
+    {
+      "name": "asr-isolated-gpu-controls",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "180",
+        "12288",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe-isolated.py"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_DENSE_REDUCTION": "tree",
+        "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+        "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MLX_ENABLE_TF32": "0"
+      },
+      "unset_environment": [
+        "DRAMA3_PROFILE",
+        "DRAMA3_METAL_TIMELINE"
+      ],
+      "source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/run.py": "f302de22718d3c2ed067ab8c09522cd9472984cbc3b47e9d744eb89dcf3bade2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_backbone_gpu_trace.cr": "26460d555c3f504c33984e63ae1ae7447de0872e97ac866764b2f5f65f9c36ce",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_resident_trace.cr": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_trace.cr": "a6394eb259120fc670dadcc21e4c11405c871dd41a0a67e18baf601e1b52ae70",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_delta_benchmark.cr": "5ffdd4259cd631a3fab3dfdfca2640f7974fb5845d46f3fde70ca161ebe20078",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_benchmark.cr": "c56e7da4a3d6c0db7381b82f1499d4c64f7e6600fe81e7eed8ff0ddebac47c06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_trace.cr": "5b6ba998abb9213d35fa6e1f2034feeac0566dc20802c34449ea15804459e623",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr": "ebddf597fbab4ffaf3840118c3b343a049ca21f6b0c1913381fe5a7a36a871ef",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generation_replay.cr": "4ff6a7b5674cb17b4bca4d8051ab9f12beaf14c7f37edd199f1226765060115c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_inspect.cr": "9023e290e11b6e0568800d92ec625ffa29b94eaa1314952d946bb5af05b11a71",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_mlx_q4_probe.cr": "a6309b36ff63cae7b745f8ae81f68c7c43c923ae1f6b17d90f7c162db35cab52",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_ablation.cr": "e45074f4fdb8b043d0d3f27067fe58baf29c479f0277aebe0d10b4689a538e3f",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_resident_trace.cr": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_benchmark.cr": "bdf0fb8f6ab6ea8e817da1882a16e10ccdb50f9ac13ac626f87bf20e7f06b5ad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_compare.cr": "38a81ba1453bbd9b5827b5aa3cff2eba16c6920acbce5da3955517cfbb7a673d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_startup_probe.cr": "5533fd57b296e88caee78b0d449030e7c8cee0fdbb2da52bf159e4e9d223c476",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_tower_resident_trace.cr": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_trace.cr": "9486aa43973ed1a9d83f47b40d61a8555d148b7865e939363131f2f0f8a963e6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_generation_replay.py": "fa2aad3606808305d28ad13371a738b1cecb2a5c9d23937de16ace858eb214f0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_sampler_common.py": "4ca0d032b38d13068226bfad1235b3448396f695b651f9eb40027688b869bb45",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py": "d925b1f1c5af4527652ade973d4cbc14931326d83d6f8ccf632471d1f97933e4",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/dense_reference.py": "fd1647b8071ba16bb8831219c6ab9a9c37bef095cb55100cbfba51a09709993c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/export_reference.py": "5ed4543b847814ecdec758a756c093f09cf11ff90bc2677a167703f189457197",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/generate_mlx_control.py": "102979afbebc88d97a3c0cebaf2d2b248983bc21b92e76d15e861a0a19260dd7",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/moe_compare.py": "24f89687d7669db43a9ab832f23b12299671a7c2f6d3d61bea832243fba530a8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/probe_mlx_expert_down.py": "51d234ebbb07af12772cd1298c3018ffbb58421d73be5d0f3eb39935efeca5a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_embedding.py": "598aeed7f1117e381629399ce5387e8d12c993fe189f8a84b20156f4f4d95f29",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_torch_tower.py": "96ddd652c913b139e9748ca39aec26dd022119d6c5eab6aeb537e757685d2c63",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/sampler_common_reference.py": "e1a45fd8eca2071051f0d9e1cbbe651dbc1d74eab334ccc9bbefef3419576a69",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone.cr": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr": "b701d14617261a5c72f3deff25ed0728d8abbb4c609dd375e4668bb3779fc3dc",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec.cr": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_metal.cr": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr": "f80f860a7739f7cfb858ce6dbe10e7d6c25b5b0ae66c09325fd99990147d0612",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator.cr": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr": "bdc660571ff883e03abd0076f09fc00134ad841da2ae433b8e3551012bfdf3a6",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/affine.metal": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/backbone_resident.metal": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec.metal": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec_resident.metal": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/generator_resident.metal": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal": "85c73b17de6832787497d88112b1ae00422af4e3287170009d9dac36c55a2395",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/tower_resident.metal": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/native.cr": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/profile.cr": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/prompt.cr": "ccb1597d316c8a92a4c7dda54c437293f3ff4078c7d78119dee962e764ab080b",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr": "ebaf0b544334f6a0c14276efe8a3fca10273725dfd887037425af33f1ec27f24",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower.cr": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower_resident.cr": "e41089e564c41ced168511ebd71c1557c34a942b402b9280760b4dc1f8fddd06",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/wav.cr": "44eca9e727af422f3f22cc9ca89593832752168bf8d2a976d66273cc36c0b128"
+      },
+      "external_source_sha256": {
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe-isolated.py": "45b4349f6c680155a55d26ce6cbfe49795af8b39b717b99b8bd044eaf0bc976a"
+      },
+      "git_head": "3156210bfe5684831b4515203e24f05f79840ace",
+      "started_at_utc": "2026-10-15T14:05:43.980178+00:00",
+      "memory_before": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 88%",
+      "finished_at_utc": "2026-10-15T14:05:54.052136+00:00",
+      "wrapper_seconds": 10.08131037466228,
+      "exit_code": 0,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr-isolated-gpu-controls.log",
+      "log_sha256": "d50142cbbf2d5def123734169d24ae8acaa53fc0c0f6a49d8558b2c35b6ba3cc",
+      "memory_after": "The system has 68719476736 (4194304 pages with a page size of 16384).\nSystem-wide memory free percentage: 88%"
+    }
+  ],
+  "source_sha256": {
+    "docs/drama3-native-frontier.md": "b862b1c120e0c4b6fc6cc97c0a531990a484519f0fb07860ca4f63c0526827cb",
+    "LANDMARKS.md": "b505a0727355f2da30ea84103e578c24078c71a19fe5792d42068cca1bf78b0c"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/download.py",
+      "bytes": 1402,
+      "sha256": "27b35783184c5ebf183e5ceaa504594e75c0d042252644067de6b09df17f411c"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/model-manifest.json",
+      "bytes": 3415,
+      "sha256": "7d85dfc2ae4f82ff9310f4d0fac6239227be28bc7480861ae785519f1f84697e"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe.py",
+      "bytes": 4736,
+      "sha256": "f1141e70581505169f61a404ff50d39e861df48c98f9729b08c67d1abef37c12"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcripts.json",
+      "bytes": 22829,
+      "sha256": "83cd697eed3c2a05bf36cb6134b1afb3e28a100ee5dcea9c18545c74eb6d19f7"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcribe-isolated.py",
+      "bytes": 4501,
+      "sha256": "45b4349f6c680155a55d26ce6cbfe49795af8b39b717b99b8bd044eaf0bc976a"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/transcripts-isolated.json",
+      "bytes": 13891,
+      "sha256": "2199e969d33339d2f04e031a2b2b4f8a370cf3a50e4bf013b86e23fb29148f93"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/sequence-binding.json",
+      "bytes": 1014,
+      "sha256": "0e6514f8a2402cb16957650d1ce7be1fb721367f08cba2416331e3975e6894c6"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/listening-feedback-update.json",
+      "bytes": 2217,
+      "sha256": "958128ec9bf3d99cc996dd3f0b0a49b7c87a8e7e4fb5921eb5cefce7e3bac56e"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/asr/finalize.py",
+      "bytes": 8197,
+      "sha256": "09d2942bbadf529c43f1f6fdc58a0a544ca8aa6439a2c7771618c77d26f1288e"
+    }
+  ],
+  "rollback": "Revert the atomic listening-evidence update; no inference implementation is changed.",
+  "next_falsifier": "Cross-decode each saved first-chunk stream through the other decoder and retain a known-audible seed1 positive control. Full shared-prefix agreement does not cover a diverging continuation.",
+  "refresh_on": [
+    "source",
+    "model bytes",
+    "audio bytes or identity",
+    "preprocessing",
+    "ASR options",
+    "runtime",
+    "new listening evidence"
+  ],
+  "continuation_authority": "Local reversible diagnostics; sequential run_safe GPU work; minimum sampled free memory15%; unrelated processes untouched; no push."
+}

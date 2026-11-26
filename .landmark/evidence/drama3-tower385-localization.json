@@ -1,0 +1,1091 @@
+{
+  "format": "drama3-tower385-localization-evidence-v1",
+  "created_utc": "2026-10-19T12:39:43.118262+00:00",
+  "claim": {
+    "level": "VERIFIED within the captured operator-localization scope",
+    "summary": "At captured step385, the first selected internal tower tolerance excess is shared-layer-0 eh_proj. Input substitution alone reproduces both head-logit excesses and both EH excesses in each operator stack; neither tested dense operator has a same-input tolerance failure.",
+    "strict_full_numeric_parity": "FAIL remains open; this is localization, not a numeric fix"
+  },
+  "risk_and_recovery": "CAUTION experiment; production source and arithmetic unchanged. Rollback is removal of this documentation/evidence commit. Private probes do not overwrite existing outputs.",
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/drama3-tower385-localization.json",
+      "docs/drama3-studio-frontier.md",
+      "LANDMARKS.md"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/drama3-tower385-localization.json",
+      "docs/drama3-studio-frontier.md",
+      "LANDMARKS.md"
+    ],
+    "excluded": [
+      "production source changes",
+      "Studio restart",
+      "unrelated checkout/process changes",
+      "push"
+    ]
+  },
+  "source_under_test": {
+    "checkout": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+    "head_before_evidence": "ebdb4b1c16bb5e2aa8ebd2ee1f7c51f4ef6c0495",
+    "production_revision": "811f3c96d2679d404c951aa5db012a26072c3d39",
+    "production_source_hashes_rechecked": {
+      "src/ml/audio/drama3/window_growth.cr": "b50c61b3a6d5840ef36ef2d1a071efd7989c6e929c3305785a55b3732403ed5d",
+      "src/ml/audio/drama3/resident.cr": "35d400ce1268db27296b5bf80720e402078332ce587ecaffab8d4c683b34eed7",
+      "src/ml/audio/drama3/backbone_resident.cr": "2520b2e38d5c3001d4d20a1ec23958d6af8ae10d12fe6dea0db2552fbdc71a7d",
+      "src/ml/audio/drama3/tower_resident.cr": "ca855406bdbb14374aa008aad17775c28be8c82cea100a9549ff069a4f030b82",
+      "src/ml/audio/drama3/generator_resident.cr": "30edd220b3f2e09455c5bc21f9eab40c31550c8f49e92d9fedcc034ef61f2785",
+      "src/ml/audio/drama3/kernels/tower_resident.metal": "0c5ef05e6d2203c8c6e43157e4059372a9edafe47da858b232736cc23e08c518",
+      "src/ml/audio/drama3/studio/engine.cr": "5a9b47bc3966f11115d85b5bd519e6eaad48c7bf097a796c83365c692ff3261c",
+      "src/ml/audio/drama3/studio/frame_window.cr": "7f2d094f8ab30b9e46f8c1db6a57ed7d798d5af0be0715a7e8eba0fc5a1d27e7",
+      "src/ml/audio/drama3/studio/assets/app.js": "92c4f5f5a9ac1b0f40f77886bd806db8d96a04e495fa013c9ae9d500b435a008",
+      "src/ml/audio/drama3/studio/assets/i18n.js": "55517f45ce89035f1ee210473a65f7c05e1a5a2acc7f95eaa30dccce1d2b4d97",
+      "examples/drama3_dense_decode_compare.cr": "06fb8580ea2fdf23f54f8f6e5d4a9549cc69405ddb6b947dab9fd775d6a4ee00",
+      "spec/drama3_prefill_generator_spec.cr": "65713b2ee11bdaea8b6cdc88136a958b455ad63c51aed7d60f5fce366ec7a7e6",
+      "spec/drama3_window_budget_spec.cr": "789774d3e1d85be3abf11a68cf9d9cc4bcf2c31919aecd127678c0d9fa0f34e3",
+      "spec/drama3_window_growth_spec.cr": "0bf95c5f5349a6f1774a16898be845988b1d39749f33ef6ec5584e30622497ce",
+      "spec/drama3_window_growth_resident_spec.cr": "44eb7149bc274b139d1e2aa36c72cc182913786c2c2c58daf4c4a35905cc09a8"
+    },
+    "bridge_sha256": "16613762decfabc1d44d6615ef0af95986fdccafc07ad93d9f007c5440a055f3",
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
+    },
+    "runtime": {
+      "mlx": "0.31.1",
+      "numpy": "1.26.4",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "python": "3.12.2",
+      "safetensors": "0.5.3",
+      "torch": "2.6.0"
+    },
+    "device": "Apple M2 Max, 64GiB unified memory",
+    "upstream_audio_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "weight_pin_limit": "Checkpoint config/index hashes are verified; full five-shard payload integrity is not claimed. Nine head payloads and this EH payload match raw BF16 bytes independently.",
+    "binary_lineage_limit": "Probe sources, native binaries and production source snapshots are hashed separately. Complete source-to-binary build attestation and full transitive dependency closure are not claimed."
+  },
+  "lineage": {
+    "parent_packet": ".landmark/evidence/drama3-window-long.json",
+    "parent_sha256": "16a9dca9002abf5dd16d5ec3eccb930880b2940a5b7703a2f2db1b4ae402c074",
+    "source_report_sha256": "a9bad778c5fefafa1e0e53da2d9715a72c18f24f6d8d110b12e58700287549e1"
+  },
+  "workload": {
+    "prompt_rows": 96,
+    "code_rows": 512,
+    "capture_steps": [
+      384,
+      385
+    ],
+    "tower_cache_positions": {
+      "384": 479,
+      "385": 480
+    },
+    "capacity": 608,
+    "teacher_forced": true,
+    "graph_depth": 2,
+    "prefix_equality": "Exact prompt IDs and all 512 native/MLX code rows; this does not equalize floating-point hidden or historical KV state.",
+    "terminal_step512": "Counterfactual replay input, excluded from generation-wide numeric gate; original-capture preservation control includes it.",
+    "atol": 6e-05,
+    "rtol": 0.0003,
+    "precision": "Unchanged F32 activations and upstream F32 promotion of original floating weights; packed backbone integers unchanged.",
+    "execution_selectors": {
+      "context_dense_reduction": "tree",
+      "backbone_dense_reduction": "tree",
+      "expert_down_reduction": "native",
+      "batch_experts": true
+    }
+  },
+  "verification": {
+    "definition_of_done": "Preserve old captures bitwise; compare matched internal endpoints; reproduce original operator diagonals bitwise; cross each captured input into both GPU operator paths under unchanged tolerances and byte-equal source weights; retain failed original coordinates.",
+    "analysis_commands": [
+      {
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/check_native_control.py"
+        ],
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/tmp",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "receipt": "native-control-analysis.log",
+        "command_role": "Executed guarded analysis"
+      },
+      {
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/check_mlx_and_fixture.py"
+        ],
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/tmp",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "receipt": "layer-analysis.log",
+        "command_role": "Reproduction command; original helper passed, exact outer invocation not retained"
+      },
+      {
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_heads.py"
+        ],
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/tmp",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "receipt": "head-analysis.log",
+        "command_role": "Executed guarded analysis"
+      },
+      {
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_internal.py"
+        ],
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/tmp",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "receipt": "internal-analysis.log",
+        "command_role": "Executed guarded analysis"
+      },
+      {
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_eh.py"
+        ],
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/tmp",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "receipt": "eh-analysis.log",
+        "command_role": "Executed guarded analysis"
+      }
+    ],
+    "run_plans": {
+      "native-run-plan.json": {
+        "argv": [
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/replay_native_detailed",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native_detailed.json"
+        ],
+        "native_startup_environment": {
+          "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "DRAMA3_DAC_SCRATCH": "1",
+          "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+          "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+          "DRAMA3_GDN_POST_FUSION": "0",
+          "DRAMA3_MEMORY_PROFILE": "0",
+          "DRAMA3_METAL_RESOURCES": "0",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_PREFILL_CHUNK": "1",
+          "DRAMA3_STUDIO_MEMORY_LIMIT_MIB": "40960",
+          "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+          "DRAMA3_TOWER_FFN_PAIR_FUSION": "0"
+        },
+        "monotonic_timeout_seconds": 900
+      },
+      "mlx-run-plan.json": {
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385.py",
+          "replay",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--generation",
+          "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay.json",
+          "--detail-output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/tower_layers_384_385.json"
+        ],
+        "monotonic_timeout_seconds": 900,
+        "offline": true
+      },
+      "head-native-run-plan.json": {
+        "argv": [
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/head_native",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_fixture.json",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_native.json"
+        ],
+        "monotonic_timeout_seconds": 180
+      },
+      "head-mlx-run-plan.json": {
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385.py",
+          "crossover",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--generation",
+          "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+          "--fixture",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_fixture.json",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_mlx.json"
+        ],
+        "monotonic_timeout_seconds": 180
+      },
+      "mlx-internal-run-plan.json": {
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385_internal.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--generation",
+          "/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/replay_source.json",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_internal.json",
+          "--detail-output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/tower_internal_384_385.json"
+        ],
+        "source_sha256": "a0f7def60f1130b400d7f28ba4662ddba66df257d4a817b396a403dc28a58b0b",
+        "monotonic_timeout_seconds": 900,
+        "offline": true,
+        "run_safe_timeout_seconds": 960,
+        "run_safe_tree_rss_mib": 40960,
+        "run_safe_min_free_pct": 15
+      },
+      "eh-native-run-plan.json": {
+        "argv": [
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/eh_native",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_fixture.json",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_native.json"
+        ],
+        "monotonic_timeout_seconds": 180,
+        "source_path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_native.cr",
+        "source_sha256": "c70f332930ddde6236f5440f98b861e3873c1bfad371699956bb840aedca1d18",
+        "fixture_sha256": "35ffbc47371cd5c0d5931a42c2003693ffb85dc1374a2bd719c7bb781372b289",
+        "binary_sha256": "6f8b5800279ee84090fd16d86d5449e7907fbdbdde2af723cf258fe487416268",
+        "startup_environment": {
+          "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "DRAMA3_DAC_SCRATCH": "1",
+          "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+          "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+          "DRAMA3_GDN_POST_FUSION": "0",
+          "DRAMA3_MEMORY_PROFILE": "0",
+          "DRAMA3_METAL_RESOURCES": "0",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_PREFILL_CHUNK": "1",
+          "DRAMA3_STUDIO_MEMORY_LIMIT_MIB": "40960",
+          "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+          "DRAMA3_TOWER_FFN_PAIR_FUSION": "0"
+        }
+      },
+      "eh-mlx-run-plan.json": {
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/eh_mlx.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--fixture",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_fixture.json",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_mlx.json"
+        ],
+        "monotonic_timeout_seconds": 180,
+        "source_path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/eh_mlx.py",
+        "source_sha256": "320c4bec57fa0a55cf41a4f285a10b09d2e46eed8667b736b00f3983a47eb357",
+        "fixture_sha256": "35ffbc47371cd5c0d5931a42c2003693ffb85dc1374a2bd719c7bb781372b289"
+      }
+    },
+    "receipt_scope": "Logs/plans authenticate this local execution path only; artifact structure and exit0 alone do not establish numerical truth. Analyzer assertions dereference raw arrays and hashes."
+  },
+  "results": {
+    "native_ordinary_capture_control": {
+      "stages": 1718,
+      "values_bit_exact": 6449296,
+      "extra_details": 674
+    },
+    "mlx_ordinary_capture_control": {
+      "stages": 1718,
+      "values_bit_exact": 6449296,
+      "boundary_refs_bit_exact": 52,
+      "total_passive_refs": 702
+    },
+    "internal_comparison": {
+      "stages_per_step": 312,
+      "scalars_per_step": 878592,
+      "per_step": {
+        "384": {
+          "internal_stages": 312,
+          "internal_scalar_comparisons": 878592,
+          "internal_stages_outside_tolerance": 38,
+          "internal_values_outside_tolerance": 149,
+          "first_internal_excess": "generation.step384.tower.shared_layers.0.attention_residual",
+          "first_internal_bit_difference": "generation.step384.tower.shared_layers.0.enorm"
+        },
+        "385": {
+          "internal_stages": 312,
+          "internal_scalar_comparisons": 878592,
+          "internal_stages_outside_tolerance": 49,
+          "internal_values_outside_tolerance": 188,
+          "first_internal_excess": "generation.step385.tower.shared_layers.0.eh_proj",
+          "first_internal_bit_difference": "generation.step385.tower.shared_layers.0.hnorm"
+        }
+      },
+      "excluded_stage": "feed_forward.silu (no passive module endpoint)"
+    },
+    "step385_backbone_hidden": {
+      "count": 2048,
+      "outside_tolerance": 0,
+      "max_abs": 1.1444091796875e-05,
+      "rms": 1.2834252841128757e-06,
+      "relative_l2": 2.467665528714388e-06,
+      "max_tolerance_ratio": 0.042332146874712456,
+      "failing_coordinates": []
+    },
+    "step385_shared_layer0_stages": {
+      "embedding": {
+        "count": 2048,
+        "bit_differences": 0,
+        "outside_tolerance": 0,
+        "max_abs": 0.0,
+        "rms": 0.0,
+        "max_tolerance_ratio": 0.0,
+        "worst_ratio_index": 0,
+        "worst_ratio_native": -0.1591796875,
+        "worst_ratio_mlx": -0.1591796875,
+        "worst_ratio_error": 0.0,
+        "worst_ratio_allowed": 0.00010775390625,
+        "failing_coordinates": []
+      },
+      "enorm": {
+        "count": 2048,
+        "bit_differences": 0,
+        "outside_tolerance": 0,
+        "max_abs": 0.0,
+        "rms": 0.0,
+        "max_tolerance_ratio": 0.0,
+        "worst_ratio_index": 0,
+        "worst_ratio_native": -0.08409588783979416,
+        "worst_ratio_mlx": -0.08409588783979416,
+        "worst_ratio_error": 0.0,
+        "worst_ratio_allowed": 8.522876635193825e-05,
+        "failing_coordinates": []
+      },
+      "hnorm": {
+        "count": 2048,
+        "bit_differences": 2018,
+        "outside_tolerance": 0,
+        "max_abs": 2.09808349609375e-05,
+        "rms": 3.2320656282450405e-06,
+        "max_tolerance_ratio": 0.11579775842682749,
+        "worst_ratio_index": 1522,
+        "worst_ratio_native": -0.016033485531806946,
+        "worst_ratio_mlx": -0.016025980934500694,
+        "worst_ratio_error": -7.504597306251526e-06,
+        "worst_ratio_allowed": 6.480779428035021e-05,
+        "failing_coordinates": []
+      },
+      "eh_concat": {
+        "count": 4096,
+        "bit_differences": 2018,
+        "outside_tolerance": 0,
+        "max_abs": 2.09808349609375e-05,
+        "rms": 2.285415522972027e-06,
+        "max_tolerance_ratio": 0.11579775842682749,
+        "worst_ratio_index": 3570,
+        "worst_ratio_native": -0.016033485531806946,
+        "worst_ratio_mlx": -0.016025980934500694,
+        "worst_ratio_error": -7.504597306251526e-06,
+        "worst_ratio_allowed": 6.480779428035021e-05,
+        "failing_coordinates": []
+      },
+      "eh_proj": {
+        "count": 2048,
+        "bit_differences": 2002,
+        "outside_tolerance": 2,
+        "max_abs": 0.0001220703125,
+        "rms": 3.553080838982596e-05,
+        "max_tolerance_ratio": 1.4142408225421141,
+        "worst_ratio_index": 636,
+        "worst_ratio_native": -0.02656078338623047,
+        "worst_ratio_mlx": -0.02646470069885254,
+        "worst_ratio_error": -9.608268737792969e-05,
+        "worst_ratio_allowed": 6.793941020965577e-05,
+        "failing_coordinates": [
+          394,
+          636
+        ]
+      },
+      "output": {
+        "count": 2048,
+        "bit_differences": 2006,
+        "outside_tolerance": 0,
+        "max_abs": 7.271766662597656e-06,
+        "rms": 1.6353720509231798e-06,
+        "max_tolerance_ratio": 0.08151741267742468,
+        "worst_ratio_index": 1581,
+        "worst_ratio_native": 0.04052487015724182,
+        "worst_ratio_mlx": 0.04053075239062309,
+        "worst_ratio_error": -5.882233381271362e-06,
+        "worst_ratio_allowed": 7.215922571718692e-05,
+        "failing_coordinates": []
+      }
+    },
+    "all26_layer_outputs": "All remain inside unchanged tolerance; passing normalized boundaries do not imply all raw intermediate projections pass.",
+    "head_crossover": {
+      "cases": 18,
+      "source_bf16_weights": 9,
+      "fixture_hidden_vectors_bit_exact": 36,
+      "diagonals_bit_exact": 36,
+      "same_input_scalar_comparisons": 147456,
+      "same_input_excesses": 0,
+      "step385_excess_decomposition": {
+        "generation.step385.tower_logits.6": [
+          {
+            "index": 644,
+            "N_Nh": -0.004708826541900635,
+            "N_Mh": -0.00463259220123291,
+            "M_Nh": -0.00470888614654541,
+            "M_Mh": -0.004632174968719482,
+            "total_error": -7.665157318115234e-05,
+            "input_effect_in_mlx": -7.671117782592773e-05,
+            "kernel_effect_at_native_input": 5.960464477539063e-08,
+            "input_effect_in_native": -7.623434066772461e-05,
+            "kernel_effect_at_mlx_input": -4.172325134277344e-07,
+            "interaction": 4.76837158203125e-07,
+            "original_allowed": 6.138965249061585e-05
+          }
+        ],
+        "generation.step385.tower_logits.8": [
+          {
+            "index": 887,
+            "N_Nh": 0.028994977474212646,
+            "N_Mh": 0.02892175316810608,
+            "M_Nh": 0.028995156288146973,
+            "M_Mh": 0.028921663761138916,
+            "total_error": 7.331371307373047e-05,
+            "input_effect_in_mlx": 7.349252700805664e-05,
+            "kernel_effect_at_native_input": -1.7881393432617188e-07,
+            "input_effect_in_native": 7.322430610656738e-05,
+            "kernel_effect_at_mlx_input": 8.940696716308594e-08,
+            "interaction": -2.682209014892578e-07,
+            "original_allowed": 6.867649912834168e-05
+          }
+        ]
+      }
+    },
+    "eh_crossover": {
+      "weight": {
+        "dtype": "BF16",
+        "shape": [
+          2048,
+          4096
+        ],
+        "raw_sha256": "7d510141f167a10cc94cb29be0ddee19971f9aa09b68e4602c4981d75acc09ee"
+      },
+      "cases": 2,
+      "fixture_arrays_bit_exact": 8,
+      "diagonals_bit_exact": 4,
+      "same_input_scalar_comparisons": 8192,
+      "same_input_excesses": 0,
+      "cases_detail": {
+        "generation.step384.tower.shared_layers.0.eh_proj": {
+          "same_input_native": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 1.52587890625e-05,
+            "rms": 4.005629761560161e-06,
+            "max_tolerance_ratio": 0.0975377568656827,
+            "failing_coordinates": []
+          },
+          "same_input_mlx": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 1.52587890625e-05,
+            "rms": 4.026960411916439e-06,
+            "max_tolerance_ratio": 0.06975731893790296,
+            "failing_coordinates": []
+          },
+          "input_effect_in_native": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 0.00014090538024902344,
+            "rms": 3.785436888801632e-05,
+            "max_tolerance_ratio": 0.8020619280847956,
+            "failing_coordinates": []
+          },
+          "input_effect_in_mlx": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 0.00014543533325195312,
+            "rms": 3.783256478351995e-05,
+            "max_tolerance_ratio": 0.8409247996284667,
+            "failing_coordinates": []
+          },
+          "original_total": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 0.00014162063598632812,
+            "rms": 3.7903326673357804e-05,
+            "max_tolerance_ratio": 0.7879253374670087,
+            "failing_coordinates": []
+          },
+          "diagonal_native_bit_exact": true,
+          "diagonal_mlx_bit_exact": true,
+          "original_failure_decomposition": []
+        },
+        "generation.step385.tower.shared_layers.0.eh_proj": {
+          "same_input_native": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 1.621246337890625e-05,
+            "rms": 4.002959419689971e-06,
+            "max_tolerance_ratio": 0.07147334136861863,
+            "failing_coordinates": []
+          },
+          "same_input_mlx": {
+            "count": 2048,
+            "outside_tolerance": 0,
+            "max_abs": 2.09808349609375e-05,
+            "rms": 4.052987871451737e-06,
+            "max_tolerance_ratio": 0.09475062582788359,
+            "failing_coordinates": []
+          },
+          "input_effect_in_native": {
+            "count": 2048,
+            "outside_tolerance": 2,
+            "max_abs": 0.000125885009765625,
+            "rms": 3.5595508950364994e-05,
+            "max_tolerance_ratio": 1.509034342954515,
+            "failing_coordinates": [
+              394,
+              636
+            ]
+          },
+          "input_effect_in_mlx": {
+            "count": 2048,
+            "outside_tolerance": 2,
+            "max_abs": 0.0001277923583984375,
+            "rms": 3.561419349358517e-05,
+            "max_tolerance_ratio": 1.3475644562187887,
+            "failing_coordinates": [
+              394,
+              636
+            ]
+          },
+          "original_total": {
+            "count": 2048,
+            "outside_tolerance": 2,
+            "max_abs": 0.0001220703125,
+            "rms": 3.553080838982596e-05,
+            "max_tolerance_ratio": 1.4142408225421141,
+            "failing_coordinates": [
+              394,
+              636
+            ]
+          },
+          "diagonal_native_bit_exact": true,
+          "diagonal_mlx_bit_exact": true,
+          "original_failure_decomposition": [
+            {
+              "index": 394,
+              "N_Nx": -0.038207054138183594,
+              "N_Mx": -0.038135528564453125,
+              "M_Nx": -0.038207292556762695,
+              "M_Mx": -0.03813338279724121,
+              "total_error": -7.367134094238281e-05,
+              "input_effect_in_mlx": -7.390975952148438e-05,
+              "kernel_effect_at_native_input": 2.384185791015625e-07,
+              "input_effect_in_native": -7.152557373046875e-05,
+              "kernel_effect_at_mlx_input": -2.1457672119140625e-06,
+              "interaction": 2.384185791015625e-06,
+              "original_allowed": 7.144001483917236e-05
+            },
+            {
+              "index": 636,
+              "N_Nx": -0.02656078338623047,
+              "N_Mx": -0.026458263397216797,
+              "M_Nx": -0.02655625343322754,
+              "M_Mx": -0.02646470069885254,
+              "total_error": -9.608268737792969e-05,
+              "input_effect_in_mlx": -9.1552734375e-05,
+              "kernel_effect_at_native_input": -4.5299530029296875e-06,
+              "input_effect_in_native": -0.00010251998901367188,
+              "kernel_effect_at_mlx_input": 6.4373016357421875e-06,
+              "interaction": -1.0967254638671875e-05,
+              "original_allowed": 6.793941020965577e-05
+            }
+          ]
+        }
+      }
+    },
+    "interpretation": [
+      "The two step385 head excesses are driven by their captured input-hidden differences; same-input head kernel differences are much smaller at the failing coordinates.",
+      "Shared-layer-0 EH input substitution alone reproduces coordinates394/636 excesses in both implementations; its same-input operator differences remain within tolerance.",
+      "This does not prove a single EH perturbation causes the final logits: other tower operations and historical KV states also differ."
+    ]
+  },
+  "synchronization_and_resources": {
+    "production_source_changed": false,
+    "studio_started": false,
+    "native_replay_graph": {
+      "depth": 2,
+      "submitted": 608,
+      "completed": 608,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 608,
+      "retained_bytes": 0,
+      "max_retained_bytes": 31989306472
+    },
+    "native_replay_reads": {
+      "control": 9568,
+      "terminal": 33808960
+    },
+    "native_replay_zero_diagnostic_reads": true,
+    "native_graph_unchanged_after_terminal_reads": true,
+    "native_cadence_equal_prior_replay": true,
+    "terminal_finite_status_reads": {
+      "prior_bytes": 6872,
+      "detailed_bytes": 9568,
+      "extra_bytes": 2696,
+      "extra_bytes_equal_four_per_detail": true,
+      "scope": "Context.read checks four finite-status bytes per terminal buffer, after final drain. All read counters are zero before drain; these reads do not submit or wait for more GPU work."
+    },
+    "gpu_snapshot_policy": "Queue-ordered native copies before scratch reuse, including q/k norm before in-place RoPE; CPU activation serialization only after final drain.",
+    "mlx_snapshot_policy": "Passive wrappers call each original module once and retain its actual arrays; no extra eval or host read in forward. Existing terminal-hidden eval evaluates their ancestors before next-row cache updates.",
+    "mlx_eval_source_anchor": {
+      "version": "0.31.1",
+      "revision": "ce45c52505c8158ea48d2a54e8caae05efd86bfe",
+      "url": "https://github.com/ml-explore/mlx/blob/ce45c52505c8158ea48d2a54e8caae05efd86bfe/mlx/transforms.cpp#L47-L304",
+      "scope": "eval_impl traverses input ancestors and public eval waits; original tower dataflow establishes that these retained stages are ancestors, not merely arbitrary refs."
+    },
+    "isolated_eh_probe": {
+      "native_submitted_completed_waits": [
+        1,
+        1,
+        1
+      ],
+      "pending": 0,
+      "terminal_bytes": 32768,
+      "mlx_eval_calls": 1,
+      "scope": "Standalone four-projection operator probe, not a generation-loop synchronization change."
+    },
+    "guards": {
+      "serial_heavy_work": true,
+      "minimum_free_percent": 15,
+      "model_tree_rss_mib": 40960,
+      "analysis_build_tree_rss_mib": 8192,
+      "full_replay_reproduction_outer_seconds": 960,
+      "full_replay_outer_receipt_limit": "The MLX internal plan records the 960-second run_safe timeout. The native outer argv was not retained; 960 is a native reproduction setting, not an asserted historical outer timeout.",
+      "full_replay_monotonic_seconds": 900,
+      "operator_outer_seconds": 210,
+      "operator_monotonic_seconds": 180,
+      "scope": "Sampled stop guards, not an atomic reservation or physical peak-memory proof."
+    },
+    "cleanup_snapshot": {
+      "observed_utc": "2026-10-19T12:37:22.507324+00:00",
+      "scope": "Current known private probe argv targets and these managed-checkout Studio binary names only; not a system-wide absence or retention proof.",
+      "targets": [
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/drama3-studio",
+        "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/drama3-studio-worker",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/eh_native",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/eh_native.dwarf",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/head_native",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/head_native.dwarf",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/replay_native_detailed",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/replay_native_detailed.dwarf",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/eh_mlx.py",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385.py",
+        "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385_internal.py"
+      ],
+      "matching_processes": []
+    }
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Captured step385 EH/head operator localization with byte-exact fixture joins, diagonal controls and unchanged tolerance. Not a full-model parity or earliest-generation-cause verdict.",
+    "independence": "Correlated same-lineage mini-Quadrumvirate review plus direct source/array controls; not independent attestation.",
+    "reviewed_findings": "Fixture joins, payload/report hashes, four-way arithmetic, captured first-failure scope and open historical-KV/hnorm contributions. Wording narrowed from amplification to literal input-substitution reproduction."
+  },
+  "preserved_failed_attempts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/attempt1",
+      "failure": "Post-compute metadata KeyError capture_policy in first boundary replay. Frozen failed source/output/logs retained; successful corrected replay is separate."
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native-control-analysis.attempt1.log",
+      "failure": "An invalid guard equated terminal control bytes despite 674 extra snapshots. Corrected guard independently verifies prior1718*4=6872 and detailed2392*4=9568, with extra2696=674*4. Failed guard is not numerical evidence against the replay; original failed script was not separately frozen."
+    }
+  ],
+  "limits": [
+    "First is in the selected step385 tower dataflow, not the earliest generation-wide drift. Step384 already has internal excesses while its captured head logits pass.",
+    "The prior38 late-logit excesses across29 stages and old internal backbone-layer39 discrepancy remain open as complete gates.",
+    "The fixed608 replay does not attribute drift to dynamic window growth or constitute a direct trace of the automatic request.",
+    "No performance, audio quality, full-window4096, full-shard integrity or physical GPU-residency proof is claimed."
+  ],
+  "next_discriminator": "Cross over captured step385 backbone hidden through shared-layer-0 hnorm on identical inputs before descending into backbone; keep inherited hidden and historical KV contributions distinct.",
+  "decay_and_refresh": "Refresh after source/probe/binary/weights/config/runtime/device/driver/precision/tolerance/prefix/cache/graph/capture-policy changes. Missing or hash-changed private artifacts invalidate their dependent claims until rerun. Host workload changes memory admission.",
+  "artifacts": {
+    "replay_native_detailed.cr": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/replay_native_detailed.cr",
+      "sha256": "4ecc6adbc5fa718b43883974b0522b6249e774f7b8e4304b868fed5228766c67",
+      "bytes": 13856
+    },
+    "build/replay_native_detailed": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/replay_native_detailed",
+      "sha256": "45ee23a042bc6568a16998bc3fb6563e21a9dfc2c62fd400dce1712d1c6d8185",
+      "bytes": 1135528
+    },
+    "native_probe_source.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native_probe_source.json",
+      "sha256": "a91fbd313a4707945b3e67a3ae7e1104e6ab76decd1d73ffa1f5a07b2dd90996",
+      "bytes": 739
+    },
+    "native_detailed.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native_detailed.json",
+      "sha256": "0aa4e001c2fa9c7431a4688a20050adc8b3974bc07c96e2eb5c94c19959ebae3",
+      "bytes": 166400160
+    },
+    "native_control.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native_control.json",
+      "sha256": "18d096adb93860f82c55a117e5a1e9a73f33a5691a3dc8c488cf3cc2cf3d13be",
+      "bytes": 1529
+    },
+    "check_native_control.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/check_native_control.py",
+      "sha256": "3a49bd8aa239cc8cb054b97e7221c1a5d0494e53574e33ec55b4d8a22ce3408a",
+      "bytes": 3554
+    },
+    "native-control-analysis.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native-control-analysis.log",
+      "sha256": "7228e5586641a8f2dab623f05ace2164d32e55bf13007eee42483c85da31ee09",
+      "bytes": 1620
+    },
+    "native-control-analysis.attempt1.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native-control-analysis.attempt1.log",
+      "sha256": "ae2f8922a64abfd28e64f329c18975d8b251d48f187a12e0751262cbd9b27fae",
+      "bytes": 368
+    },
+    "native-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native-run-plan.json",
+      "sha256": "a2a51b1ba6ab86c9881ca52481ba360f2d5d6ac0716b099cc3ce8751adf97295",
+      "bytes": 951
+    },
+    "native-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/native-run.log",
+      "sha256": "ffd6616ea9c3a3bcf9110035f9fa98899cf1239e690a0ae42b3ef2206e193ac0",
+      "bytes": 318
+    },
+    "build-native.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build-native.log",
+      "sha256": "7d870e968061eb98f53cd9a189530ed869a15bd078b7e12e01ac2c4ee4d8d2ca",
+      "bytes": 91
+    },
+    "mlx/replay_mlx_tower385.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385.py",
+      "sha256": "1458329d4036292f37a2c438ccc0b837a32bcccd724c8431a1422861a8de5b99",
+      "bytes": 26380
+    },
+    "mlx/replay.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay.json",
+      "sha256": "d8ee6734d44194e03dac50bd1984c34bf4f2841bb676e96d510af927db3802cd",
+      "bytes": 124424122
+    },
+    "mlx/tower_layers_384_385.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/tower_layers_384_385.json",
+      "sha256": "7b7681a736c229f50a21a4329a2c7865140ccec2d906c37db55d38064a1f6529",
+      "bytes": 2108054
+    },
+    "mlx/replay.json.manifest.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay.json.manifest.json",
+      "sha256": "a425c8c14b5d271deef2a686e06b747ad44da81fed621eb00bf4b4b19497709e",
+      "bytes": 71675
+    },
+    "run_mlx.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/run_mlx.py",
+      "sha256": "e7cebbcea9057aecea7109527b948604bf73864afe051f21e58e7979a6f3e32d",
+      "bytes": 965
+    },
+    "mlx-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx-run-plan.json",
+      "sha256": "b87f128f300250918b18d88771e69f934c06c0025646ea7137fc16bb4a4a26dd",
+      "bytes": 719
+    },
+    "mlx-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx-run.log",
+      "sha256": "32eb9d5573e137b634a31ff053fb26015580220f00c61dcebf0e7134d8204af7",
+      "bytes": 738
+    },
+    "check_mlx_and_fixture.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/check_mlx_and_fixture.py",
+      "sha256": "5c453458be041471ece2163e09bb35c5813bb5e1e1e14e908d2085598b74e7fa",
+      "bytes": 5710
+    },
+    "layer_comparison.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/layer_comparison.json",
+      "sha256": "9943d02f47633889a754e2baf27047635084605f432c63e9ccac626d55a2fd19",
+      "bytes": 15993
+    },
+    "layer-analysis.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/layer-analysis.log",
+      "sha256": "6929ad326cbf06ba3d4ff82bf6086da1d4b1c0a9b3e2681df6545ceb2c45428a",
+      "bytes": 15472
+    },
+    "head_native.cr": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_native.cr",
+      "sha256": "7a2512ff6dd2b0734a438c136063c937af528f4877c8f31e7f4692863d2be0c5",
+      "bytes": 2902
+    },
+    "build/head_native": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/head_native",
+      "sha256": "f3b6ddfd2d51dcf487116bc96249dfa5ac95a53cc3aee58a3609d798859ed4d9",
+      "bytes": 968056
+    },
+    "head_fixture.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_fixture.json",
+      "sha256": "71653e21c3e6a037eb2222641ef2716932b9255d1cc7ce96b2f7a7330e0894f3",
+      "bytes": 1138046
+    },
+    "head_native.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_native.json",
+      "sha256": "67d7125e5dbb8796f0d0b0c2ffbf29ec798aa3f8056a8834ace439ba4c95bd1b",
+      "bytes": 2893077
+    },
+    "head_mlx.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_mlx.json",
+      "sha256": "96c757c10541e822df2fe01c98acb3f6eb20f8ea29032ed4c5ebfa0b946181b2",
+      "bytes": 2851600
+    },
+    "run_heads.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/run_heads.py",
+      "sha256": "63c1e397daeab46cd3e22d23f58aba1c811f8bd93f405947f774e773476cc4ff",
+      "bytes": 1576
+    },
+    "head-native-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head-native-run-plan.json",
+      "sha256": "f96c276180f7fca80dbe169591ac8b24a43a4aa4c250450c043f99e34d5d2eb7",
+      "bytes": 339
+    },
+    "head-mlx-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head-mlx-run-plan.json",
+      "sha256": "14a93ec08371f54bc6fe677f8bfca533652e9f6f7f9b7c727fe95997c8ec7afc",
+      "bytes": 683
+    },
+    "head-native-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head-native-run.log",
+      "sha256": "bc770c07a5d606a793c2806971ff52d3217bd895c172434bb34f6b2ffd514acd",
+      "bytes": 295
+    },
+    "head-mlx-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head-mlx-run.log",
+      "sha256": "e7d7e3ee33f8bcce31b033973e7a9fc1559afbdbf42042594929a2dbaf867848",
+      "bytes": 334
+    },
+    "analyze_heads.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_heads.py",
+      "sha256": "a9ef148edf861dc4dff145d8080446b71cea299dd7dc7b483b2e5e8c381e0548",
+      "bytes": 6511
+    },
+    "head_comparison.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head_comparison.json",
+      "sha256": "4d1e0ce7cf3541c77b71d935f26d0417cd9e02de3896e3f10714cb2697a42262",
+      "bytes": 26641
+    },
+    "head-analysis.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/head-analysis.log",
+      "sha256": "6957eb06abb4e03ea1e46d965c28040352d796bfee71fee7bde9618d5bc07ff0",
+      "bytes": 1447
+    },
+    "mlx/replay_mlx_tower385_internal.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_mlx_tower385_internal.py",
+      "sha256": "a0f7def60f1130b400d7f28ba4662ddba66df257d4a817b396a403dc28a58b0b",
+      "bytes": 34068
+    },
+    "mlx/replay_internal.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_internal.json",
+      "sha256": "3cbfc1968296d2f618c868e062400431de30c44f315c32039b2463d66e42c0af",
+      "bytes": 124424121
+    },
+    "mlx/replay_internal.json.manifest.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/replay_internal.json.manifest.json",
+      "sha256": "0f39c12d5e24eb7167bda5b5b3512543de838bd2597aa801b67e064a2cdbdbfa",
+      "bytes": 71684
+    },
+    "mlx/tower_internal_384_385.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/tower_internal_384_385.json",
+      "sha256": "3d75d15341731a33536a5b46ad903e3213bee1c9566ed48f063a17b4cb551924",
+      "bytes": 40591287
+    },
+    "run_mlx_internal.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/run_mlx_internal.py",
+      "sha256": "284ceb0780ed875b54c469a5b25fd0da5c6d5c27b61b812f0ddedd4b61e88953",
+      "bytes": 1454
+    },
+    "mlx-internal-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx-internal-run-plan.json",
+      "sha256": "1148e2c85006566d2c4164c5fa275825ac3cb052085ee9cfb6df7d26c10ba53e",
+      "bytes": 912
+    },
+    "mlx-internal-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx-internal-run.log",
+      "sha256": "5e8e6c5d3174468779ca40d3c0b72353fb7f2616fa10fd082418bdb0be278cc8",
+      "bytes": 779
+    },
+    "analyze_internal.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_internal.py",
+      "sha256": "0fc77e3d6c23134a4ae98abd7ba22e621c8bf23a5500a6dbe2d1f1c0163b656a",
+      "bytes": 9686
+    },
+    "internal_comparison.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/internal_comparison.json",
+      "sha256": "ba03f6dfaed36945e233e046a8887810d1c87c3c6b39c9ca8988a46dad793503",
+      "bytes": 363644
+    },
+    "internal-analysis.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/internal-analysis.log",
+      "sha256": "5f0f70d771de225acd78b09838c06c33b73e0435fcd05c7248ed7a7d49d39817",
+      "bytes": 9766
+    },
+    "make_eh_fixture.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/make_eh_fixture.py",
+      "sha256": "841795612b3af7052924e75f8a762406f957173e4b6035f88f91abfca668b895",
+      "bytes": 1887
+    },
+    "eh_fixture.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_fixture.json",
+      "sha256": "35ffbc47371cd5c0d5931a42c2003693ffb85dc1374a2bd719c7bb781372b289",
+      "bytes": 699089
+    },
+    "eh-fixture.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-fixture.log",
+      "sha256": "8f0e8c514dd0d8fa57ee88961b6232138f92c1e3eb80e5453a66794ea6f45bb1",
+      "bytes": 481
+    },
+    "eh_native.cr": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_native.cr",
+      "sha256": "c70f332930ddde6236f5440f98b861e3873c1bfad371699956bb840aedca1d18",
+      "bytes": 3472
+    },
+    "build/eh_native": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build/eh_native",
+      "sha256": "6f8b5800279ee84090fd16d86d5449e7907fbdbdde2af723cf258fe487416268",
+      "bytes": 968200
+    },
+    "mlx/eh_mlx.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/mlx/eh_mlx.py",
+      "sha256": "320c4bec57fa0a55cf41a4f285a10b09d2e46eed8667b736b00f3983a47eb357",
+      "bytes": 15069
+    },
+    "eh_native.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_native.json",
+      "sha256": "e2f2e890616ad6e404029cbc9a991599ed88217f4cae80906178aa39dda51e61",
+      "bytes": 158543
+    },
+    "eh_mlx.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_mlx.json",
+      "sha256": "0ea2a6038f6603a8405d6f648b6e720afc27fa21c86599ca61b0535e1f91fe3b",
+      "bytes": 159048
+    },
+    "run_eh.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/run_eh.py",
+      "sha256": "b2e8e5157de35f9efa41a57ff17e767c5b33d9e95fd2d451a67ef6560c7c77fb",
+      "bytes": 1941
+    },
+    "eh-native-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-native-run-plan.json",
+      "sha256": "5d97653564ba5113bcc56742fffb2af8ff2b82625ad3d561f00eea0ff8c2291f",
+      "bytes": 1264
+    },
+    "eh-mlx-run-plan.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-mlx-run-plan.json",
+      "sha256": "b2b086b330ad37e40fd293aa61f930cab62df668f4ef458711a93269d86c949b",
+      "bytes": 805
+    },
+    "eh-native-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-native-run.log",
+      "sha256": "0fb98ec59503bc4f1575844425f24f5fd989795d38e72abfbd2f31a91a87d565",
+      "bytes": 291
+    },
+    "eh-mlx-run.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-mlx-run.log",
+      "sha256": "f5e2259f27f555528fdffcb154879b4d212c587d8315d155911dc571f5b97e4c",
+      "bytes": 420
+    },
+    "eh-build.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-build.log",
+      "sha256": "5521220be182481a2ded7c373cceb1ddda2158f624421f1d42ebcfbdd3a6be81",
+      "bytes": 91
+    },
+    "analyze_eh.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/analyze_eh.py",
+      "sha256": "cc3bebade0529ad148e2f3357f2c5db134b209e4a78ba2489816d93ea6add8c3",
+      "bytes": 7095
+    },
+    "eh_comparison.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh_comparison.json",
+      "sha256": "e490325606a6ff74ad7d3d540c5ddc30d843ebc0bfea58ddef219da4a4a17e0e",
+      "bytes": 5921
+    },
+    "eh-analysis.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/eh-analysis.log",
+      "sha256": "1a54d8c5fd2a69a64aa5d6ea6f68693b695ac658435a6a91c75e79521fa23f37",
+      "bytes": 4506
+    },
+    "build_evidence.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/build_evidence.py",
+      "sha256": "bec942f144e0c9c3999766237c3696075d27fb0dceb5bc0e6ddde8767b2657ea",
+      "bytes": 16735
+    },
+    "check_cleanup.py": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/check_cleanup.py",
+      "sha256": "c0d5588064594b69a6f7ee070833f781652cf6a9d3e19ee3774bade03f002995",
+      "bytes": 1686
+    },
+    "cleanup.json": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/cleanup.json",
+      "sha256": "8e4122d47d4374bb86df11a2bdb2a395d0c38f7218738f60bd5a578e6f7ae73c",
+      "bytes": 1161
+    },
+    "cleanup.log": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/cleanup.log",
+      "sha256": "07ffe5dfd219fa3c2bb198059667deb1e6e64a3b902ac286f15b02d59531da12",
+      "bytes": 162
+    }
+  }
+}

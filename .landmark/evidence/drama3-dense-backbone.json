@@ -1,0 +1,1807 @@
+{
+  "format": "landmark-evidence/v1",
+  "recorded_at_utc": "2026-10-15T00:41:40.374684+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "summary": "Guarded opt-in dense BF16 load/SIMD reduction accelerates measured backbone projections while preserving tested native Float32 bits and GPU scheduling.",
+    "scope": "M2 Max/macOS 26.6.2, pinned checkpoint, actual layer-0 shapes and three real normalized inputs; exact native full backbone and one short full-generation workload. No default promotion or universal process-speedup claim."
+  },
+  "promotion": {
+    "status": "IN_PROGRESS / WITHHELD",
+    "predeclared_gate": {
+      "all_three_rows_each_projection_median_speedup_gt": 1.03,
+      "bitwise_native": true,
+      "unchanged_upstream_tolerances": {
+        "atol": 6e-05,
+        "rtol": 0.0003
+      },
+      "full_gpu_candidate_baseline_ratio_le": 1.01,
+      "graph_depths": [
+        0,
+        2
+      ]
+    },
+    "observed": {
+      "projection_speed": true,
+      "native_bitwise": true,
+      "standalone_projection_upstream": true,
+      "full_gpu_non_regression": true,
+      "full_upstream": false
+    },
+    "default": "tree",
+    "opt_in": "DRAMA3_BACKBONE_DENSE_REDUCTION=simd",
+    "next_falsifier": "Exact row1/layer39 router logits, expert IDs/order, weighted expert outputs and partial sums on one shared normalized input; preserve tolerances."
+  },
+  "boundaries": {
+    "base_revision": "1f927460595264e85678bfd9187a264ed2ac2884",
+    "risk": "CAUTION",
+    "allowed_paths": [
+      "src/ml/audio/drama3/kernels/resident.metal",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "examples/drama3_generate.cr",
+      "examples/drama3_dense_benchmark.cr",
+      "examples/drama3_dense_trace.cr",
+      "scripts/drama3/replay_mlx_backbone.py",
+      "scripts/drama3/dense_reference.py",
+      "scripts/drama3_dense_report.py",
+      "spec/drama3_dense_spec.cr",
+      "spec/drama3_dense_reference_spec.py",
+      "spec/drama3_dense_report_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-dense-backbone.json"
+    ],
+    "rollback": "Keep/unset DRAMA3_BACKBONE_DENSE_REDUCTION=tree; generic dense defaults tree. Revert atomic experiment commit to remove opt-in path.",
+    "invariants": [
+      "No quantization/precision change; baseline dense kernel untouched.",
+      "Same per-lane product/add loop and 64-lane tree, FP contraction disabled.",
+      "Aligned BF16 loads require even mapped offsets; other dtype/offset paths use original decoder.",
+      "Existing device buffers, mapped owners, queue, control and terminal boundaries preserved.",
+      "No new intermediate submissions/waits/readbacks, copies or scratch lifetimes.",
+      "15 percent sampled reserve; unrelated processes untouched."
+    ],
+    "excluded": [
+      "Default promotion",
+      "Fixing unrelated full-backbone MoE parity",
+      "LTP/WBA claims",
+      "Controlled cache / quiet-host timing",
+      "General whole-process latency benefit",
+      "Non-32-lane runtime validation",
+      "Authenticated artifacts or full weight-shard hashes"
+    ]
+  },
+  "implementation": "Aligned 16-bit BF16 load plus SIMD shuffle tree behind independent frozen selectors; actual selectors emitted in generation metadata.",
+  "measurements": {
+    "projections": [
+      {
+        "row": 0,
+        "invocation_id": "9ef15b971270e34020daf0116e88814b",
+        "input_id": "fnv64:f04f85af8880447e",
+        "paired_median_speedups": {
+          "qkv": 1.0829725726146668,
+          "z": 1.1007457566565992,
+          "b": 1.5905061960617757,
+          "a": 1.5813006563341212
+        },
+        "minimum_pair_speedups": {
+          "qkv": 1.0605353000638609,
+          "z": 1.0634493789220272,
+          "b": 1.5801539050375653,
+          "a": 1.5597529903818799
+        },
+        "verified_elements": 1474560,
+        "command_buffers": 72
+      },
+      {
+        "row": 1,
+        "invocation_id": "9ace7ad4737fc44b9bb3eeb667a45bda",
+        "input_id": "fnv64:d673258c0be92ec6",
+        "paired_median_speedups": {
+          "qkv": 1.0816995838056864,
+          "z": 1.0947856562891023,
+          "b": 1.5867557020197922,
+          "a": 1.6105231519895926
+        },
+        "minimum_pair_speedups": {
+          "qkv": 1.0583472526133555,
+          "z": 1.0618996448112086,
+          "b": 1.5601260493560754,
+          "a": 1.536607243295292
+        },
+        "verified_elements": 1474560,
+        "command_buffers": 72
+      },
+      {
+        "row": 2,
+        "invocation_id": "757df1d6d9bebd477e8444d80acf976c",
+        "input_id": "fnv64:d0a2955a5fa0b0f6",
+        "paired_median_speedups": {
+          "qkv": 1.068390995019554,
+          "z": 1.1090545408263552,
+          "b": 1.6348896847589318,
+          "a": 1.5783709485961683
+        },
+        "minimum_pair_speedups": {
+          "qkv": 1.0553802634110283,
+          "z": 1.0808694471156182,
+          "b": 1.5505737000848192,
+          "a": 1.5499495093675715
+        },
+        "verified_elements": 1474560,
+        "command_buffers": 72
+      }
+    ],
+    "aa_control": {
+      "qkv": {
+        "median": 0.9941471029764125,
+        "min": 0.9751973084344531,
+        "max": 0.9991227784025001
+      },
+      "z": {
+        "median": 0.9967715408968694,
+        "min": 0.9694259299512247,
+        "max": 1.0230641971655514
+      },
+      "b": {
+        "median": 0.9985022911422534,
+        "min": 0.9901136437263385,
+        "max": 1.0449597546697342
+      },
+      "a": {
+        "median": 1.0019587343754826,
+        "min": 0.9920333465177523,
+        "max": 1.0196300263256712
+      }
+    },
+    "full_generation": {
+      "2": {
+        "pairs": [
+          {
+            "pair": 0,
+            "wall_seconds": 1.1052617273303713,
+            "inference_seconds": 1.1209172193958779,
+            "gpu_seconds": 0.9936958615207154
+          },
+          {
+            "pair": 1,
+            "wall_seconds": 1.023732731545253,
+            "inference_seconds": 1.020983941433978,
+            "gpu_seconds": 0.9924997073826144
+          },
+          {
+            "pair": 2,
+            "wall_seconds": 0.9997130363112773,
+            "inference_seconds": 0.991996487469789,
+            "gpu_seconds": 0.9922893763946519
+          },
+          {
+            "pair": 3,
+            "wall_seconds": 1.0243374308986088,
+            "inference_seconds": 1.00338390095042,
+            "gpu_seconds": 0.9914457812601025
+          }
+        ],
+        "median_ratios": {
+          "wall_seconds": 1.024035081221931,
+          "inference_seconds": 1.012183921192199,
+          "gpu_seconds": 0.9923945418886331
+        }
+      },
+      "0": {
+        "pairs": [
+          {
+            "pair": 0,
+            "wall_seconds": 0.9301334445987345,
+            "inference_seconds": 0.8987447593482164,
+            "gpu_seconds": 0.9699906292312477
+          },
+          {
+            "pair": 1,
+            "wall_seconds": 0.8773237698157366,
+            "inference_seconds": 0.8650257395584658,
+            "gpu_seconds": 0.9717987566157904
+          }
+        ],
+        "median_ratios": {
+          "wall_seconds": 0.9037286072072355,
+          "inference_seconds": 0.8818852494533411,
+          "gpu_seconds": 0.970894692923519
+        }
+      }
+    },
+    "full_generation_exact": {
+      "prompt_ids": [
+        248045,
+        8678,
+        198,
+        13761,
+        279,
+        3766,
+        1414,
+        310,
+        8540,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        248083,
+        21251,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248081
+      ],
+      "frames": [
+        [
+          250147,
+          2048,
+          325,
+          202,
+          297,
+          784,
+          383,
+          868,
+          97,
+          1019,
+          233
+        ],
+        [
+          250598,
+          2499,
+          378,
+          970,
+          998,
+          784,
+          390,
+          560,
+          800,
+          416,
+          790
+        ],
+        [
+          249799,
+          1700,
+          375,
+          596,
+          312,
+          794,
+          464,
+          760,
+          572,
+          740,
+          167
+        ],
+        [
+          250938,
+          2839,
+          390,
+          421,
+          432,
+          43,
+          657,
+          377,
+          429,
+          6,
+          947
+        ],
+        [
+          251428,
+          3329,
+          388,
+          510,
+          851,
+          40,
+          771,
+          792,
+          760,
+          509,
+          235
+        ],
+        [
+          248390,
+          291,
+          548,
+          457,
+          95,
+          153,
+          733,
+          478,
+          307,
+          612,
+          525
+        ],
+        [
+          249915,
+          1816,
+          465,
+          559,
+          620,
+          441,
+          958,
+          432,
+          973,
+          298,
+          781
+        ],
+        [
+          251590,
+          3491,
+          17,
+          436,
+          492,
+          185,
+          115,
+          848,
+          44,
+          983,
+          1022
+        ],
+        [
+          249598,
+          1499,
+          86,
+          369,
+          371,
+          796,
+          31,
+          264,
+          585,
+          261,
+          673
+        ],
+        [
+          248990,
+          891,
+          66,
+          90,
+          158,
+          206,
+          452,
+          986,
+          95,
+          799,
+          497
+        ],
+        [
+          251603,
+          3504,
+          351,
+          625,
+          152,
+          388,
+          848,
+          769,
+          578,
+          246,
+          191
+        ],
+        [
+          252182,
+          4083,
+          39,
+          784,
+          862,
+          482,
+          546,
+          780,
+          859,
+          448,
+          419
+        ],
+        [
+          251445,
+          3346,
+          927,
+          172,
+          482,
+          318,
+          854,
+          847,
+          529,
+          970,
+          225
+        ],
+        [
+          251004,
+          2905,
+          996,
+          588,
+          283,
+          846,
+          830,
+          123,
+          686,
+          953,
+          814
+        ],
+        [
+          249459,
+          1360,
+          310,
+          596,
+          408,
+          60,
+          131,
+          361,
+          907,
+          234,
+          717
+        ],
+        [
+          248243,
+          144,
+          268,
+          607,
+          1018,
+          236,
+          217,
+          565,
+          99,
+          982,
+          635
+        ],
+        [
+          249929,
+          1830,
+          138,
+          149,
+          429,
+          784,
+          814,
+          232,
+          842,
+          653,
+          531
+        ]
+      ],
+      "stopped_on_eos": true,
+      "truncated": false,
+      "samples": 34816,
+      "resident_readbacks": {
+        "control": 152,
+        "terminal": 140012
+      },
+      "wav_sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full_generation_runs": 14,
+    "pipeline_setup_warm_driver_ms": 0.26291748508810997,
+    "shuffle_only_rejected": {
+      "pairs": [
+        {
+          "gpu_seconds": 0.999422107138435,
+          "inference_seconds": 1.0085852528213204,
+          "wall_seconds": 0.998940703402902
+        },
+        {
+          "gpu_seconds": 1.0037316023722596,
+          "inference_seconds": 0.9375667095603931,
+          "wall_seconds": 0.9242724462981449
+        },
+        {
+          "gpu_seconds": 1.0043073782350724,
+          "inference_seconds": 0.9861523162231262,
+          "wall_seconds": 1.0194544362437956
+        },
+        {
+          "gpu_seconds": 1.0137183555729226,
+          "inference_seconds": 1.060685194544904,
+          "wall_seconds": 1.0564959386105626
+        }
+      ],
+      "median_ratios": {
+        "gpu_seconds": 1.004019490303666,
+        "inference_seconds": 0.9973687845222232,
+        "wall_seconds": 1.0091975698233489
+      }
+    }
+  },
+  "upstream": {
+    "dense": {
+      "atol": 6e-05,
+      "format": "drama3-dense-projection-comparison-v1",
+      "max_absolute_error": {
+        "a": 9.5367431640625e-07,
+        "b": 9.5367431640625e-07,
+        "qkv": 3.814697265625e-06,
+        "z": 2.0265579223632812e-06
+      },
+      "projection": "backbone.layers.0.linear_attn",
+      "reference": "dense_inputs.reference.json",
+      "rows": [
+        0,
+        1,
+        2
+      ],
+      "rtol": 0.0003,
+      "simd": "native-dense-simd.json",
+      "status": "match",
+      "tree": "native-dense-tree.json",
+      "tree_simd_bitwise_equal": true,
+      "value_counts": {
+        "a": 96,
+        "b": 96,
+        "qkv": 24576,
+        "z": 12288
+      },
+      "worst_values": {
+        "a": {
+          "allowed_abs": 0.0022318337059020997,
+          "index": 8,
+          "native": 7.239446640014648,
+          "reference": 7.239445686340332,
+          "row": 0
+        },
+        "b": {
+          "allowed_abs": 0.0019402554130554196,
+          "index": 21,
+          "native": 6.267518997192383,
+          "reference": 6.267518043518066,
+          "row": 1
+        },
+        "qkv": {
+          "allowed_abs": 0.010742484054565429,
+          "index": 5071,
+          "native": -35.60828399658203,
+          "reference": -35.608280181884766,
+          "row": 0
+        },
+        "z": {
+          "allowed_abs": 0.00020123253822326657,
+          "index": 2296,
+          "native": -0.4707731008529663,
+          "reference": -0.47077512741088867,
+          "row": 2
+        }
+      }
+    },
+    "full": {
+      "native_bitwise_equal": true,
+      "upstream_capture_bitwise_equal": true,
+      "trace_count": 243,
+      "native_float32_count": 497664,
+      "violating_traces": [
+        [
+          "backbone.row1.layers.39.hidden",
+          1,
+          [
+            33,
+            2.425447523402735,
+            0.00081634521484375
+          ]
+        ]
+      ],
+      "worst_tolerance_ratio": [
+        2.425447523402735,
+        [
+          "backbone.row1.layers.39.hidden",
+          33,
+          0.9219169616699219,
+          0.9211006164550781,
+          0.00081634521484375,
+          0.00033657508850097655
+        ]
+      ]
+    },
+    "manifest": {
+      "backbone_shards": [
+        "model-00001-of-00005.safetensors",
+        "model-00002-of-00005.safetensors",
+        "model-00003-of-00005.safetensors",
+        "model-00004-of-00005.safetensors"
+      ],
+      "backbone_tensor_count": 974,
+      "dense_projection_fixture": {
+        "input_path": "dense_inputs.json",
+        "input_sha256": "991fe333ba796841b7aff627a14816dc94bec0b3e107a77b4b8d5f0804a3298e",
+        "reference_path": "dense_inputs.reference.json",
+        "reference_sha256": "ab7bb6324a1afcb6e111636a5b34c4cae0b5887225787a60a40d11ce1709acf1",
+        "source_tensor_sha256": "f6499c3a8b9915deb6788881444d198870a2cb07bb8af9fa08d7293498770cae"
+      },
+      "inputs": {
+        "path": "inputs.json",
+        "sha256": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3"
+      },
+      "kind": "actual_pinned_q4_backbone_replay",
+      "model": {
+        "repository": "cguldogan/drama-3-mlx-q4",
+        "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+      },
+      "model_files": {
+        "config.json": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+        "model.safetensors.index.json": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
+      },
+      "reference_files": {
+        "fish_omni_loader": {
+          "path": "mlx_audio/tts/models/fish_omni/fish_omni.py",
+          "sha256": "3b0eb71f765c6696055f5f2bdd0810dd31cd75c9385ff0202fb452938f246441"
+        },
+        "qwen3_5": {
+          "path": "mlx_audio/lm/models/qwen3_5.py",
+          "sha256": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1"
+        },
+        "utils": {
+          "path": "mlx_audio/utils.py",
+          "sha256": "a9a6e2c29962949ce0e278d4b923394d81529586feec4599616af292ce64de42"
+        }
+      },
+      "row_count": 3,
+      "runtime": {
+        "mlx": "0.31.1",
+        "numpy": "1.26.4",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "python": "3.12.2",
+        "safetensors": "0.5.3"
+      },
+      "shard_sha256_recorded": false,
+      "trace_count": 243,
+      "trace_names": [
+        "backbone.row0.hidden",
+        "backbone.row0.layers.0.attention_residual",
+        "backbone.row0.layers.0.hidden",
+        "backbone.row0.layers.1.attention_residual",
+        "backbone.row0.layers.1.hidden",
+        "backbone.row0.layers.10.attention_residual",
+        "backbone.row0.layers.10.hidden",
+        "backbone.row0.layers.11.attention_residual",
+        "backbone.row0.layers.11.hidden",
+        "backbone.row0.layers.12.attention_residual",
+        "backbone.row0.layers.12.hidden",
+        "backbone.row0.layers.13.attention_residual",
+        "backbone.row0.layers.13.hidden",
+        "backbone.row0.layers.14.attention_residual",
+        "backbone.row0.layers.14.hidden",
+        "backbone.row0.layers.15.attention_residual",
+        "backbone.row0.layers.15.hidden",
+        "backbone.row0.layers.16.attention_residual",
+        "backbone.row0.layers.16.hidden",
+        "backbone.row0.layers.17.attention_residual",
+        "backbone.row0.layers.17.hidden",
+        "backbone.row0.layers.18.attention_residual",
+        "backbone.row0.layers.18.hidden",
+        "backbone.row0.layers.19.attention_residual",
+        "backbone.row0.layers.19.hidden",
+        "backbone.row0.layers.2.attention_residual",
+        "backbone.row0.layers.2.hidden",
+        "backbone.row0.layers.20.attention_residual",
+        "backbone.row0.layers.20.hidden",
+        "backbone.row0.layers.21.attention_residual",
+        "backbone.row0.layers.21.hidden",
+        "backbone.row0.layers.22.attention_residual",
+        "backbone.row0.layers.22.hidden",
+        "backbone.row0.layers.23.attention_residual",
+        "backbone.row0.layers.23.hidden",
+        "backbone.row0.layers.24.attention_residual",
+        "backbone.row0.layers.24.hidden",
+        "backbone.row0.layers.25.attention_residual",
+        "backbone.row0.layers.25.hidden",
+        "backbone.row0.layers.26.attention_residual",
+        "backbone.row0.layers.26.hidden",
+        "backbone.row0.layers.27.attention_residual",
+        "backbone.row0.layers.27.hidden",
+        "backbone.row0.layers.28.attention_residual",
+        "backbone.row0.layers.28.hidden",
+        "backbone.row0.layers.29.attention_residual",
+        "backbone.row0.layers.29.hidden",
+        "backbone.row0.layers.3.attention_residual",
+        "backbone.row0.layers.3.hidden",
+        "backbone.row0.layers.30.attention_residual",
+        "backbone.row0.layers.30.hidden",
+        "backbone.row0.layers.31.attention_residual",
+        "backbone.row0.layers.31.hidden",
+        "backbone.row0.layers.32.attention_residual",
+        "backbone.row0.layers.32.hidden",
+        "backbone.row0.layers.33.attention_residual",
+        "backbone.row0.layers.33.hidden",
+        "backbone.row0.layers.34.attention_residual",
+        "backbone.row0.layers.34.hidden",
+        "backbone.row0.layers.35.attention_residual",
+        "backbone.row0.layers.35.hidden",
+        "backbone.row0.layers.36.attention_residual",
+        "backbone.row0.layers.36.hidden",
+        "backbone.row0.layers.37.attention_residual",
+        "backbone.row0.layers.37.hidden",
+        "backbone.row0.layers.38.attention_residual",
+        "backbone.row0.layers.38.hidden",
+        "backbone.row0.layers.39.attention_residual",
+        "backbone.row0.layers.39.hidden",
+        "backbone.row0.layers.4.attention_residual",
+        "backbone.row0.layers.4.hidden",
+        "backbone.row0.layers.5.attention_residual",
+        "backbone.row0.layers.5.hidden",
+        "backbone.row0.layers.6.attention_residual",
+        "backbone.row0.layers.6.hidden",
+        "backbone.row0.layers.7.attention_residual",
+        "backbone.row0.layers.7.hidden",
+        "backbone.row0.layers.8.attention_residual",
+        "backbone.row0.layers.8.hidden",
+        "backbone.row0.layers.9.attention_residual",
+        "backbone.row0.layers.9.hidden",
+        "backbone.row1.hidden",
+        "backbone.row1.layers.0.attention_residual",
+        "backbone.row1.layers.0.hidden",
+        "backbone.row1.layers.1.attention_residual",
+        "backbone.row1.layers.1.hidden",
+        "backbone.row1.layers.10.attention_residual",
+        "backbone.row1.layers.10.hidden",
+        "backbone.row1.layers.11.attention_residual",
+        "backbone.row1.layers.11.hidden",
+        "backbone.row1.layers.12.attention_residual",
+        "backbone.row1.layers.12.hidden",
+        "backbone.row1.layers.13.attention_residual",
+        "backbone.row1.layers.13.hidden",
+        "backbone.row1.layers.14.attention_residual",
+        "backbone.row1.layers.14.hidden",
+        "backbone.row1.layers.15.attention_residual",
+        "backbone.row1.layers.15.hidden",
+        "backbone.row1.layers.16.attention_residual",
+        "backbone.row1.layers.16.hidden",
+        "backbone.row1.layers.17.attention_residual",
+        "backbone.row1.layers.17.hidden",
+        "backbone.row1.layers.18.attention_residual",
+        "backbone.row1.layers.18.hidden",
+        "backbone.row1.layers.19.attention_residual",
+        "backbone.row1.layers.19.hidden",
+        "backbone.row1.layers.2.attention_residual",
+        "backbone.row1.layers.2.hidden",
+        "backbone.row1.layers.20.attention_residual",
+        "backbone.row1.layers.20.hidden",
+        "backbone.row1.layers.21.attention_residual",
+        "backbone.row1.layers.21.hidden",
+        "backbone.row1.layers.22.attention_residual",
+        "backbone.row1.layers.22.hidden",
+        "backbone.row1.layers.23.attention_residual",
+        "backbone.row1.layers.23.hidden",
+        "backbone.row1.layers.24.attention_residual",
+        "backbone.row1.layers.24.hidden",
+        "backbone.row1.layers.25.attention_residual",
+        "backbone.row1.layers.25.hidden",
+        "backbone.row1.layers.26.attention_residual",
+        "backbone.row1.layers.26.hidden",
+        "backbone.row1.layers.27.attention_residual",
+        "backbone.row1.layers.27.hidden",
+        "backbone.row1.layers.28.attention_residual",
+        "backbone.row1.layers.28.hidden",
+        "backbone.row1.layers.29.attention_residual",
+        "backbone.row1.layers.29.hidden",
+        "backbone.row1.layers.3.attention_residual",
+        "backbone.row1.layers.3.hidden",
+        "backbone.row1.layers.30.attention_residual",
+        "backbone.row1.layers.30.hidden",
+        "backbone.row1.layers.31.attention_residual",
+        "backbone.row1.layers.31.hidden",
+        "backbone.row1.layers.32.attention_residual",
+        "backbone.row1.layers.32.hidden",
+        "backbone.row1.layers.33.attention_residual",
+        "backbone.row1.layers.33.hidden",
+        "backbone.row1.layers.34.attention_residual",
+        "backbone.row1.layers.34.hidden",
+        "backbone.row1.layers.35.attention_residual",
+        "backbone.row1.layers.35.hidden",
+        "backbone.row1.layers.36.attention_residual",
+        "backbone.row1.layers.36.hidden",
+        "backbone.row1.layers.37.attention_residual",
+        "backbone.row1.layers.37.hidden",
+        "backbone.row1.layers.38.attention_residual",
+        "backbone.row1.layers.38.hidden",
+        "backbone.row1.layers.39.attention_residual",
+        "backbone.row1.layers.39.hidden",
+        "backbone.row1.layers.4.attention_residual",
+        "backbone.row1.layers.4.hidden",
+        "backbone.row1.layers.5.attention_residual",
+        "backbone.row1.layers.5.hidden",
+        "backbone.row1.layers.6.attention_residual",
+        "backbone.row1.layers.6.hidden",
+        "backbone.row1.layers.7.attention_residual",
+        "backbone.row1.layers.7.hidden",
+        "backbone.row1.layers.8.attention_residual",
+        "backbone.row1.layers.8.hidden",
+        "backbone.row1.layers.9.attention_residual",
+        "backbone.row1.layers.9.hidden",
+        "backbone.row2.hidden",
+        "backbone.row2.layers.0.attention_residual",
+        "backbone.row2.layers.0.hidden",
+        "backbone.row2.layers.1.attention_residual",
+        "backbone.row2.layers.1.hidden",
+        "backbone.row2.layers.10.attention_residual",
+        "backbone.row2.layers.10.hidden",
+        "backbone.row2.layers.11.attention_residual",
+        "backbone.row2.layers.11.hidden",
+        "backbone.row2.layers.12.attention_residual",
+        "backbone.row2.layers.12.hidden",
+        "backbone.row2.layers.13.attention_residual",
+        "backbone.row2.layers.13.hidden",
+        "backbone.row2.layers.14.attention_residual",
+        "backbone.row2.layers.14.hidden",
+        "backbone.row2.layers.15.attention_residual",
+        "backbone.row2.layers.15.hidden",
+        "backbone.row2.layers.16.attention_residual",
+        "backbone.row2.layers.16.hidden",
+        "backbone.row2.layers.17.attention_residual",
+        "backbone.row2.layers.17.hidden",
+        "backbone.row2.layers.18.attention_residual",
+        "backbone.row2.layers.18.hidden",
+        "backbone.row2.layers.19.attention_residual",
+        "backbone.row2.layers.19.hidden",
+        "backbone.row2.layers.2.attention_residual",
+        "backbone.row2.layers.2.hidden",
+        "backbone.row2.layers.20.attention_residual",
+        "backbone.row2.layers.20.hidden",
+        "backbone.row2.layers.21.attention_residual",
+        "backbone.row2.layers.21.hidden",
+        "backbone.row2.layers.22.attention_residual",
+        "backbone.row2.layers.22.hidden",
+        "backbone.row2.layers.23.attention_residual",
+        "backbone.row2.layers.23.hidden",
+        "backbone.row2.layers.24.attention_residual",
+        "backbone.row2.layers.24.hidden",
+        "backbone.row2.layers.25.attention_residual",
+        "backbone.row2.layers.25.hidden",
+        "backbone.row2.layers.26.attention_residual",
+        "backbone.row2.layers.26.hidden",
+        "backbone.row2.layers.27.attention_residual",
+        "backbone.row2.layers.27.hidden",
+        "backbone.row2.layers.28.attention_residual",
+        "backbone.row2.layers.28.hidden",
+        "backbone.row2.layers.29.attention_residual",
+        "backbone.row2.layers.29.hidden",
+        "backbone.row2.layers.3.attention_residual",
+        "backbone.row2.layers.3.hidden",
+        "backbone.row2.layers.30.attention_residual",
+        "backbone.row2.layers.30.hidden",
+        "backbone.row2.layers.31.attention_residual",
+        "backbone.row2.layers.31.hidden",
+        "backbone.row2.layers.32.attention_residual",
+        "backbone.row2.layers.32.hidden",
+        "backbone.row2.layers.33.attention_residual",
+        "backbone.row2.layers.33.hidden",
+        "backbone.row2.layers.34.attention_residual",
+        "backbone.row2.layers.34.hidden",
+        "backbone.row2.layers.35.attention_residual",
+        "backbone.row2.layers.35.hidden",
+        "backbone.row2.layers.36.attention_residual",
+        "backbone.row2.layers.36.hidden",
+        "backbone.row2.layers.37.attention_residual",
+        "backbone.row2.layers.37.hidden",
+        "backbone.row2.layers.38.attention_residual",
+        "backbone.row2.layers.38.hidden",
+        "backbone.row2.layers.39.attention_residual",
+        "backbone.row2.layers.39.hidden",
+        "backbone.row2.layers.4.attention_residual",
+        "backbone.row2.layers.4.hidden",
+        "backbone.row2.layers.5.attention_residual",
+        "backbone.row2.layers.5.hidden",
+        "backbone.row2.layers.6.attention_residual",
+        "backbone.row2.layers.6.hidden",
+        "backbone.row2.layers.7.attention_residual",
+        "backbone.row2.layers.7.hidden",
+        "backbone.row2.layers.8.attention_residual",
+        "backbone.row2.layers.8.hidden",
+        "backbone.row2.layers.9.attention_residual",
+        "backbone.row2.layers.9.hidden"
+      ],
+      "trace_sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79",
+      "upstream": {
+        "mlx-audio": {
+          "repository": "https://github.com/cguldogan/mlx-audio",
+          "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+        }
+      }
+    },
+    "limitations": "F32 replay promotes floating checkpoint tensors exactly, preserving packed integers. Whole checkpoint shards were not hashed; selected layer0 projection tensors were hashed. Full parity fails at the same coordinate for both native reductions. Expert-order root cause remains a hypothesis."
+  },
+  "verification": {
+    "gpu_spec_examples": 15,
+    "gpu_spec_failures": 0,
+    "gpu_spec_pending": 0,
+    "python_tests": 14,
+    "python_failures": 0,
+    "syntax_ast": "all changed Python sources parsed",
+    "crystal_format": "checked",
+    "git_diff_check": "checked",
+    "commands": [
+      {
+        "purpose": "Release builds, executed for each listed example",
+        "env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15"
+        },
+        "argv_template": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "EXAMPLE",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "BINARY"
+        ],
+        "examples": {
+          "examples/drama3_dense_benchmark.cr": "/private/tmp/drama3_dense_benchmark_wide",
+          "examples/drama3_dense_trace.cr": "/private/tmp/drama3_dense_trace_wide",
+          "examples/drama3_resident_trace.cr": "/private/tmp/drama3_resident_trace_wide",
+          "examples/drama3_generate.cr": "/private/tmp/drama3_generate_wide"
+        },
+        "expected": "exit 0; retained build logs"
+      },
+      {
+        "purpose": "Paired microbenchmark; rows 0/1/2 separately, A/A uses candidate tree",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv_template": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_dense_benchmark_wide",
+          "120",
+          "8192",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--pairs=7",
+          "--large-repeats=8",
+          "--tiny-repeats=1024",
+          "--candidate=simd",
+          "--dense-fixture=/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json",
+          "--input-row=ROW"
+        ],
+        "expected": "bitwise outputs; two queued commands before pair drain; complete timeline and no intermediate readbacks"
+      },
+      {
+        "purpose": "Qualify each microbenchmark stdout/stderr pair",
+        "argv_template": [
+          "/opt/homebrew/bin/python3",
+          "scripts/drama3_dense_report.py",
+          "--stdout",
+          "STDOUT",
+          "--stderr",
+          "STDERR",
+          "--output",
+          "FRESH_REPORT"
+        ],
+        "expected": "qualified true; rejects corrupted controls"
+      },
+      {
+        "purpose": "Pinned MLX replay with dense capture; separate no-capture control omits last option",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "300",
+          "40960",
+          "scripts/drama3/replay_mlx_backbone.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--inputs",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone.json",
+          "--dense-fixture",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json"
+        ],
+        "expected": "243 full traces plus three dense input/reference rows"
+      },
+      {
+        "purpose": "Native projection replay, both modes",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv_template": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_dense_trace_wide",
+          "120",
+          "8192",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json",
+          "OUTPUT",
+          "MODE"
+        ],
+        "expected": "same fixture SHA; BF16 shapes; modes tree and simd"
+      },
+      {
+        "purpose": "Projection upstream/bitwise gate",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "scripts/drama3/dense_reference.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.reference.json",
+          "--tree",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-dense-tree.json",
+          "--simd",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-dense-simd.json"
+        ],
+        "expected": "match; 37056 values; bitwise native outputs; unchanged tolerance"
+      },
+      {
+        "purpose": "Full native backbone replay, both selectors",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree|simd",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2"
+        },
+        "argv_template": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_resident_trace_wide",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "OUTPUT"
+        ],
+        "expected": "243 traces per arm; bitwise native equality"
+      },
+      {
+        "purpose": "Full upstream parity gate (intentionally retained failure)",
+        "commands": {
+          "full_upstream_tree": {
+            "argv": [
+              "/opt/homebrew/opt/python@3.14/bin/python3.14",
+              "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py",
+              "--reference",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+              "--actual",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-tree.json",
+              "--atol",
+              "6e-5",
+              "--rtol",
+              "3e-4"
+            ],
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "{\"error\": \"backbone.row1.layers.39.hidden[33] differs: expected 0.921916962, actual 0.921100616, abs=0.000816, allowed=0.000337\", \"status\": \"mismatch\"}\n"
+          },
+          "full_upstream_simd": {
+            "argv": [
+              "/opt/homebrew/opt/python@3.14/bin/python3.14",
+              "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py",
+              "--reference",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+              "--actual",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-simd.json",
+              "--atol",
+              "6e-5",
+              "--rtol",
+              "3e-4"
+            ],
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "{\"error\": \"backbone.row1.layers.39.hidden[33] differs: expected 0.921916962, actual 0.921100616, abs=0.000816, allowed=0.000337\", \"status\": \"mismatch\"}\n"
+          },
+          "upstream_capture_control": {
+            "argv": [
+              "/opt/homebrew/opt/python@3.14/bin/python3.14",
+              "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/compare_traces.py",
+              "--reference",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+              "--actual",
+              "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone.json",
+              "--atol",
+              "0",
+              "--rtol",
+              "0"
+            ],
+            "exit_code": 0,
+            "stdout": "{\"atol\": 0.0, \"max_abs_error\": 0.0, \"max_relative_error_at_max_abs\": 0.0, \"prefixes\": [], \"rtol\": 0.0, \"status\": \"match\", \"trace_count\": 243, \"value_count\": 497664, \"worst_flat_index\": 0, \"worst_trace\": \"\"}\n",
+            "stderr": ""
+          }
+        },
+        "expected": "both native arms fail the same sole coordinate; no-capture MLX control passes exactly"
+      },
+      {
+        "purpose": "Matched complete generations and invariants",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full_wide_pairs.py"
+        ],
+        "expected": "14 runs, exact WAV/codes/EOS/prompt/readbacks; per-depth graph counters; actual selectors; paired finite GPU timestamps"
+      },
+      {
+        "purpose": "Final focused release GPU specs",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "240",
+          "8192",
+          "spec",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "spec/drama3_dense_spec.cr",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_graph_resident_spec.cr"
+        ],
+        "expected": "15 examples, 0 failures/errors/pending",
+        "observed": "PASS"
+      },
+      {
+        "purpose": "Python report and reference controls",
+        "env": {
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "-m",
+          "unittest",
+          "spec.drama3_dense_reference_spec",
+          "spec.drama3_dense_report_spec",
+          "-v"
+        ],
+        "expected": "14 tests, OK",
+        "observed": "PASS"
+      },
+      {
+        "purpose": "Warm-driver pipeline setup discriminator, not a performance promotion run",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "COGNI_METAL_PIPELINE_PROFILE": "1"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_dense_benchmark_wide",
+          "120",
+          "8192",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--pairs=1",
+          "--large-repeats=1",
+          "--tiny-repeats=1",
+          "--dense-fixture=/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json",
+          "--input-row=0"
+        ],
+        "expected": "pipeline host timing; unchanged two-command pair graph; no added waits",
+        "observed": "0.262917485 ms for candidate setup; qualified 24 commands / 37056 elements"
+      }
+    ]
+  },
+  "adversary": {
+    "bounded_opt_in": "ROBUST",
+    "default_promotion": "VULNERABLE",
+    "general_process_speedup": "VULNERABLE",
+    "discriminators": [
+      "Cancellation fixture rejects alternate left-fold reduction.",
+      "Mapped BF16 odd/even offsets, F16/F32 and widths31/32/33/63/64/65/2048/2049 plus sliced input match native bits.",
+      "Three real upstream rows and A/A timing control.",
+      "Corrupt timing/counter/fixture/bit/tolerance controls reject.",
+      "Full native Float32 bit comparison includes signed-zero bits.",
+      "Both native arms fail same full-upstream coordinate; no-capture replay matches captured reference."
+    ],
+    "review_lineage": "MiniQuad source review by delegated same-lineage workers is correlated; executed device/reference checks provide primary evidence."
+  },
+  "source_identities": {
+    "src/ml/audio/drama3/kernels/resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal",
+      "bytes": 10355,
+      "sha256": "85c73b17de6832787497d88112b1ae00422af4e3287170009d9dac36c55a2395"
+    },
+    "src/ml/audio/drama3/resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+      "bytes": 19923,
+      "sha256": "bbed3fad5648f77a21fd05d07b515e62070ec5cc0d362ab1a4a01988029a2ce4"
+    },
+    "src/ml/audio/drama3/backbone_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr",
+      "bytes": 10531,
+      "sha256": "fc788d77977096776c689c6eb8038fbd785b89c1a3e433b59bb7a2abb5535a7b"
+    },
+    "examples/drama3_generate.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr",
+      "bytes": 7409,
+      "sha256": "b08524186f2eb78a91684e02c427270b0713cc2302104d11ac8b8af50ea2bc8a"
+    },
+    "examples/drama3_dense_benchmark.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_benchmark.cr",
+      "bytes": 13094,
+      "sha256": "c56e7da4a3d6c0db7381b82f1499d4c64f7e6600fe81e7eed8ff0ddebac47c06"
+    },
+    "examples/drama3_dense_trace.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_dense_trace.cr",
+      "bytes": 4580,
+      "sha256": "5b6ba998abb9213d35fa6e1f2034feeac0566dc20802c34449ea15804459e623"
+    },
+    "scripts/drama3/replay_mlx_backbone.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_backbone.py",
+      "bytes": 19486,
+      "sha256": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d"
+    },
+    "scripts/drama3/dense_reference.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/dense_reference.py",
+      "bytes": 14646,
+      "sha256": "fd1647b8071ba16bb8831219c6ab9a9c37bef095cb55100cbfba51a09709993c"
+    },
+    "scripts/drama3_dense_report.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3_dense_report.py",
+      "bytes": 13834,
+      "sha256": "a0d980d51ea521f3988bd1da683d842b65f881d08174da581059f36a6c01e517"
+    },
+    "spec/drama3_dense_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_dense_spec.cr",
+      "bytes": 6573,
+      "sha256": "6a007c86789b9e68baae13f9fc4c96d97992092a4da40e528dbbd9fe34fce305"
+    },
+    "spec/drama3_dense_reference_spec.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_dense_reference_spec.py",
+      "bytes": 7525,
+      "sha256": "c9da160c01dd528cfe9c6a060fa28254830a5e9914c39cb367e57d78a62af751"
+    },
+    "spec/drama3_dense_report_spec.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_dense_report_spec.py",
+      "bytes": 7905,
+      "sha256": "2c8bc5cc8bd2d5ab4459205548079a92e107b457e308bddc36b99499e2a2ac00"
+    },
+    "docs/drama3-native-frontier.md": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-native-frontier.md",
+      "bytes": 72508,
+      "sha256": "6d6db065de3438daafa0089e190955e11bf806a4eec6c7b21b258f3f9714bf71"
+    },
+    "LANDMARKS.md": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/LANDMARKS.md",
+      "bytes": 4213477,
+      "sha256": "99c4fe5556f84bac67472ee6359a2226940beb970e0d2921ae9f985b5012930c"
+    }
+  },
+  "binary_identities": {
+    "/private/tmp/drama3_dense_benchmark_wide": {
+      "path": "/private/tmp/drama3_dense_benchmark_wide",
+      "bytes": 1118808,
+      "sha256": "cec4159e41d54e6675249e1c70ecf54d7642718457541d633e6c3ef777ff4747"
+    },
+    "/private/tmp/drama3_dense_trace_wide": {
+      "path": "/private/tmp/drama3_dense_trace_wide",
+      "bytes": 866568,
+      "sha256": "2b1fe13ce36a7a418d47f72de582cb12a531269e96b7924f593044b5b21b6d62"
+    },
+    "/private/tmp/drama3_resident_trace_wide": {
+      "path": "/private/tmp/drama3_resident_trace_wide",
+      "bytes": 869128,
+      "sha256": "c8013e2dc9b8906f07079b14ccd13cb37d02a7c3b52e5a453cbe2dd814ef1673"
+    },
+    "/private/tmp/drama3_generate_wide": {
+      "path": "/private/tmp/drama3_generate_wide",
+      "bytes": 1404840,
+      "sha256": "e491837a36033627f6abddae48c194486606722ca88a5fa02fe31adaff541ce2"
+    }
+  },
+  "artifacts": {
+    "backbone-drift-analysis.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/backbone-drift-analysis.json",
+      "bytes": 533,
+      "sha256": "0c49788a0082c3bfe6b271be86b5231c7441a00f83bc566b0a4a2585286b9500"
+    },
+    "backbone-gate-results.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/backbone-gate-results.json",
+      "bytes": 2175,
+      "sha256": "407422123748a67de5267f44ef3b5836125982895652314870d0099497c236b2"
+    },
+    "backbone-native-comparison.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/backbone-native-comparison.json",
+      "bytes": 207,
+      "sha256": "94683cfe692902d0184b753cab665c91c9a43007ecd7dc8030e3e2572d66af6c"
+    },
+    "build-benchmark-wide.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/build-benchmark-wide.log",
+      "bytes": 91,
+      "sha256": "bccc326ec6fbf4de84b2c55f229436c48a407b9ff9448e790696bddc60b4194c"
+    },
+    "build-drama3_dense_trace-wide.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/build-drama3_dense_trace-wide.log",
+      "bytes": 91,
+      "sha256": "3b01fc49db5a8efe71c3e1f5aec6c2e440fe68fdc90a42a25b304c5a673668c3"
+    },
+    "build-drama3_generate-wide.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/build-drama3_generate-wide.log",
+      "bytes": 91,
+      "sha256": "490fb5f6325c39c14ad8aa5fcb090ec47b73b69780c7b4f71b4407f09434edaa"
+    },
+    "build-drama3_resident_trace-wide.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/build-drama3_resident_trace-wide.log",
+      "bytes": 91,
+      "sha256": "3b01fc49db5a8efe71c3e1f5aec6c2e440fe68fdc90a42a25b304c5a673668c3"
+    },
+    "dense-upstream-comparison.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense-upstream-comparison.json",
+      "bytes": 1054,
+      "sha256": "cb3416a0ea9ec4a44fcd61079b5022920537e05aaeca74eda00aad1158b7e628"
+    },
+    "dense_inputs.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.json",
+      "bytes": 125888,
+      "sha256": "991fe333ba796841b7aff627a14816dc94bec0b3e107a77b4b8d5f0804a3298e"
+    },
+    "dense_inputs.reference.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/dense_inputs.reference.json",
+      "bytes": 724369,
+      "sha256": "ab7bb6324a1afcb6e111636a5b34c4cae0b5887225787a60a40d11ce1709acf1"
+    },
+    "final-dense-resident-graph-specs.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/final-dense-resident-graph-specs.log",
+      "bytes": 422,
+      "sha256": "432ea925e01d7e586293914619dd0b9b5875b12f9e032d5bd9fb3c196cf6cfcd"
+    },
+    "final-python-tests.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/final-python-tests.log",
+      "bytes": 2423,
+      "sha256": "dee5a3f31b5196793e2b4fe0506f27aa53c0b95378e616e2530a50c43a34ce6c"
+    },
+    "full-wide-00-d2-p-1-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-00-d2-p-1-tree.stderr",
+      "bytes": 7028,
+      "sha256": "a23e748b9fda9579802e8d7f4fe52f6d0d20e6ec4e4b56447b2fa2dbdbd8cf1f"
+    },
+    "full-wide-00-d2-p-1-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-00-d2-p-1-tree.stdout",
+      "bytes": 195,
+      "sha256": "ae729b13cc68f18506c80aa3a7a8c86a7b6d595acdf22f5fcc616582d1c80873"
+    },
+    "full-wide-00-d2-p-1-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-00-d2-p-1-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-00-d2-p-1-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-00-d2-p-1-tree.wav.json",
+      "bytes": 3419,
+      "sha256": "8c3bcd58ead13eadad17ffea589e94996b62733971a8b9bb47f17508b35c80b2"
+    },
+    "full-wide-01-d2-p-1-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-01-d2-p-1-simd.stderr",
+      "bytes": 7032,
+      "sha256": "1f2ef1a9235e7a9d84dd3666128ce4b5d15a11dfdb30779eb597145aeaf39320"
+    },
+    "full-wide-01-d2-p-1-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-01-d2-p-1-simd.stdout",
+      "bytes": 195,
+      "sha256": "b32742eb10b24d176a3a88b54f63c7f109930750509ced95a4079659130cfa0c"
+    },
+    "full-wide-01-d2-p-1-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-01-d2-p-1-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-01-d2-p-1-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-01-d2-p-1-simd.wav.json",
+      "bytes": 3421,
+      "sha256": "d6461e9b1bc5a87fdc625270391fafce2aa55df97e0d5941d0151be40d7357a4"
+    },
+    "full-wide-02-d2-p0-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-02-d2-p0-tree.stderr",
+      "bytes": 7042,
+      "sha256": "ab48dd5fc10b37d104ec74084da041a0c890a47c3450447ee94cc72f61b0b160"
+    },
+    "full-wide-02-d2-p0-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-02-d2-p0-tree.stdout",
+      "bytes": 194,
+      "sha256": "4af9b5fc74864d00c95f8acf88e851b88eb4d0caf63a239ca75002b794ffe710"
+    },
+    "full-wide-02-d2-p0-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-02-d2-p0-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-02-d2-p0-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-02-d2-p0-tree.wav.json",
+      "bytes": 3421,
+      "sha256": "5fea707051c6da9549aec73070b7ad012955f9e00f72c90c3c3e3955c29ffee4"
+    },
+    "full-wide-03-d2-p0-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-03-d2-p0-simd.stderr",
+      "bytes": 7033,
+      "sha256": "b1500997a23101312478e19e76a7b5db1cd18f90adc0393f6322e15bc670fe42"
+    },
+    "full-wide-03-d2-p0-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-03-d2-p0-simd.stdout",
+      "bytes": 194,
+      "sha256": "c4126a6f6091e26955a08785a410151346f5694deaa797e4579af1b3dc913caa"
+    },
+    "full-wide-03-d2-p0-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-03-d2-p0-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-03-d2-p0-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-03-d2-p0-simd.wav.json",
+      "bytes": 3421,
+      "sha256": "89bc652e9382188cae04eb4b8c99250891b69ee333fa06153605cf06e43be65e"
+    },
+    "full-wide-04-d2-p1-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-04-d2-p1-simd.stderr",
+      "bytes": 7031,
+      "sha256": "d4f76af162c6684dd350b3c0ec8ecaab0aec17ee32bac0922399861ba9a07be7"
+    },
+    "full-wide-04-d2-p1-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-04-d2-p1-simd.stdout",
+      "bytes": 194,
+      "sha256": "87ee7c5d2892e83e3553d7c305c240c3e1d54396056f550bb9b50a3e710b7e12"
+    },
+    "full-wide-04-d2-p1-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-04-d2-p1-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-04-d2-p1-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-04-d2-p1-simd.wav.json",
+      "bytes": 3421,
+      "sha256": "7d1d126d7afacedb0cd88dbfbb77deef4de0737c0595a7296da6c3a1fb7aea61"
+    },
+    "full-wide-05-d2-p1-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-05-d2-p1-tree.stderr",
+      "bytes": 7043,
+      "sha256": "98e340774fc3a4aa2c19221b9e3e7df155b1d6a40eb47a221b0cc316344981fa"
+    },
+    "full-wide-05-d2-p1-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-05-d2-p1-tree.stdout",
+      "bytes": 194,
+      "sha256": "595fa6dbaca514d1880edbdf6e23301bca4a985f33e792e21b4e9c5bc86e77ee"
+    },
+    "full-wide-05-d2-p1-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-05-d2-p1-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-05-d2-p1-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-05-d2-p1-tree.wav.json",
+      "bytes": 3427,
+      "sha256": "a402a502faf7d8d718605cbdeb7e5f60f61a255b06518ae6ac0874b1c679b108"
+    },
+    "full-wide-06-d2-p2-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-06-d2-p2-tree.stderr",
+      "bytes": 7035,
+      "sha256": "559775fe1dcf3f48a7022fdd60d6371bdd5533149a3c30f4c64f939c2112283b"
+    },
+    "full-wide-06-d2-p2-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-06-d2-p2-tree.stdout",
+      "bytes": 194,
+      "sha256": "192da49a49069185e5b1b2b12662739b950856f2dcceb1d758c265a284bffb04"
+    },
+    "full-wide-06-d2-p2-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-06-d2-p2-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-06-d2-p2-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-06-d2-p2-tree.wav.json",
+      "bytes": 3420,
+      "sha256": "de1294bfd9f86aa9a359ae218ba3f78bb2ffb9f51b368ae76642cfc1af7324cd"
+    },
+    "full-wide-07-d2-p2-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-07-d2-p2-simd.stderr",
+      "bytes": 7032,
+      "sha256": "04e59439ea7f69813145b51c898ab76cd9ca187cbdc4b003939b0a4131e576aa"
+    },
+    "full-wide-07-d2-p2-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-07-d2-p2-simd.stdout",
+      "bytes": 194,
+      "sha256": "7358bbaf65d3fe42dd07f5f6a0b5410a56f15b937ea54037369fba502a320a51"
+    },
+    "full-wide-07-d2-p2-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-07-d2-p2-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-07-d2-p2-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-07-d2-p2-simd.wav.json",
+      "bytes": 3420,
+      "sha256": "9f8c934ec00251b074aa91a1da0d6d50146ee1e3f394608646a49f049b2cd398"
+    },
+    "full-wide-08-d2-p3-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-08-d2-p3-simd.stderr",
+      "bytes": 7037,
+      "sha256": "05ce0818ca2531a5f1faf901ebafe752f298f29e63fe4e3b3fae492ddad40800"
+    },
+    "full-wide-08-d2-p3-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-08-d2-p3-simd.stdout",
+      "bytes": 194,
+      "sha256": "fbc78c11ea79b654a87592fd7ef545d12c3c74dcea660e604bca9b1c41606478"
+    },
+    "full-wide-08-d2-p3-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-08-d2-p3-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-08-d2-p3-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-08-d2-p3-simd.wav.json",
+      "bytes": 3421,
+      "sha256": "b0f9405dd0851906e253a0d613c3abc2a02b9e5f2709f40e51d5cf5a1808fa6d"
+    },
+    "full-wide-09-d2-p3-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-09-d2-p3-tree.stderr",
+      "bytes": 7032,
+      "sha256": "991f340b5b4c5a3f56561cd4abeba9ca2612640458eda4fb5f631b55ad111168"
+    },
+    "full-wide-09-d2-p3-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-09-d2-p3-tree.stdout",
+      "bytes": 194,
+      "sha256": "36871ddb27a8c4bb8aba38a698615e844169c64f44aeb80e6f6a14f4ba225460"
+    },
+    "full-wide-09-d2-p3-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-09-d2-p3-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-09-d2-p3-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-09-d2-p3-tree.wav.json",
+      "bytes": 3421,
+      "sha256": "16dc7202f28405911510c5d75946db290a633a16b961e66cf3c480f7881909b9"
+    },
+    "full-wide-10-d0-p0-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-10-d0-p0-tree.stderr",
+      "bytes": 8346,
+      "sha256": "3f00d6683b8221b21f709361353b661162f8472ec40222d32ad34a5301048d05"
+    },
+    "full-wide-10-d0-p0-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-10-d0-p0-tree.stdout",
+      "bytes": 194,
+      "sha256": "203438da45f16cb822aec0c854ff96368104114b389117a7e418d11ba1909324"
+    },
+    "full-wide-10-d0-p0-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-10-d0-p0-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-10-d0-p0-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-10-d0-p0-tree.wav.json",
+      "bytes": 3411,
+      "sha256": "75cb6a21662d791a535363b5640f2d717c3a633b1c2be17a0e1a65e609036c8d"
+    },
+    "full-wide-11-d0-p0-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-11-d0-p0-simd.stderr",
+      "bytes": 8345,
+      "sha256": "f8949a00e513fc40f091eeae899ef791a41a69bc59d69219cc3206e9d1606276"
+    },
+    "full-wide-11-d0-p0-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-11-d0-p0-simd.stdout",
+      "bytes": 194,
+      "sha256": "a46affe65768fd1c127cf7ff2bad52fef884295ee2a833771a39ddd26e476c47"
+    },
+    "full-wide-11-d0-p0-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-11-d0-p0-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-11-d0-p0-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-11-d0-p0-simd.wav.json",
+      "bytes": 3409,
+      "sha256": "66d89506096cc93e1fe1726745383cec7bcf8cb7c22d51bf4e376eea2d7ed67c"
+    },
+    "full-wide-12-d0-p1-simd.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-12-d0-p1-simd.stderr",
+      "bytes": 8347,
+      "sha256": "06410dc80b0d2ee32c0084cc4bff6159d61e62870ced29520da45c4693bd534c"
+    },
+    "full-wide-12-d0-p1-simd.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-12-d0-p1-simd.stdout",
+      "bytes": 194,
+      "sha256": "5ac70aeb12d46102fcb130456977bdbe00486ff539c63227bafe60c860383886"
+    },
+    "full-wide-12-d0-p1-simd.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-12-d0-p1-simd.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-12-d0-p1-simd.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-12-d0-p1-simd.wav.json",
+      "bytes": 3411,
+      "sha256": "34f5b745c6cf637021c11a9705f30ed45dfc606d2a650f6fa17ca19643405168"
+    },
+    "full-wide-13-d0-p1-tree.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-13-d0-p1-tree.stderr",
+      "bytes": 8343,
+      "sha256": "6c11231ab2b9ce021238365026b2c1c7148afa325fbd630b3280a31e7bf2b2a3"
+    },
+    "full-wide-13-d0-p1-tree.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-13-d0-p1-tree.stdout",
+      "bytes": 194,
+      "sha256": "b37befb27cce077a366cdcb9b4355200d995ad6853eb0c55e1b7366d5b192a83"
+    },
+    "full-wide-13-d0-p1-tree.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-13-d0-p1-tree.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+    },
+    "full-wide-13-d0-p1-tree.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-13-d0-p1-tree.wav.json",
+      "bytes": 3411,
+      "sha256": "b43de27827593b46ae5b456283fe25f08764035149b54f423a18632742ca37de"
+    },
+    "full-wide-lineage.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-lineage.json",
+      "bytes": 346,
+      "sha256": "9bc3b6b43ea9a842c34a7debc6bad49a4afe812f73fe7232d5d22f98b495569d"
+    },
+    "full-wide-pairs.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-pairs.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "full-wide-pairs.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-pairs.stdout",
+      "bytes": 7924,
+      "sha256": "6d44288d5892a9555ddf1005efc39e6224ac9131cb7ed182c6b4f9c5e257dbde"
+    },
+    "full-wide-results.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-results.json",
+      "bytes": 12840,
+      "sha256": "8d05e575c7f0c9200a8226a8f1981eda29a60f4c6515205b530aa5a3861eb854"
+    },
+    "full-wide-summary.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full-wide-summary.json",
+      "bytes": 1407,
+      "sha256": "8985498ad4751a951cf3d95a268b9772f5e5bff07be8cd28e48a083e9a227965"
+    },
+    "full_wide_pairs.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/full_wide_pairs.py",
+      "bytes": 4226,
+      "sha256": "acfd6e03971d9d3265b3ba34c679c474369e7e6578047b2a90811117da7e763b"
+    },
+    "inputs.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+      "bytes": 116872,
+      "sha256": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3"
+    },
+    "make_inputs.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/make_inputs.py",
+      "bytes": 1497,
+      "sha256": "2d27713e96ae8245cd039a5e9dc2c02e2a9a77e5f66ca846dc3586968152505e"
+    },
+    "micro-aa.qualified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-aa.qualified.json",
+      "bytes": 13178,
+      "sha256": "c959565410440ba6fbb6af82e55fe185a2b782b60a73d2270ad461e2a0281881"
+    },
+    "micro-aa.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-aa.stderr",
+      "bytes": 5957,
+      "sha256": "ba743eacbb9bc98faadca5858a17b206dce51935dc5a5723328a8ea0eef7184c"
+    },
+    "micro-aa.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-aa.stdout",
+      "bytes": 31794,
+      "sha256": "71de313f7251ebc2c127ad5bf6b2406a3d9d9b6b4eff4cb1147d0ba9ae122a66"
+    },
+    "micro-wide-row0.qualified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row0.qualified.json",
+      "bytes": 13170,
+      "sha256": "53e3b87b9feb34be5b74204afc9ad01f4726186956d7906fc9eb3bea72d46e84"
+    },
+    "micro-wide-row0.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row0.stderr",
+      "bytes": 5957,
+      "sha256": "3bbe01732900c329e3bc3515b43958c8cec7b190df1febe581947aeb0b81c8a1"
+    },
+    "micro-wide-row0.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row0.stdout",
+      "bytes": 31783,
+      "sha256": "84e7c30ddbf2af54f1a07e141e4f59f8f71e6068ae44e9455a9c1bfacc84bbe3"
+    },
+    "micro-wide-row1.qualified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row1.qualified.json",
+      "bytes": 13180,
+      "sha256": "bb26191c63e363d8b5d8f6c4ccbd3e0c87053fb596d8663a1a333c96a7086b51"
+    },
+    "micro-wide-row1.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row1.stderr",
+      "bytes": 5961,
+      "sha256": "26f9a2c1490af4ba43204d02ee426d18fad98b879bd199885d967048d485af99"
+    },
+    "micro-wide-row1.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row1.stdout",
+      "bytes": 31796,
+      "sha256": "e28a227cc8d36200f6c3c51256ca947603024a7ad2d93cb62afafd24f49c4d82"
+    },
+    "micro-wide-row2.qualified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row2.qualified.json",
+      "bytes": 13190,
+      "sha256": "0b18e447b01177d91d8af0ec50668d9ab9d39ad0a8df0f42818770860344ff2f"
+    },
+    "micro-wide-row2.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row2.stderr",
+      "bytes": 5964,
+      "sha256": "5d154e9832ee1d5d33889f387625453234705d0da1d6b38cd61962edd66f27af"
+    },
+    "micro-wide-row2.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/micro-wide-row2.stdout",
+      "bytes": 31798,
+      "sha256": "f032130fc76205ade825c0a4fd465d565ee6fe2799a20c93384f9c0f1565f9c7"
+    },
+    "mlx-backbone-no-capture.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+      "bytes": 9707208,
+      "sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79"
+    },
+    "mlx-backbone-no-capture.json.manifest.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json.manifest.json",
+      "bytes": 12331,
+      "sha256": "a82b5940c42ffa92eb3f405b0b79dd91c83fab14ab1d8c5fbf7b115eba035686"
+    },
+    "mlx-backbone.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone.json",
+      "bytes": 9707208,
+      "sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79"
+    },
+    "mlx-backbone.json.manifest.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone.json.manifest.json",
+      "bytes": 12735,
+      "sha256": "d9029da6e60d82703eda3b35b6fcf1c5b94d0652fb4ef234becb8fe61c7efc34"
+    },
+    "native-backbone-simd.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-simd.json",
+      "bytes": 5368919,
+      "sha256": "1823790bc1ae4f0119196e3c0cac356f9b54cf26e06ea77c0bcb83f5ef275752"
+    },
+    "native-backbone-tree.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-tree.json",
+      "bytes": 5368919,
+      "sha256": "1823790bc1ae4f0119196e3c0cac356f9b54cf26e06ea77c0bcb83f5ef275752"
+    },
+    "native-dense-simd.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-dense-simd.json",
+      "bytes": 400309,
+      "sha256": "684350badf359280dd9d74cc66fc817cc449d86a784149fd6c9edcf07c06ab18"
+    },
+    "native-dense-tree.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-dense-tree.json",
+      "bytes": 400309,
+      "sha256": "4364769d514e9c43f37e2b267d3cb19fbc50420df0228a3072da793181a81dde"
+    },
+    "pipeline-cost.qualified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/pipeline-cost.qualified.json",
+      "bytes": 5368,
+      "sha256": "1a12804b42f2ef55db05cca17d337e3ff3fc6488b3ac14d1274df8fa6d5659cb"
+    },
+    "pipeline-cost.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/pipeline-cost.stderr",
+      "bytes": 4001,
+      "sha256": "1f7d0f5872f1ea5bb18f2f9fa8335e79cf93d4a4767de234bd4cf02e7ba6b520"
+    },
+    "pipeline-cost.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/pipeline-cost.stdout",
+      "bytes": 11085,
+      "sha256": "6f1a8bb0fef1dbef86436f7fac40bb54a2be28ad2695c95756857342ae13acf3"
+    },
+    "projection-metadata.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/projection-metadata.json",
+      "bytes": 34701,
+      "sha256": "46e1f2ee6a2cd6a0f8770a8856280db8b6b69fc8a7a51e9b63c766141f733ee2"
+    },
+    "shuffle-full-depth2-summary.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/shuffle-full-depth2-summary.json",
+      "bytes": 733,
+      "sha256": "7cf606902197d6cdf7b74c4f75b3082ccc69d904de5e6bf7542a16043a26c95f"
+    }
+  },
+  "refresh": {
+    "decay_triggers": [
+      "source/assets/reference/runtime/precision/compiler/input/device/OS/artifact drift",
+      "host/cache state for timing"
+    ],
+    "operation": "Rebuild with the pinned flags; rerun relevant bitwise/upstream/counter guards and matched timings.",
+    "failure_policy": "Keep tree default, retain failed evidence, reopen dependent promotion claims."
+  }
+}

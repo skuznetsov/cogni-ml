@@ -1,0 +1,465 @@
+{
+  "format": "cogni_ml_drama3_tower_pair_evidence_v1",
+  "date_utc": "2026-10-17",
+  "base_revision": "2149cd03f53c1451b9dccf00fe241e3fec573421",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded opt-in native parity, unchanged upstream metrics, and a local paired command-interval gain on the recorded fixture and source paths.",
+    "full_request_speedup": "not established",
+    "strict_upstream_compatibility": false,
+    "default_promotion": false,
+    "decision": "Retain the frozen opt-in experiment; the original separate calls remain the default and rollback."
+  },
+  "implementation": {
+    "selector": "DRAMA3_TOWER_FFN_PAIR_FUSION=0|1; unset=0; frozen per tower",
+    "specialization": "Equal-row, even-offset, in-range BF16 weights: one shared input load and two independent original F32 64-lane trees per output row.",
+    "fallback": "Generic combined row domains for eligible F32/BF16/F16 pairs; established separate calls for unsupported layouts/reductions.",
+    "production_boundary": "Same two ordinal GPU outputs, allocations, submissions, waits and reads; no new CPU intermediate activation read.",
+    "observer": "Normally nil borrowed-buffer callback; diagnostics snapshot Q/K norms on GPU before in-place RoPE."
+  },
+  "source_sha256": {
+    "src/ml/audio/drama3/resident.cr": "52285f5cdc5b43f558a000b20449833c8a18f681d47b55f60eddda60f9e5a3ad",
+    "src/ml/audio/drama3/kernels/resident.metal": "6504348c7df93182a3e71ae2ce77c9ecd61180dcc351636306cbff2a6e5e542b",
+    "src/ml/audio/drama3/tower_resident.cr": "2af0dd77a55723ba1eb9de6bd1f4895160d1a484b59c978da43e77dc027d6184",
+    "src/ml/audio/drama3/studio/engine.cr": "4daa7b46ad3825fc6ff33a576a4e2c1f6179eccf0094094a1359c4e6b542de5b",
+    "scripts/drama3/measure_host_pairs.py": "873ba9e06fec6fdb9a18f5a1edf138fba4f6ea72c6627894b7067091dd39377b",
+    "scripts/drama3/export_mlx_tower_pair.py": "d01f953e5703a01bbdb04e90900d2f46c02ca521f22d8a53cd2f95b697d74550",
+    "examples/drama3_tower_pair_benchmark.cr": "8d1a8054988983c353a81c63bd9acf420e33a98939b05cfc10911ec2dac4545a",
+    "examples/drama3_tower_pair_compare.cr": "a11eff4fdd5c0c186db84188a17df2ebc0bf05379187e480baa89292dcbddf8e",
+    "spec/drama3_tower_pair_fusion_spec.cr": "61d26fb619f9d2798640951e367a0e59ef6b8af7e0f0e79db215bb7849b4c56d"
+  },
+  "reference": {
+    "model_repository": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "fixture": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-fixture-v3.json",
+      "sha256": "f358f3ca42cf932d97b7ac313d4addf751c723835fc1bec67c0f7dfbb4920698",
+      "availability": "local external SSD"
+    },
+    "config_index_six_projection_pins": {
+      "config.json": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "model.safetensors.index.json": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "actual_projection_tensors": "bc0c8f86657c4f3876623efc363ade770dfb10d83aebac1bdcc1bcaed8c17050",
+      "comparator": "a11eff4fdd5c0c186db84188a17df2ebc0bf05379187e480baa89292dcbddf8e",
+      "tower_resident.cr": "2af0dd77a55723ba1eb9de6bd1f4895160d1a484b59c978da43e77dc027d6184",
+      "resident_metal": "6504348c7df93182a3e71ae2ce77c9ecd61180dcc351636306cbff2a6e5e542b",
+      "tolerance_kernel": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521"
+    },
+    "provenance": {
+      "generation_report": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-runs/whisper30-20261015/generate-native-seed1.wav.json",
+      "generation_report_sha256": "ba22da53fa60afc34e80b23594ca311c6eb5fba74c5eed47605e87499bbf1fcf",
+      "generation_report_backend": "metal_resident",
+      "prompt_rows": 87,
+      "report_frame_count": 489,
+      "upstream_repository": "https://github.com/cguldogan/mlx-audio",
+      "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "loaded_core_tensor_count": 1167,
+      "selected_prefill_tower_row": 85,
+      "prefill_cache_rows": 86,
+      "decode_policy": "actual first report main token; actual final prompt frame; residual codebooks use MLX argmax(top1), matching native context.argmax",
+      "captured_boundaries": "all available non-cache native TowerResident trace_value sites for one final prompt teacher_force row and first decode row, including all layer head_logits",
+      "instrumentation_control": {
+        "unhooked_prefill_hidden_output_bit_identical": true,
+        "unhooked_prefill_hidden_output_finite": true,
+        "unhooked_prefill_final_layer_bit_identical": true,
+        "unhooked_prefill_final_layer_finite": true,
+        "unhooked_decode_final_layer_bit_identical": true,
+        "unhooked_decode_final_layer_finite": true,
+        "unhooked_greedy_decode_frame_identical": true,
+        "control_backbone_reruns": 0
+      }
+    },
+    "coverage": "87 MLX backbone hidden rows; tower prefill row85 and first decode row0; six actual projection payloads hashed, not all checkpoint shards or all 13 layer pairs."
+  },
+  "verification": {
+    "release_metal_specs": {
+      "examples": 20,
+      "failures": 0,
+      "errors": 0,
+      "command": "tower-pair-spec-v5",
+      "log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-spec-v5.log",
+        "sha256": "4e1f34524090c978c86b414ac3706dbd72393e7b05e942b20d5da465b0c1e482",
+        "availability": "local external SSD"
+      }
+    },
+    "local": {
+      "analysis": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-local-run-v2-analysis-hardened.json",
+        "sha256": "1f82a981c93b76015eb66ec9d5d5aa0cf00eedde1986c6318d5118066c515350",
+        "availability": "local external SSD"
+      },
+      "bit_exact_values_per_arm": 2654208,
+      "measured_pairs": 21,
+      "candidate_faster_pairs": 21,
+      "pooled_median_paired_ratio": 1.1633666076948752,
+      "cases": {
+        "0": {
+          "median_paired_gpu_ratio": 1.2003705433254974,
+          "separate_median_ms": 0.684973958414048,
+          "fused_median_ms": 0.5706354277208447
+        },
+        "1": {
+          "median_paired_gpu_ratio": 1.1558124540833898,
+          "separate_median_ms": 0.6756822695024312,
+          "fused_median_ms": 0.5751093267463148
+        },
+        "2": {
+          "median_paired_gpu_ratio": 1.1410710335139314,
+          "separate_median_ms": 0.6775781512260437,
+          "fused_median_ms": 0.596864614635706
+        }
+      },
+      "upstream_projection_controls": 6,
+      "atol": 0.0006,
+      "rtol": 0.0003,
+      "negative_controls": "one-bit mismatch and NaN are rejected on GPU",
+      "graph": {
+        "depth": 2,
+        "submitted": 84,
+        "completed": 84,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 84,
+        "retained_bytes": 0,
+        "max_retained_bytes": 1187872
+      },
+      "readbacks": {
+        "terminal": 344
+      },
+      "timing_scope": "paired overlapping command intervals, not isolated kernels or additive family costs"
+    },
+    "tower": {
+      "analysis": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-compare-v4.json",
+        "sha256": "a69bd16111967a59fe90474ea8b3f148a1aebca37b3291d1febeaafe6e5c2c0d",
+        "availability": "local external SSD"
+      },
+      "traced_states": 674,
+      "native_exact_comparisons_including_frame": 675,
+      "comparison_triplets": 675,
+      "raw_metric_records": 2025,
+      "baseline_candidate_upstream_metrics_identical": true,
+      "v1_v2_comparison_arrays_identical": true,
+      "tolerances": {
+        "internal_atol": 0.0006000000284984708,
+        "hidden_and_logits_atol": 2.9999999242136255e-05,
+        "rtol": 0.0003000000142492354
+      },
+      "strict_upstream_pass": false,
+      "same_unfused_baseline_failures": [
+        {
+          "name": "tower.decode.row0.residual_layers.8.feed_forward.w2",
+          "metrics": {
+            "bit_differences": 2036,
+            "tolerance_failures": 11,
+            "max_abs": 0.03515625,
+            "max_ratio": 5.307394504547119,
+            "nonfinite": 0
+          }
+        },
+        {
+          "name": "tower.decode.row0.residual_layers.8.ffn_residual",
+          "metrics": {
+            "bit_differences": 2034,
+            "tolerance_failures": 17,
+            "max_abs": 0.03515625,
+            "max_ratio": 4.916153430938721,
+            "nonfinite": 0
+          }
+        },
+        {
+          "name": "tower.prefill.row85.residual_layers.8.ffn_residual",
+          "metrics": {
+            "bit_differences": 2006,
+            "tolerance_failures": 1,
+            "max_abs": 0.02734375,
+            "max_ratio": 1.1194161176681519,
+            "nonfinite": 0
+          }
+        }
+      ],
+      "decode_frame_equal_to_mlx": true,
+      "graph": {
+        "depth": 2,
+        "submitted": 1,
+        "completed": 1,
+        "pending": 0,
+        "max_pending": 1,
+        "completion_waits": 1,
+        "retained_bytes": 0,
+        "max_retained_bytes": 8424018316
+      },
+      "readbacks": {
+        "terminal": 40500
+      }
+    },
+    "complete_wav": {
+      "input": {
+        "text": "Hello, this is a voice test.",
+        "reference": null,
+        "seed": 1,
+        "temperature": 0.8,
+        "top_k": 30,
+        "top_p": 0.9,
+        "frame_cap": 64
+      },
+      "orders": [
+        {
+          "order": [
+            "0",
+            "1",
+            "1",
+            "0"
+          ],
+          "analysis": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-request-abba-v2-analysis.json",
+            "sha256": "edcefead9c7a341b9ce26e779c2c6d994dc9036cac32e7f76b07548283bf4761",
+            "availability": "local external SSD"
+          },
+          "worker_median_summary_seconds": {
+            "0": {
+              "request_wall": 23.17565759376157,
+              "generation": 20.35463617675,
+              "codec": 2.770034781
+            },
+            "1": {
+              "request_wall": 24.907944083213806,
+              "generation": 20.950107801999998,
+              "codec": 3.8382879685000004
+            }
+          },
+          "mirrored_pairs": [
+            {
+              "baseline_arm": 0,
+              "candidate_arm": 1,
+              "baseline_over_candidate": {
+                "request_wall": 0.9040469765497503,
+                "generation": 0.9750534413266059,
+                "codec": 0.5875305937619557
+              }
+            },
+            {
+              "baseline_arm": 3,
+              "candidate_arm": 2,
+              "baseline_over_candidate": {
+                "request_wall": 0.9603485067346788,
+                "generation": 0.967841681857001,
+                "codec": 0.9201422067502004
+              }
+            }
+          ],
+          "request_rtf": {
+            "0": 8.31743570869861,
+            "1": 8.93913032283308
+          }
+        },
+        {
+          "order": [
+            "1",
+            "0",
+            "0",
+            "1"
+          ],
+          "analysis": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-request-baab-v2-r2-analysis.json",
+            "sha256": "a4e4a2903ee406ddf89b3e4e44a90811059260a564f63ade8ad37e107ff60b0a",
+            "availability": "local external SSD"
+          },
+          "worker_median_summary_seconds": {
+            "0": {
+              "request_wall": 26.576364416861907,
+              "generation": 21.8906591355,
+              "codec": 4.54650773925
+            },
+            "1": {
+              "request_wall": 28.817056708270684,
+              "generation": 25.128232968749998,
+              "codec": 3.6111781667500003
+            }
+          },
+          "mirrored_pairs": [
+            {
+              "baseline_arm": 1,
+              "candidate_arm": 0,
+              "baseline_over_candidate": {
+                "request_wall": 0.7873499227359259,
+                "generation": 0.7457924049545491,
+                "codec": 1.1791037192995117
+              }
+            },
+            {
+              "baseline_arm": 2,
+              "candidate_arm": 3,
+              "baseline_over_candidate": {
+                "request_wall": 1.0780392768407887,
+                "generation": 1.0274653931242874,
+                "codec": 1.3132747408316534
+              }
+            }
+          ],
+          "request_rtf": {
+            "0": 9.537904221871827,
+            "1": 10.342058926063942
+          }
+        }
+      ],
+      "unit": "per-worker median of two correlated warm requests; one cold excluded per worker",
+      "fresh_workers": 8,
+      "excluded_cold_per_worker": 1,
+      "warm_per_worker": 2,
+      "exact_requests": 24,
+      "same_complete_codes_tape_wav": true,
+      "same_cold_and_warm_allocation_counts_bytes": true,
+      "same_waits_reads": true,
+      "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "speech_seconds": 2.786394557823129,
+      "graph_per_request": {
+        "depth": 2,
+        "submitted": 122,
+        "completed": 122,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 122,
+        "retained_bytes": 0,
+        "max_retained_bytes": 31892098828
+      },
+      "readbacks_per_request": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "warm_allocation_stats": {
+        "allocations": 135590,
+        "requested_bytes": 4079562724,
+        "allocation_profile": false,
+        "allocation_ns": 0
+      },
+      "binary_sha256": "f5b19f82089b42477e43250ef7ca87321bd966fc41fa4d86d0b743fde264233e",
+      "interpretation": "No reproducible full-request gain. Unchanged DAC varies too; do not assign an isolated causal regression to the kernel from these active-host series.",
+      "excluded_incomplete_series": {
+        "command": "tower-pair-request-baab-v2",
+        "driver_exit_code": 1,
+        "completed_requests_before_failure": 9,
+        "stage": "Baseline OFF arm2 worker exit, after its cold and both warm results.",
+        "symptom": "libc++abi uncaught std::system_error: mutex lock failed: Invalid argument",
+        "log": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-request-baab-v2.log",
+          "sha256": "fc1a211016ba73184f79055288b3bac2d50e92d26d7be7d4032708fd597ab433",
+          "availability": "local external SSD"
+        },
+        "stderr": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-baab-v2-arm2.stderr",
+          "sha256": "c06c248a16a0e6e5d5911aa918629d9b8e82214bf3af068b2bff3347c66eb040",
+          "availability": "local external SSD"
+        },
+        "partial_manifest": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-baab-v2-worker.json",
+          "sha256": "3b3c3997d034159cf1fc834f56302f996e2e0f71611780a581441df103039408",
+          "availability": "local external SSD"
+        },
+        "sanitized_crash_stack": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-worker-exit-crash.json",
+          "sha256": "81613d42b1c678bc1f4f3e872acb7e71bf703254b4091ce26e9f38fe702e3d49",
+          "availability": "local external SSD"
+        },
+        "crash_scope": "SIGABRT in the repeating GCD command watchdog while locking its process-global mutex; all last-worker reports had pending=0 and submitted=completed=122. Bridge unchanged by this slice.",
+        "unproven_hypothesis": "Watchdog callback races static-mutex destruction at process exit. The stack does not prove teardown ordering or rule out corruption.",
+        "disposition": "Not a qualifying timing series. Preserve failure and rerun entire reverse order unchanged; root cause remains unresolved and the exit check remains strict."
+      }
+    },
+    "guards": "Widths/tails, unequal rows, mixed formats, odd/aligned offsets, input/output views and sentinels, exact-end mapped weights, cancellation, exceptional BF16 bits, unsupported fallback, ownership/width-before-effects, frozen selector, nil observer. Invalid mapped-range injection is source-only because public constructors reject such views.",
+    "packet_check": "Custom Python assertions dereference runtime JSON/hash artifacts; the repository Landmark graph template/validator are absent. No graph-validator execution or full source-closure claim."
+  },
+  "lineage": {
+    "current": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-lineage-8d11feb2cb0120109557a0ad315c8f1a250bc90074db239bb6ec05b3096f708a.json",
+      "sha256": "0a64004e4dda7e19cc88489240a5549d49bdbebe684c9418d71f544144a60686",
+      "availability": "local external SSD"
+    },
+    "historical_v1": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-realtime-20261016/tower-pair-lineage-historical-bdae3bfb14048da53a5015c7f78cc8a15244605ac58085ced641a3488ce0bc46.json",
+      "sha256": "ff5e9e5c0d4877ee89757041ae01fd0fdce1c28b0d6482f210ec1541c2968c25",
+      "availability": "local external SSD"
+    },
+    "qualification_scope": "recorded_source_scope_only",
+    "unrecorded_unchanged_dependency": "src/ml/metal/dispatch.cr",
+    "selected_commands": [
+      "tower-pair-export-v3",
+      "tower-pair-spec-v5",
+      "tower-pair-local-build-v2",
+      "tower-pair-local-run-v2",
+      "tower-pair-compare-build-v4",
+      "tower-pair-compare-run-v4",
+      "tower-pair-studio-build-v2",
+      "tower-pair-request-abba-v2",
+      "tower-pair-request-baab-v2-r2"
+    ],
+    "selected_command_subset_sha256": "89bb424f4f456bb4059cf6254d01e92413a6426bdafe1299738c24ef90419618",
+    "note": "Selected command records, logs, source maps, bridge, binaries, baseline producer, driver, fixture and analyses are joined. Mutable commands.json is not used as an immutable receipt. Missing dependency was not retroactively pinned."
+  },
+  "adversary": {
+    "verdict": "ROBUST within the bounded numerical/local-timing scope; VULNERABLE for full WAV speedup, strict upstream compatibility or generalization.",
+    "method": "Root-executed probes plus correlated same-lineage Luna mini-Quad source, guards, upstream lineage and claim review; model agreement is not independent replication.",
+    "strongest_falsifier": "Full profiler-off ABBA and reverse BAAB with exact trajectory and unchanged allocation/read/wait ledgers.",
+    "result": "Default promotion rejected because local command timing does not reproduce as a complete request gain."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/kernels/resident.metal",
+      "src/ml/audio/drama3/tower_resident.cr",
+      "src/ml/audio/drama3/studio/engine.cr",
+      "scripts/drama3/measure_host_pairs.py",
+      "scripts/drama3/export_mlx_tower_pair.py",
+      "examples/drama3_tower_pair_benchmark.cr",
+      "examples/drama3_tower_pair_compare.cr",
+      "spec/drama3_tower_pair_fusion_spec.cr",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-tower-pair-fusion.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-tower-pair-fusion.json"
+    ],
+    "changed_paths": [
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/kernels/resident.metal",
+      "src/ml/audio/drama3/tower_resident.cr",
+      "src/ml/audio/drama3/studio/engine.cr",
+      "scripts/drama3/measure_host_pairs.py",
+      "scripts/drama3/export_mlx_tower_pair.py",
+      "examples/drama3_tower_pair_benchmark.cr",
+      "examples/drama3_tower_pair_compare.cr",
+      "spec/drama3_tower_pair_fusion_spec.cr",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-tower-pair-fusion.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-tower-pair-fusion.json"
+    ]
+  },
+  "authority": "In-scope local work and exact-path atomic commit; no push. Serial run_safe, authorized 15% memory floor, quiet-host disabled, external scratch/local weights, unrelated processes untouched.",
+  "residual_risk": [
+    "Only one short no-reference English WAV trajectory is timed; two warm repeats within each worker are correlated.",
+    "Command GPU intervals overlap and are not isolated kernel times or additive family costs.",
+    "Three selected tower upstream comparisons already fail in the unfused baseline; existing strict backbone/DAC gates also remain open.",
+    "Complete runtime dependency closure and whole-checkpoint payload hashes are not established.",
+    "Allocation requested bytes and retained-byte counters are cumulative accounting, not physical peak residency.",
+    "One discarded reverse-series baseline worker aborted during shutdown after 9 exact requests; this experiment does not fix or explain the mutex failure."
+  ],
+  "decay": {
+    "triggers": [
+      "source/compiler/bridge changes",
+      "model/reference/input/tolerance changes",
+      "queue/device/OS changes",
+      "host-load drift for timing",
+      "raw evidence loss"
+    ],
+    "refresh": "Repeat pinned export, release specs, local pairs, GPU intermediate comparison and both complete WAV orders before promotion.",
+    "failure_policy": "Keep default off; reopen dependent claims on drift or refutation. Sustained real-time generation remains open."
+  },
+  "links": {
+    "report": "docs/drama3-tower-pair-fusion.md",
+    "frontier": "docs/drama3-native-frontier.md",
+    "continuity": "LANDMARKS.md"
+  }
+}
