@@ -842,6 +842,7 @@ static inline Inkling2SplitKVSpan inkling2_split_kv_span(
 // Split-K specialization for 128 value channels and 16 relative channels.
 // The host guarantees all scores fit in threadgroup memory. The partition
 // boundaries and FP32 reductions match the single-SIMD split path.
+template <uint ScoreGroups>
 kernel void inkling2_resident_attention_split_parallel(
     device const float* q               [[buffer(0)]],
     device const float* k_tile          [[buffer(1)]],
@@ -876,7 +877,7 @@ kernel void inkling2_resident_attention_split_parallel(
     const uint head = tgpig.z;
     if (partition >= partitions || row >= rows || head >= n_head) return;
 
-    const uint groups = 4;
+    const uint groups = ScoreGroups;
     const uint channels = 128;
     const uint rel_channels = 16;
     const uint position = start + query_row_offset + row;
@@ -944,13 +945,20 @@ kernel void inkling2_resident_attention_split_parallel(
     if (lane == 0) group_maxima[group] = local_max;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    const float max_score = max(max(group_maxima[0], group_maxima[1]),
-                                max(group_maxima[2], group_maxima[3]));
+    float max_score = max(max(group_maxima[0], group_maxima[1]),
+                          max(group_maxima[2], group_maxima[3]));
+    if (ScoreGroups == 8) {
+        const float high_max = max(max(group_maxima[4], group_maxima[5]),
+                                   max(group_maxima[6], group_maxima[7]));
+        max_score = max(max_score, high_max);
+    }
     const uint channel = group * 32 + lane;
     for (uint i = channel; i < count; i += groups * 32) {
         cached_scores[i] = exp(cached_scores[i] - max_score);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (channel >= channels) return;
 
     // One lane per output channel, still accumulating in ascending key order.
     float context = 0.0f;
@@ -973,6 +981,10 @@ kernel void inkling2_resident_attention_split_parallel(
     }
     partials[partial_base + 2 + channel] = context;
 }
+
+typedef decltype(inkling2_resident_attention_split_parallel<4>) inkling2_attention_split_parallel_t;
+template [[host_name("inkling2_resident_attention_split_parallel")]] kernel inkling2_attention_split_parallel_t inkling2_resident_attention_split_parallel<4>;
+template [[host_name("inkling2_resident_attention_split_qk8")]] kernel inkling2_attention_split_parallel_t inkling2_resident_attention_split_parallel<8>;
 
 // Merge local softmax tuples. The sink contributes one zero logit globally,
 // then the resulting context is gated exactly as in the regular kernel.

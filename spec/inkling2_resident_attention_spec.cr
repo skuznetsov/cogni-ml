@@ -742,11 +742,18 @@ require "../src/ml/gguf/inkling2_resident_math"
           resident_run_tile(blocked, 0_i32, projected[0, 1022], weights, config)
           resident_run_tile(serial, 0_i32, projected[0, 1022], weights, config)
 
+          ML::Metal::PipelineCache.clear
           expected = [] of Float32
           4.times do |row|
             expected.concat(resident_run_tile(serial, 1022 + row, [projected[1022 + row]], weights, config))
           end
+          {% if flag?(:aarch64) %}
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8").should be_true
+          {% end %}
+
+          ML::Metal::PipelineCache.clear
           actual = resident_run_tile(blocked, 1022_i32, projected[1022, 4], weights, config, decode_block: true)
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel").should be_true
           actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
 
           {2_i32, 1023_i32, 1024_i32, 1025_i32}.each do |position|

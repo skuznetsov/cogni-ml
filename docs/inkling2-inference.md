@@ -495,6 +495,11 @@ range and combines the softmax partials before applying the output gate.
 The optimized split-K kernel computes scores once per partition and reuses
 them for PV. Its sliding-window loop walks contiguous spans of the KV ring
 in logical order, preserving the FP32 summation order across wrap.
+On Apple Silicon, scalar decode uses eight SIMD groups for scores and
+exponentials when the largest partition holds 128 to 512 keys and the
+model has 128 head channels and 16 relative channels. Each PV channel
+accumulates in ascending key order and the merge visits the four
+partitions in their original order.
 On the supported fast profile, the parallel kernel caches up to 4,096
 scores per partition, covering up to 16,384 global keys with the same
 four partitions and FP32 summation order.

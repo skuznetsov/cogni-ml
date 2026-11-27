@@ -396,6 +396,7 @@ module ML::GGUF
       private SPLIT_PARALLEL_SCORE_LIMIT = 512_i32
       private FAST_SPLIT_PARALLEL_SCORE_LIMIT = 4096_i32
       private SPLIT_PARALLEL_THREADS = 128_i32
+      private SPLIT_WIDE_QK_MIN_PARTITION = 128_i32
       private PREFILL_SCORE_LIMIT = 1024_i32
       private MAX_PREFILL_ATTENTION_ROWS = 512_i32
       private GLOBAL_ORDERED_PANEL_ROWS = 32_i32
@@ -808,7 +809,7 @@ module ML::GGUF
           # advances the suffix while keeping prior block rows visible in-tile.
           encode_attention_split(encoder, scratch, split_q, k, v, split_q_rel,
             split_gate, split_sink, relative_bias, split_output, start, split_rows,
-            row_offset, relative_extent)
+            row_offset, relative_extent, scalar: !decode_block && rows == 1)
         end
       end
 
@@ -1094,6 +1095,8 @@ module ML::GGUF
         rows : Int32,
         query_row_offset : Int32,
         relative_extent : Int32,
+        *,
+        scalar : Bool,
       ) : Nil
         partial_width = checked_elements(SPLIT_KEY_PARTITIONS, @config.head_dim + 2, "split attention partition")
         partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
@@ -1103,14 +1106,14 @@ module ML::GGUF
         keys = Math.min(keys, @config.sliding_window) if @sliding
         partition_size = (keys - 1) // SPLIT_KEY_PARTITIONS + 1
 
-        # Four SIMD groups score disjoint keys, then cover one channel per lane.
         # The Apple Silicon fast profile can cache a 16K context's four FP32
         # score partitions instead of recomputing QK in the value pass.
         parallel_limit = @prefill_mode.fast? ? FAST_SPLIT_PARALLEL_SCORE_LIMIT : SPLIT_PARALLEL_SCORE_LIMIT
         parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= parallel_limit
         if parallel
-          split_pipeline = "inkling2_resident_attention_split_parallel"
-          threads = SPLIT_PARALLEL_THREADS
+          wide_qk = scalar && scalar_split_wide_qk?(partition_size)
+          split_pipeline = wide_qk ? "inkling2_resident_attention_split_qk8" : "inkling2_resident_attention_split_parallel"
+          threads = wide_qk ? 2 * SPLIT_PARALLEL_THREADS : SPLIT_PARALLEL_THREADS
           shared_floats = partition_size
         else
           split_pipeline = "inkling2_resident_attention_split"
@@ -1136,6 +1139,15 @@ module ML::GGUF
         encoder.set_value(@config.head_dim.to_u32, 5)
         encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 6)
         encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
+      end
+
+      private def scalar_split_wide_qk?(partition_size : Int32) : Bool
+        {% if flag?(:aarch64) %}
+          # Use wider score parallelism around the sliding-window length.
+          partition_size.in?(SPLIT_WIDE_QK_MIN_PARTITION..SPLIT_PARALLEL_SCORE_LIMIT)
+        {% else %}
+          false
+        {% end %}
       end
 
       private def bind_attention_inputs(
