@@ -43,6 +43,10 @@ require "../src/ml/gguf/inkling2_resident_math"
       offset = (view.offset // sizeof(Float32)).to_i32
       view.buffer.read(offset + count)[offset, count].to_a
     end
+
+    def raw_bits(view : ML::GGUF::Inkling2View, count : Int32) : Array(UInt32)
+      view.buffer.read(count).map(&.unsafe_as(UInt32))
+    end
   end
 
   describe ML::GGUF::Inkling2ResidentMath do
@@ -195,6 +199,114 @@ require "../src/ml/gguf/inkling2_resident_math"
         support.read(output.slice(3 * width), 1).should eq([guard])
       ensure
         buffers.each(&.release)
+      end
+    end
+
+    it "matches RMS-depth-mix-RMS for one query and preserves or appends the bank" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      support = Inkling2ResidentMathSpecSupport
+      math = ML::GGUF::Inkling2ResidentMath
+      suffix = 3_i32
+      prefix = Inkling2ResidentMathSpecSupport::PREFIX
+      prefix_bits = Array(Float32).new(prefix, -777.0_f32).map(&.unsafe_as(UInt32))
+      suffix_bits = Array(Float32).new(suffix, -999.0_f32).map(&.unsafe_as(UInt32))
+
+      {2304_i32, 513_i32}.each do |width|
+        {0_i32, 1_i32, 2_i32, 3_i32, 4_i32}.each do |count|
+          buffers = [] of ML::MetalBuffer
+          begin
+            unit_eps = 0.00031_f32
+            output_eps = 0.0021_f32
+            bank_capacity = 5_i32
+            bank_elements = bank_capacity * width
+            input_values = Array(Float32).new(width) do |index|
+              ((index * 37 % 251) - 125).to_f32 * 0.0078125_f32 +
+                ((index * 11 % 19) - 9).to_f32 * 0.0009765625_f32
+            end
+            query_values = Array(Float32).new(width) do |index|
+              ((index * 23 % 173) - 86).to_f32 * 0.0107421875_f32 +
+                ((index * 7 % 13) - 6).to_f32 * 0.001953125_f32
+            end
+            bank_values = Array(Float32).new(bank_elements) do |index|
+              ((index * 29 % 311) - 155).to_f32 * 0.005859375_f32 +
+                ((index // width) - 2).to_f32 * 0.03125_f32
+            end
+            weight_values = Array(Float32).new(width) do |index|
+              ((index * 13 % 47) - 23).to_f32 * 0.021484375_f32
+            end
+
+            input = support.guarded_float_view(input_values, suffix, buffers)
+            query = support.guarded_float_view(query_values, suffix, buffers)
+            weights = support.guarded_float_view(weight_values, suffix, buffers)
+            reference_bank = support.guarded_float_view(bank_values, suffix, buffers)
+            no_save_bank = support.guarded_float_view(bank_values, suffix, buffers)
+            save_bank = support.guarded_float_view(bank_values, suffix, buffers)
+            unit = support.guarded_float_view(Array(Float32).new(width, 0.0_f32), suffix, buffers)
+            mixed = support.guarded_float_view(Array(Float32).new(width, 0.0_f32), suffix, buffers)
+            expected = support.guarded_float_view(Array(Float32).new(width, 123.0_f32), suffix, buffers)
+            no_save_output = support.guarded_float_view(Array(Float32).new(width, 321.25_f32), suffix, buffers)
+            save_output = support.guarded_float_view(Array(Float32).new(width, 321.25_f32), suffix, buffers)
+
+            input_before = support.raw_bits(input, prefix + width + suffix)
+            query_before = support.raw_bits(query, prefix + width + suffix)
+            weights_before = support.raw_bits(weights, prefix + width + suffix)
+            bank_buffer_elements = prefix + bank_elements + suffix
+            bank_before = support.raw_bits(no_save_bank, bank_buffer_elements)
+
+            command = ML::Metal::CommandBuffer.new
+            encoder = ML::Metal::ComputeEncoder.new(command)
+            encoder_ended = false
+            begin
+              math.rms(encoder, input, unit, nil, width, 1_i32, unit_eps)
+              math.depth_mix(encoder, reference_bank, count, unit, query, mixed, width, 1_i32, 1_i32)
+              math.rms(encoder, mixed, expected, weights, width, 1_i32, output_eps)
+              math.depth_mix_rms(
+                encoder, input, no_save_bank, count, query, weights, no_save_output,
+                width, unit_eps, output_eps
+              )
+              math.depth_mix_rms(
+                encoder, input, save_bank, count, query, weights, save_output,
+                width, unit_eps, output_eps, save_to_bank: true
+              )
+              encoder.end_encoding
+              encoder_ended = true
+              command.commit_and_wait
+
+              expected_bits = support.read(expected, width).map(&.unsafe_as(UInt32))
+              support.read(no_save_output, width).map(&.unsafe_as(UInt32)).should eq(expected_bits)
+              support.read(save_output, width).map(&.unsafe_as(UInt32)).should eq(expected_bits)
+
+              support.raw_bits(input, prefix + width + suffix).should eq(input_before)
+              support.raw_bits(query, prefix + width + suffix).should eq(query_before)
+              support.raw_bits(weights, prefix + width + suffix).should eq(weights_before)
+              support.raw_bits(reference_bank, bank_buffer_elements).should eq(bank_before)
+              support.raw_bits(no_save_bank, bank_buffer_elements).should eq(bank_before)
+
+              expected_save_bank = bank_before.dup
+              unit_bits = support.read(unit, width).map(&.unsafe_as(UInt32))
+              unit_bits.each_with_index do |bits, index|
+                expected_save_bank[prefix + count * width + index] = bits
+              end
+              support.raw_bits(save_bank, bank_buffer_elements).should eq(expected_save_bank)
+
+              {expected, no_save_output, save_output}.each do |view|
+                output_bits = support.raw_bits(view, prefix + width + suffix)
+                output_bits[0, prefix].should eq(prefix_bits)
+                output_bits[prefix + width, suffix].should eq(suffix_bits)
+              end
+              {reference_bank, no_save_bank, save_bank}.each do |view|
+                bank_bits = support.raw_bits(view, bank_buffer_elements)
+                bank_bits[0, prefix].should eq(prefix_bits)
+                bank_bits[prefix + bank_elements, suffix].should eq(suffix_bits)
+              end
+            ensure
+              encoder.end_encoding unless encoder_ended
+            end
+          ensure
+            buffers.each(&.release)
+          end
+        end
       end
     end
 

@@ -722,6 +722,9 @@ module ML::GGUF
     end
 
     private def encode_output_normalized(tile : Tile, rows : Int32, output : Inkling2View? = nil) : Inkling2View
+      if rows == 1 && decode_fused_depth_mix?(tile)
+        return normalize_depth_mix(tile, tile.current, @weights.output_res_query, @weights.output_norm, output)
+      end
       mixed = mix(tile, tile.current, @weights.output_res_query, 1)
       selected = mixed.slice((tile.rows - rows) * tile.width)
       normalized = output || @scratch.take(rows * tile.width)
@@ -891,10 +894,17 @@ module ML::GGUF
 
       attention_mark = @scratch.mark
       recycle_attention_inputs = @fast_prefill && !tile.decode_block? && !@depth_speculation && tile.rows > 1
+      fuse_depth_mix = decode_fused_depth_mix?(tile)
+      sliding = @config.sliding?(physical)
+      save_block = physical % @config.res_block_size == 0
+      queries = layer.attn_res_query
+      fused_attn_query = queries if fuse_depth_mix && sliding && messages.nil?
       attended = attend(tile, layer.attention, visit, recycle_attention_inputs) do
-        sliding = @config.sliding?(physical)
+        if query = fused_attn_query
+          q_in = normalize_depth_mix(tile, tile.current, query, layer.q_norm, save_to_bank: save_block)
+          next {q_in, q_in, q_in}
+        end
         query_count = sliding ? 1 : 3
-        queries = layer.attn_res_query
         mixed = queries ? mix(tile, tile.current, queries, query_count) : tile.current
         q = mixed
         distinct_inputs = query_count == 3 && !queries.nil?
@@ -915,9 +925,13 @@ module ML::GGUF
           {normalize(tile, q, layer.q_norm), normalize(tile, k, layer.k_norm), normalize(tile, v, layer.v_norm)}
         end
       end
-      if physical % @config.res_block_size == 0
-        block = tile.blocks.slice(tile.block_count * tile.elements)
-        MathOps.rms(encoder, tile.current, block, nil, tile.width, tile.rows, DEPTH_EPS)
+      if save_block
+        # The fused attention input can publish the new slot early. Advance
+        # the visible bank count here so attention still sees the old bank.
+        unless fused_attn_query
+          block = tile.blocks.slice(tile.block_count * tile.elements)
+          MathOps.rms(encoder, tile.current, block, nil, tile.width, tile.rows, DEPTH_EPS)
+        end
         tile.block_count += 1
         MathOps.copy(encoder, attended, residual, tile.elements)
       else
@@ -925,17 +939,21 @@ module ML::GGUF
       end
       @scratch.rewind(attention_mark)
 
-      ffn = mix(tile, residual, layer.ffn_res_query, 1)
-      if controller && messages
-        ffn = control(tile, controller, 3, ffn, messages.slice(3 * tile.elements))
-      end
-      ffn_in = if input_mark = moe_input_mark
-                 output = tile.next_state
-                 MathOps.rms(encoder, ffn, output, constant(layer.ffn_norm), tile.width, tile.rows, @config.rms_eps)
-                 @scratch.rewind(input_mark)
-                 output
+      ffn_in = if fuse_depth_mix && controller.nil?
+                 normalize_depth_mix(tile, residual, layer.ffn_res_query, layer.ffn_norm)
                else
-                 normalize(tile, ffn, layer.ffn_norm)
+                 ffn = mix(tile, residual, layer.ffn_res_query, 1)
+                 if controller && messages
+                   ffn = control(tile, controller, 3, ffn, messages.slice(3 * tile.elements))
+                 end
+                 if input_mark = moe_input_mark
+                   output = tile.next_state
+                   MathOps.rms(encoder, ffn, output, constant(layer.ffn_norm), tile.width, tile.rows, @config.rms_eps)
+                   @scratch.rewind(input_mark)
+                   output
+                 else
+                   normalize(tile, ffn, layer.ffn_norm)
+                 end
                end
       bias = layer.router_bias.try { |array| constant(array) }
       routed = @linear.moe(encoder, @scratch, layer, @config, ffn_in, bias, tile.rows, decode_block: tile.decode_block?)
@@ -1009,6 +1027,14 @@ module ML::GGUF
       result
     end
 
+    private def normalize_depth_mix(tile : Tile, input : Inkling2View, query : Array(Float32), weight : Array(Float32),
+                                    output : Inkling2View? = nil, *, save_to_bank : Bool = false) : Inkling2View
+      result = output || tile.hidden
+      MathOps.depth_mix_rms(tile.encoder, input, tile.blocks, tile.block_count, constant(query), constant(weight),
+        result, tile.width, DEPTH_EPS, @config.rms_eps, save_to_bank: save_to_bank)
+      result
+    end
+
     private def normalize(tile : Tile, input : Inkling2View, weight : Array(Float32)) : Inkling2View
       result = tile.hidden
       MathOps.rms(tile.encoder, input, result, constant(weight), tile.width, tile.rows, @config.rms_eps)
@@ -1025,6 +1051,15 @@ module ML::GGUF
     # controller evaluation with the reference projection-plus-epilogue path.
     private def decode_fused_control? : Bool
       true
+    end
+
+    # Override in a same-binary comparison with the independent reductions.
+    private def decode_fused_depth_mix?(tile : Tile) : Bool
+      {% if flag?(:aarch64) %}
+        tile.rows == 1 && MathOps.depth_mix_rms_supported?(tile.width, @block_slots)
+      {% else %}
+        false
+      {% end %}
     end
 
     # Keep this predicate as the same-binary A/B hook. The triplet dispatch is

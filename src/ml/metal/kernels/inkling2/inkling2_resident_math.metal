@@ -4,6 +4,14 @@ using namespace metal;
 constant uint INKLING2_RESIDENT_THREADS = 256;
 constant uint INKLING2_RESIDENT_SIMDGROUPS = 8;
 
+inline float inkling2_resident_rms_scale(threadgroup const float* partials, uint width, float eps) {
+    float total = 0.0f;
+    for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
+        total += partials[group];
+    }
+    return 1.0f / sqrt(total / (float)width + eps);
+}
+
 inline void inkling2_resident_rms_row(
     device const float* x,
     device const float* weights,
@@ -26,11 +34,7 @@ inline void inkling2_resident_rms_row(
     if (tiisg == 0) partials[sgitg] = simd_sum_squares;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float total = 0.0f;
-    for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
-        total += partials[group];
-    }
-    const float scale = 1.0f / sqrt(total / (float)width + eps);
+    const float scale = inkling2_resident_rms_scale(partials, width, eps);
     for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
         const float normalized = x[column] * scale;
         y[column] = has_weights != 0 ? normalized * weights[column] : normalized;
@@ -177,6 +181,43 @@ kernel void inkling2_resident_rms_concat_triplet(
         tiisg, sgitg, tid, partials);
 }
 
+inline float inkling2_resident_depth_mix_dot(
+    device const float* state, device const float* query, uint width, ushort tid)
+{
+    float dot = 0.0f;
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        dot += state[column] * query[column];
+    }
+    return simd_sum(dot);
+}
+
+inline void inkling2_resident_depth_mix_weights(threadgroup float* scratch, uint key_count, uint width) {
+    const uint scores_offset = key_count * INKLING2_RESIDENT_SIMDGROUPS;
+    const float score_scale = 1.0f / sqrt((float)width);
+    for (uint key = 0; key < key_count; ++key) {
+        float score = 0.0f;
+        for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
+            score += scratch[(size_t)key * INKLING2_RESIDENT_SIMDGROUPS + group];
+        }
+        scratch[scores_offset + key] = score * score_scale;
+    }
+
+    float max_score = scratch[scores_offset];
+    for (uint key = 1; key < key_count; ++key) {
+        max_score = max(max_score, scratch[scores_offset + key]);
+    }
+
+    float exp_sum = 0.0f;
+    for (uint key = 0; key < key_count; ++key) {
+        const float weight = exp(scratch[scores_offset + key] - max_score);
+        scratch[scores_offset + key] = weight;
+        exp_sum += weight;
+    }
+    for (uint key = 0; key < key_count; ++key) {
+        scratch[scores_offset + key] /= exp_sum;
+    }
+}
+
 kernel void inkling2_resident_depth_mix(
     device const float* bank        [[buffer(0)]],
     device const float* current     [[buffer(1)]],
@@ -207,11 +248,7 @@ kernel void inkling2_resident_depth_mix(
         device const float* state = key < bank_count
             ? bank + (size_t)key * rows * width + row_offset
             : current + row_offset;
-        float dot = 0.0f;
-        for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
-            dot += state[column] * query[column];
-        }
-        const float group_dot = simd_sum(dot);
+        const float group_dot = inkling2_resident_depth_mix_dot(state, query, width, tid);
         if (tiisg == 0) {
             scratch[(size_t)key * INKLING2_RESIDENT_SIMDGROUPS + sgitg] = group_dot;
         }
@@ -219,31 +256,7 @@ kernel void inkling2_resident_depth_mix(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     const uint scores_offset = key_count * INKLING2_RESIDENT_SIMDGROUPS;
-    if (tid == 0) {
-        const float score_scale = 1.0f / sqrt((float)width);
-        for (uint key = 0; key < key_count; ++key) {
-            float score = 0.0f;
-            for (uint group = 0; group < INKLING2_RESIDENT_SIMDGROUPS; ++group) {
-                score += scratch[(size_t)key * INKLING2_RESIDENT_SIMDGROUPS + group];
-            }
-            scratch[scores_offset + key] = score * score_scale;
-        }
-
-        float max_score = scratch[scores_offset];
-        for (uint key = 1; key < key_count; ++key) {
-            max_score = max(max_score, scratch[scores_offset + key]);
-        }
-
-        float exp_sum = 0.0f;
-        for (uint key = 0; key < key_count; ++key) {
-            const float weight = exp(scratch[scores_offset + key] - max_score);
-            scratch[scores_offset + key] = weight;
-            exp_sum += weight;
-        }
-        for (uint key = 0; key < key_count; ++key) {
-            scratch[scores_offset + key] /= exp_sum;
-        }
-    }
+    if (tid == 0) inkling2_resident_depth_mix_weights(scratch, key_count, width);
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     device float* out = output + ((size_t)query_id * rows + row) * width;
@@ -256,6 +269,81 @@ kernel void inkling2_resident_depth_mix(
             value += scratch[scores_offset + key] * state[column];
         }
         out[column] = value;
+    }
+}
+
+// One token and one depth query. Keep the two intermediate rows in
+// threadgroup memory with the same lane ownership and FP32 reductions.
+kernel void inkling2_resident_depth_mix_rms(
+    device const float* input        [[buffer(0)]],
+    device       float* bank         [[buffer(1)]],
+    device const float* query        [[buffer(2)]],
+    device const float* weights      [[buffer(3)]],
+    device       float* output       [[buffer(4)]],
+    constant     uint&  width        [[buffer(5)]],
+    constant     uint&  bank_count   [[buffer(6)]],
+    constant     float& unit_eps     [[buffer(7)]],
+    constant     float& output_eps   [[buffer(8)]],
+    constant     uint&  save_to_bank [[buffer(9)]],
+    threadgroup  float* scratch      [[threadgroup(0)]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint key_count = bank_count + 1;
+    const uint scores_offset = key_count * INKLING2_RESIDENT_SIMDGROUPS;
+    threadgroup float* row = scratch + scores_offset + key_count;
+    threadgroup float rms_partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
+
+    float square_sum = 0.0f;
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float value = input[column];
+        square_sum += value * value;
+    }
+    const float unit_squares = simd_sum(square_sum);
+    if (tiisg == 0) rms_partials[sgitg] = unit_squares;
+    for (uint key = 0; key < bank_count; ++key) {
+        const float group_dot = inkling2_resident_depth_mix_dot(bank + (size_t)key * width, query, width, tid);
+        if (tiisg == 0) scratch[key * INKLING2_RESIDENT_SIMDGROUPS + sgitg] = group_dot;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const float unit_scale = inkling2_resident_rms_scale(rms_partials, width, unit_eps);
+    float dot = 0.0f;
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float unit = input[column] * unit_scale;
+        row[column] = unit;
+        dot += unit * query[column];
+    }
+    const float current_dot = simd_sum(dot);
+    if (tiisg == 0) scratch[bank_count * INKLING2_RESIDENT_SIMDGROUPS + sgitg] = current_dot;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) inkling2_resident_depth_mix_weights(scratch, key_count, width);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    square_sum = 0.0f;
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float unit = row[column];
+        if (save_to_bank != 0) bank[(size_t)bank_count * width + column] = unit;
+
+        float value = 0.0f;
+        for (uint key = 0; key < bank_count; ++key) {
+            value += scratch[scores_offset + key] * bank[(size_t)key * width + column];
+        }
+        value += scratch[scores_offset + bank_count] * unit;
+        row[column] = value;
+        square_sum += value * value;
+    }
+    const float output_squares = simd_sum(square_sum);
+    if (tiisg == 0) rms_partials[INKLING2_RESIDENT_SIMDGROUPS + sgitg] = output_squares;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const float output_scale = inkling2_resident_rms_scale(
+        rms_partials + INKLING2_RESIDENT_SIMDGROUPS, width, output_eps);
+    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+        const float normalized = row[column] * output_scale;
+        output[column] = normalized * weights[column];
     }
 }
 

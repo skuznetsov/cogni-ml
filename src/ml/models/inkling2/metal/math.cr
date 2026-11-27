@@ -156,6 +156,45 @@ require "./scratch"
       encoder.dispatch_threadgroups({rows, query_count, 1}, {THREADS, 1, 1})
     end
 
+    def self.depth_mix_rms_supported?(width : Int32, count : Int32) : Bool
+      0 < width <= 2304 && 0 <= count <= 4
+    end
+
+    # Scalar, single-query depth mix between unweighted and weighted RMS.
+    # Optionally append the normalized input in the next unused bank slot.
+    def self.depth_mix_rms(
+      encoder : ML::Metal::ComputeEncoder, input : Inkling2View, bank : Inkling2View,
+      count : Int32, query : Inkling2View, weights : Inkling2View, output : Inkling2View,
+      width : Int32, unit_eps : Float32, output_eps : Float32, *, save_to_bank : Bool = false,
+    ) : Nil
+      unless depth_mix_rms_supported?(width, count)
+        raise ArgumentError.new("Unsupported Inkling 2 scalar depth mix shape")
+      end
+      validate_view_extent!(input, width, "Depth mix RMS input")
+      validate_view_extent!(bank, (count + (save_to_bank ? 1 : 0)) * width, "Depth mix RMS bank")
+      validate_view_extent!(query, width, "Depth mix RMS query")
+      validate_view_extent!(weights, width, "Depth mix RMS weights")
+      validate_view_extent!(output, width, "Depth mix RMS output")
+
+      # One row plus eight SIMD partials and one score per key.
+      payload_bytes = (width + (count + 1) * 9) * sizeof(Float32)
+      scratch_bytes = (payload_bytes + 15) // 16 * 16
+      bank_access = save_to_bank ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read
+      encoder.set_pipeline(pipeline("inkling2_resident_depth_mix_rms"))
+      encoder.set_buffer(input.buffer, 0, offset: input.offset)
+      encoder.set_buffer(bank.buffer, 1, bank_access, offset: bank.offset)
+      encoder.set_buffer(query.buffer, 2, offset: query.offset)
+      encoder.set_buffer(weights.buffer, 3, offset: weights.offset)
+      encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(width.to_u32, 5)
+      encoder.set_value(count.to_u32, 6)
+      encoder.set_value(unit_eps, 7)
+      encoder.set_value(output_eps, 8)
+      encoder.set_value(save_to_bank ? 1_u32 : 0_u32, 9)
+      encoder.set_threadgroup_memory(scratch_bytes, 0)
+      encoder.dispatch_threadgroups({1, 1, 1}, {THREADS, 1, 1})
+    end
+
     # Elementwise add permits output to alias either input.
     def self.add(
       encoder : ML::Metal::ComputeEncoder, x : Inkling2View, y : Inkling2View,
