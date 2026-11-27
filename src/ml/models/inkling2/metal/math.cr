@@ -167,23 +167,10 @@ require "./scratch"
       count : Int32, query : Inkling2View, weights : Inkling2View, output : Inkling2View,
       width : Int32, unit_eps : Float32, output_eps : Float32, *, save_to_bank : Bool = false,
     ) : Nil
-      unless depth_mix_rms_supported?(width, count)
-        raise ArgumentError.new("Unsupported Inkling 2 scalar depth mix shape")
-      end
-      validate_view_extent!(input, width, "Depth mix RMS input")
-      validate_view_extent!(bank, (count + (save_to_bank ? 1 : 0)) * width, "Depth mix RMS bank")
-      validate_view_extent!(query, width, "Depth mix RMS query")
       validate_view_extent!(weights, width, "Depth mix RMS weights")
       validate_view_extent!(output, width, "Depth mix RMS output")
-
-      # One row plus eight SIMD partials and one score per key.
-      payload_bytes = (width + (count + 1) * 9) * sizeof(Float32)
-      scratch_bytes = (payload_bytes + 15) // 16 * 16
-      bank_access = save_to_bank ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read
-      encoder.set_pipeline(pipeline("inkling2_resident_depth_mix_rms"))
-      encoder.set_buffer(input.buffer, 0, offset: input.offset)
-      encoder.set_buffer(bank.buffer, 1, bank_access, offset: bank.offset)
-      encoder.set_buffer(query.buffer, 2, offset: query.offset)
+      bind_scalar_depth_mix(encoder, "inkling2_resident_depth_mix_rms",
+        input, bank, query, width, count, 1, save_to_bank)
       encoder.set_buffer(weights.buffer, 3, offset: weights.offset)
       encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
       encoder.set_value(width.to_u32, 5)
@@ -191,8 +178,80 @@ require "./scratch"
       encoder.set_value(unit_eps, 7)
       encoder.set_value(output_eps, 8)
       encoder.set_value(save_to_bank ? 1_u32 : 0_u32, 9)
-      encoder.set_threadgroup_memory(scratch_bytes, 0)
       encoder.dispatch_threadgroups({1, 1, 1}, {THREADS, 1, 1})
+    end
+
+    # Three independent queries and weighted RMS output rows.
+    def self.depth_mix_rms_triplet(
+      encoder : ML::Metal::ComputeEncoder, input : Inkling2View, bank : Inkling2View,
+      count : Int32, queries : Inkling2View, weights : {Inkling2View, Inkling2View, Inkling2View},
+      output : Inkling2View, width : Int32, unit_eps : Float32, output_eps : Float32,
+      *, save_to_bank : Bool = false,
+    ) : Nil
+      validate_view_extent!(output, triplet_elements(width, 3), "Depth mix RMS triplet output")
+      weights.each { |weight| validate_view_extent!(weight, width, "Depth mix RMS triplet weights") }
+      bind_scalar_depth_mix(encoder, "inkling2_resident_depth_mix_rms_triplet",
+        input, bank, queries, width, count, 3, save_to_bank)
+      weights.each_with_index do |weight, index|
+        encoder.set_buffer(weight.buffer, 3 + index, offset: weight.offset)
+      end
+      encoder.set_buffer(output.buffer, 6, ML::Metal::BufferAccess::Write, offset: output.offset)
+      encoder.set_value(width.to_u32, 7)
+      encoder.set_value(count.to_u32, 8)
+      encoder.set_value(unit_eps, 9)
+      encoder.set_value(output_eps, 10)
+      encoder.set_value(save_to_bank ? 1_u32 : 0_u32, 11)
+      encoder.dispatch_threadgroups({3, 1, 1}, {THREADS, 1, 1})
+    end
+
+    # Controllers use raw mixtures in their epilogue and pairs of
+    # independently normalized mixtures and messages in their down projection.
+    def self.depth_mix_concat(
+      encoder : ML::Metal::ComputeEncoder, input : Inkling2View, bank : Inkling2View,
+      count : Int32, queries : Inkling2View, messages : Inkling2View, mixed : Inkling2View,
+      features : Inkling2View, width : Int32, eps : Float32, query_count : Int32, feature_count : Int32,
+      *, save_to_bank : Bool = false,
+    ) : Nil
+      unless (feature_count == 1 || feature_count == 3) && (query_count == 1 || query_count == feature_count)
+        raise ArgumentError.new("Unsupported Inkling 2 scalar controller feature layout")
+      end
+      validate_view_extent!(messages, triplet_elements(width, feature_count), "Depth mix messages")
+      validate_view_extent!(mixed, triplet_elements(width, query_count), "Depth mix mixtures")
+      validate_view_extent!(features, triplet_elements(width, 2 * feature_count), "Depth mix features")
+      bind_scalar_depth_mix(encoder, "inkling2_resident_depth_mix_concat",
+        input, bank, queries, width, count, query_count, save_to_bank)
+      encoder.set_buffer(messages.buffer, 3, offset: messages.offset)
+      encoder.set_buffer(mixed.buffer, 4, ML::Metal::BufferAccess::Write, offset: mixed.offset)
+      encoder.set_buffer(features.buffer, 5, ML::Metal::BufferAccess::Write, offset: features.offset)
+      encoder.set_value(width.to_u32, 6)
+      encoder.set_value(count.to_u32, 7)
+      encoder.set_value(eps, 8)
+      encoder.set_value(query_count.to_u32, 9)
+      encoder.set_value(save_to_bank ? 1_u32 : 0_u32, 10)
+      encoder.dispatch_threadgroups({feature_count, 1, 1}, {THREADS, 1, 1})
+    end
+
+    private def self.bind_scalar_depth_mix(
+      encoder : ML::Metal::ComputeEncoder, kernel : String,
+      input : Inkling2View, bank : Inkling2View, queries : Inkling2View,
+      width : Int32, count : Int32, query_count : Int32, save_to_bank : Bool,
+    ) : Nil
+      unless depth_mix_rms_supported?(width, count)
+        raise ArgumentError.new("Unsupported Inkling 2 scalar depth mix shape")
+      end
+      validate_view_extent!(input, width, "Depth mix input")
+      validate_view_extent!(bank, (count + (save_to_bank ? 1 : 0)) * width, "Depth mix bank")
+      validate_view_extent!(queries, query_count * width, "Depth mix queries")
+
+      # One row plus eight SIMD partials and one score per key.
+      payload_bytes = (width + (count + 1) * 9) * sizeof(Float32)
+      scratch_bytes = (payload_bytes + 15) // 16 * 16
+      bank_access = save_to_bank ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read
+      encoder.set_pipeline(pipeline(kernel))
+      encoder.set_buffer(input.buffer, 0, offset: input.offset)
+      encoder.set_buffer(bank.buffer, 1, bank_access, offset: bank.offset)
+      encoder.set_buffer(queries.buffer, 2, offset: queries.offset)
+      encoder.set_threadgroup_memory(scratch_bytes, 0)
     end
 
     # Elementwise add permits output to alias either input.

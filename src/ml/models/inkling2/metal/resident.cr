@@ -899,21 +899,38 @@ module ML::GGUF
       save_block = physical % @config.res_block_size == 0
       queries = layer.attn_res_query
       fused_attn_query = queries if fuse_depth_mix && sliding && messages.nil?
+      fuse_scalar_inputs = fuse_depth_mix && !tile.decode_block?
+      saved_attention_block = false
       fuse_convolution = tile.rows == 1 && !tile.decode_block? && decode_fused_scalar_convolution?
       attended = attend(tile, layer.attention, visit, recycle_attention_inputs,
         residual_output: fuse_convolution ? residual : nil, add_residual: !save_block) do
         if query = fused_attn_query
           q_in = normalize_depth_mix(tile, tile.current, query, layer.q_norm, save_to_bank: save_block)
+          saved_attention_block = save_block
           next {q_in, q_in, q_in}
         end
+        if fuse_scalar_inputs && !sliding && messages.nil? && queries && decode_fused_global_inputs?
+          output = @scratch.take(MathOps.triplet_elements(tile.width, 3))
+          weights = {constant(layer.q_norm), constant(layer.k_norm), constant(layer.v_norm)}
+          MathOps.depth_mix_rms_triplet(encoder, tile.current, tile.blocks, tile.block_count,
+            constant(queries), weights, output, tile.width, DEPTH_EPS, @config.rms_eps, save_to_bank: save_block)
+          saved_attention_block = save_block
+          next {output, output.slice(tile.width), output.slice(2 * tile.width)}
+        end
         query_count = sliding ? 1 : 3
-        mixed = queries ? mix(tile, tile.current, queries, query_count) : tile.current
+        if fuse_scalar_inputs && queries && controller && messages && decode_fused_attention_inputs?
+          mixed, features = mix_control_inputs(tile, tile.current, queries, messages, query_count, 3,
+            save_to_bank: save_block)
+          saved_attention_block = save_block
+        else
+          mixed = queries ? mix(tile, tile.current, queries, query_count) : tile.current
+        end
         q = mixed
         distinct_inputs = query_count == 3 && !queries.nil?
         k = distinct_inputs ? mixed.slice(tile.elements) : mixed
         v = distinct_inputs ? mixed.slice(2 * tile.elements) : mixed
         if controller && messages
-          q, k, v = control_attention(tile, controller, {q, k, v}, messages)
+          q, k, v = control_attention(tile, controller, {q, k, v}, messages, features)
         end
         if sliding && !messages
           q_in = normalize(tile, q, layer.q_norm)
@@ -930,7 +947,7 @@ module ML::GGUF
       if save_block
         # The fused attention input can publish the new slot early. Advance
         # the visible bank count here so attention still sees the old bank.
-        unless fused_attn_query
+        unless saved_attention_block
           block = tile.blocks.slice(tile.block_count * tile.elements)
           MathOps.rms(encoder, tile.current, block, nil, tile.width, tile.rows, DEPTH_EPS)
         end
@@ -944,9 +961,16 @@ module ML::GGUF
       ffn_in = if fuse_depth_mix && controller.nil?
                  normalize_depth_mix(tile, residual, layer.ffn_res_query, layer.ffn_norm)
                else
-                 ffn = mix(tile, residual, layer.ffn_res_query, 1)
                  if controller && messages
-                   ffn = control(tile, controller, 3, ffn, messages.slice(3 * tile.elements))
+                   message = messages.slice(3 * tile.elements)
+                   if fuse_scalar_inputs && decode_fused_ffn_inputs?
+                     mixed_ffn, ffn_features = mix_control_inputs(tile, residual, layer.ffn_res_query, message, 1, 1)
+                   else
+                     mixed_ffn = mix(tile, residual, layer.ffn_res_query, 1)
+                   end
+                   ffn = control(tile, controller, 3, mixed_ffn, message, ffn_features)
+                 else
+                   ffn = mix(tile, residual, layer.ffn_res_query, 1)
                  end
                  if input_mark = moe_input_mark
                    output = tile.next_state
@@ -1041,6 +1065,15 @@ module ML::GGUF
       result
     end
 
+    private def mix_control_inputs(tile : Tile, input : Inkling2View, queries : Array(Float32), messages : Inkling2View,
+                                   query_count : Int32, feature_count : Int32, *, save_to_bank : Bool = false) : {Inkling2View, Inkling2View}
+      mixed = @scratch.take(query_count * tile.width)
+      features = @scratch.take(feature_count * 2 * tile.width)
+      MathOps.depth_mix_concat(tile.encoder, input, tile.blocks, tile.block_count, constant(queries), messages,
+        mixed, features, tile.width, DEPTH_EPS, query_count, feature_count, save_to_bank: save_to_bank)
+      {mixed, features}
+    end
+
     private def normalize_depth_mix(tile : Tile, input : Inkling2View, query : Array(Float32), weight : Array(Float32),
                                     output : Inkling2View? = nil, *, save_to_bank : Bool = false) : Inkling2View
       result = output || tile.hidden
@@ -1081,6 +1114,19 @@ module ML::GGUF
       {% end %}
     end
 
+    # Independent same-binary comparison arms for scalar input preparation.
+    private def decode_fused_attention_inputs? : Bool
+      true
+    end
+
+    private def decode_fused_ffn_inputs? : Bool
+      true
+    end
+
+    private def decode_fused_global_inputs? : Bool
+      true
+    end
+
     # Keep this predicate as the same-binary A/B hook. The triplet dispatch is
     # enabled on Apple Silicon; block4 and multi-row paths do not consult it.
     private def decode_rms_concat_triplet? : Bool
@@ -1115,14 +1161,14 @@ module ML::GGUF
 
     private def control_attention(tile : Tile, controller : Inkling2LoopWeights,
                                   inputs : {Inkling2View, Inkling2View, Inkling2View},
-                                  messages : Inkling2View) : {Inkling2View, Inkling2View, Inkling2View}
+                                  messages : Inkling2View, prepared_features : Inkling2View? = nil) : {Inkling2View, Inkling2View, Inkling2View}
       downs = {controller.down[0], controller.down[1], controller.down[2]}
+      feature_dim = 2 * tile.elements
       unless tile.rows == 1 && Inkling2ResidentLinear.f32_triplet_supported?(downs)
-        return {
-          control(tile, controller, 0, inputs[0], messages),
-          control(tile, controller, 1, inputs[1], messages.slice(tile.elements)),
-          control(tile, controller, 2, inputs[2], messages.slice(2 * tile.elements)),
-        }
+        return {0, 1, 2}.map do |part|
+          control(tile, controller, part, inputs[part], messages.slice(part * tile.elements),
+            prepared_features.try(&.slice(part * feature_dim)))
+        end
       end
 
       if decode_fused_control? && decode_control_triplet?
@@ -1133,7 +1179,6 @@ module ML::GGUF
       end
       mark = @scratch.mark
       triplet_rms_concat = decode_rms_concat_triplet?
-      feature_dim = 2 * tile.elements
       rank_dim = downs[0].out_dim
       feature_elements = if triplet_rms_concat
                            MathOps.rms_concat_triplet_elements(tile.width)
@@ -1145,14 +1190,16 @@ module ML::GGUF
                       else
                         3 * rank_dim
                       end
-      features = @scratch.take(feature_elements)
+      features = prepared_features || @scratch.take(feature_elements)
       ranks = @scratch.take(rank_elements)
-      if triplet_rms_concat
-        MathOps.rms_concat_triplet(tile.encoder, inputs, messages, features, tile.width, DEPTH_EPS)
-      else
-        inputs.each_with_index do |input, index|
-          MathOps.rms_concat(tile.encoder, input, messages.slice(index * tile.elements),
-            features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
+      unless prepared_features
+        if triplet_rms_concat
+          MathOps.rms_concat_triplet(tile.encoder, inputs, messages, features, tile.width, DEPTH_EPS)
+        else
+          inputs.each_with_index do |input, index|
+            MathOps.rms_concat(tile.encoder, input, messages.slice(index * tile.elements),
+              features.slice(index * feature_dim), tile.width, tile.rows, DEPTH_EPS)
+          end
         end
       end
       @linear.project_f32_triplet(tile.encoder, downs, features, ranks)
@@ -1172,11 +1219,14 @@ module ML::GGUF
     end
 
     private def control(tile : Tile, controller : Inkling2LoopWeights, index : Int32,
-                        input : Inkling2View, message : Inkling2View) : Inkling2View
+                        input : Inkling2View, message : Inkling2View,
+                        prepared_features : Inkling2View? = nil) : Inkling2View
       result = tile.hidden
       mark = @scratch.mark
-      features = @scratch.take(2 * tile.elements)
-      MathOps.rms_concat(tile.encoder, input, message, features, tile.width, tile.rows, DEPTH_EPS)
+      features = prepared_features || @scratch.take(2 * tile.elements)
+      unless prepared_features
+        MathOps.rms_concat(tile.encoder, input, message, features, tile.width, tile.rows, DEPTH_EPS)
+      end
       rank = @scratch.take(controller.down[index].out_dim * tile.rows)
       unless @linear.project_controller_down_mma(
                tile.encoder, controller.down[index], features, rank, tile.rows,

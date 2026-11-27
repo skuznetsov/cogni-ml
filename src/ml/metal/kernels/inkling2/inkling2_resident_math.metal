@@ -272,33 +272,44 @@ kernel void inkling2_resident_depth_mix(
     }
 }
 
-// One token and one depth query. Keep the two intermediate rows in
-// threadgroup memory with the same lane ownership and FP32 reductions.
-kernel void inkling2_resident_depth_mix_rms(
-    device const float* input        [[buffer(0)]],
-    device       float* bank         [[buffer(1)]],
-    device const float* query        [[buffer(2)]],
-    device const float* weights      [[buffer(3)]],
-    device       float* output       [[buffer(4)]],
-    constant     uint&  width        [[buffer(5)]],
-    constant     uint&  bank_count   [[buffer(6)]],
-    constant     float& unit_eps     [[buffer(7)]],
-    constant     float& output_eps   [[buffer(8)]],
-    constant     uint&  save_to_bank [[buffer(9)]],
-    threadgroup  float* scratch      [[threadgroup(0)]],
-    ushort tiisg [[thread_index_in_simdgroup]],
-    ushort sgitg [[simdgroup_index_in_threadgroup]],
-    ushort tid   [[thread_index_in_threadgroup]])
+// Preserve lane ownership, key order and FP32 rounding between unit RMS,
+// depth mix, and the weighted RMS or controller feature epilogue.
+template <bool Concat>
+inline void inkling2_resident_depth_mix_normalized_row(
+    device const float* input,
+    device       float* bank,
+    device const float* query,
+    device const float* weights_or_message,
+    device       float* mixed,
+    device       float* output,
+    uint width,
+    uint bank_count,
+    float unit_eps,
+    float output_eps,
+    bool save_to_bank,
+    threadgroup float* scratch,
+    threadgroup float* rms_partials,
+    ushort tiisg,
+    ushort sgitg,
+    ushort tid)
 {
     const uint key_count = bank_count + 1;
     const uint scores_offset = key_count * INKLING2_RESIDENT_SIMDGROUPS;
     threadgroup float* row = scratch + scores_offset + key_count;
-    threadgroup float rms_partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
 
     float square_sum = 0.0f;
+    float message_squares = 0.0f;
     for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
         const float value = input[column];
         square_sum += value * value;
+        if (Concat) {
+            const float message = weights_or_message[column];
+            message_squares += message * message;
+        }
+    }
+    if (Concat) {
+        const float message_group_sum = simd_sum(message_squares);
+        if (tiisg == 0) rms_partials[2 * INKLING2_RESIDENT_SIMDGROUPS + sgitg] = message_group_sum;
     }
     const float unit_squares = simd_sum(square_sum);
     if (tiisg == 0) rms_partials[sgitg] = unit_squares;
@@ -333,6 +344,7 @@ kernel void inkling2_resident_depth_mix_rms(
         }
         value += scratch[scores_offset + bank_count] * unit;
         row[column] = value;
+        if (Concat && mixed != nullptr) mixed[column] = value;
         square_sum += value * value;
     }
     const float output_squares = simd_sum(square_sum);
@@ -341,10 +353,102 @@ kernel void inkling2_resident_depth_mix_rms(
 
     const float output_scale = inkling2_resident_rms_scale(
         rms_partials + INKLING2_RESIDENT_SIMDGROUPS, width, output_eps);
-    for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
-        const float normalized = row[column] * output_scale;
-        output[column] = normalized * weights[column];
+    if (Concat) {
+        const float message_scale = inkling2_resident_rms_scale(
+            rms_partials + 2 * INKLING2_RESIDENT_SIMDGROUPS, width, output_eps);
+        for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+            output[column] = row[column] * output_scale;
+            output[width + column] = weights_or_message[column] * message_scale;
+        }
+    } else {
+        for (uint column = tid; column < width; column += INKLING2_RESIDENT_THREADS) {
+            const float normalized = row[column] * output_scale;
+            output[column] = normalized * weights_or_message[column];
+        }
     }
+}
+
+// One token and one depth query. Keep the two intermediate rows in
+// threadgroup memory with the same lane ownership and FP32 reductions.
+kernel void inkling2_resident_depth_mix_rms(
+    device const float* input        [[buffer(0)]],
+    device       float* bank         [[buffer(1)]],
+    device const float* query        [[buffer(2)]],
+    device const float* weights      [[buffer(3)]],
+    device       float* output       [[buffer(4)]],
+    constant     uint&  width        [[buffer(5)]],
+    constant     uint&  bank_count   [[buffer(6)]],
+    constant     float& unit_eps     [[buffer(7)]],
+    constant     float& output_eps   [[buffer(8)]],
+    constant     uint&  save_to_bank [[buffer(9)]],
+    threadgroup  float* scratch      [[threadgroup(0)]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    threadgroup float rms_partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_depth_mix_normalized_row<false>(
+        input, bank, query, weights, nullptr, output, width, bank_count, unit_eps, output_eps,
+        save_to_bank != 0, scratch, rms_partials, tiisg, sgitg, tid);
+}
+
+kernel void inkling2_resident_depth_mix_rms_triplet(
+    device const float* input        [[buffer(0)]],
+    device       float* bank         [[buffer(1)]],
+    device const float* queries      [[buffer(2)]],
+    device const float* weight0      [[buffer(3)]],
+    device const float* weight1      [[buffer(4)]],
+    device const float* weight2      [[buffer(5)]],
+    device       float* output       [[buffer(6)]],
+    constant     uint&  width        [[buffer(7)]],
+    constant     uint&  bank_count   [[buffer(8)]],
+    constant     float& unit_eps     [[buffer(9)]],
+    constant     float& output_eps   [[buffer(10)]],
+    constant     uint&  save_to_bank [[buffer(11)]],
+    threadgroup  float* scratch      [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint part = tgpig.x;
+    const size_t offset = (size_t)part * width;
+    device const float* weights = part == 0 ? weight0 : (part == 1 ? weight1 : weight2);
+    threadgroup float rms_partials[2 * INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_depth_mix_normalized_row<false>(
+        input, bank, queries + offset, weights, nullptr, output + offset, width, bank_count,
+        unit_eps, output_eps, save_to_bank != 0 && part == 0, scratch, rms_partials, tiisg, sgitg, tid);
+}
+
+// Each feature pair uses an independent reduction group. Sliding attention
+// shares the depth query, so only part zero publishes the raw mixture.
+kernel void inkling2_resident_depth_mix_concat(
+    device const float* input        [[buffer(0)]],
+    device       float* bank         [[buffer(1)]],
+    device const float* queries      [[buffer(2)]],
+    device const float* messages     [[buffer(3)]],
+    device       float* mixed        [[buffer(4)]],
+    device       float* features     [[buffer(5)]],
+    constant     uint&  width        [[buffer(6)]],
+    constant     uint&  bank_count   [[buffer(7)]],
+    constant     float& eps          [[buffer(8)]],
+    constant     uint&  query_count  [[buffer(9)]],
+    constant     uint&  save_to_bank [[buffer(10)]],
+    threadgroup  float* scratch      [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    ushort tid   [[thread_index_in_threadgroup]])
+{
+    const uint part = tgpig.x;
+    const size_t feature_offset = (size_t)part * width;
+    const size_t query_offset = query_count == 1 ? 0 : feature_offset;
+    device float* raw = query_count == 1 && part != 0 ? nullptr : mixed + query_offset;
+    threadgroup float rms_partials[3 * INKLING2_RESIDENT_SIMDGROUPS];
+    inkling2_resident_depth_mix_normalized_row<true>(
+        input, bank, queries + query_offset, messages + feature_offset, raw,
+        features + 2 * feature_offset, width, bank_count, eps, eps,
+        save_to_bank != 0 && part == 0, scratch, rms_partials, tiisg, sgitg, tid);
 }
 
 kernel void inkling2_resident_add(

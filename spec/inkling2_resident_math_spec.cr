@@ -310,6 +310,215 @@ require "../src/ml/gguf/inkling2_resident_math"
       end
     end
 
+    it "matches scalar controller features and weighted depth-mix triplets bitwise" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      support = Inkling2ResidentMathSpecSupport
+      math = ML::GGUF::Inkling2ResidentMath
+      prefix = Inkling2ResidentMathSpecSupport::PREFIX
+      suffix = 4_i32
+      prefix_bits = Array(Float32).new(prefix, -777.0_f32).map(&.unsafe_as(UInt32))
+      suffix_bits = Array(Float32).new(suffix, -999.0_f32).map(&.unsafe_as(UInt32))
+      count = 4_i32
+      bank_capacity = count + 1
+
+      {513_i32, 2304_i32}.each do |width|
+        buffers = [] of ML::MetalBuffer
+        begin
+          bank_elements = bank_capacity * width
+          bank_buffer_elements = prefix + bank_elements + suffix
+          input_values = Array(Float32).new(width) do |index|
+            ((index * 37 % 251) - 125).to_f32 * 0.0078125_f32 +
+              ((index * 11 % 19) - 9).to_f32 * 0.0009765625_f32
+          end
+          bank_values = Array(Float32).new(bank_elements) do |index|
+            ((index * 29 % 311) - 155).to_f32 * 0.005859375_f32 +
+              ((index // width) - 2).to_f32 * 0.03125_f32
+          end
+          query_values = Array(Float32).new(3 * width) do |index|
+            feature = index // width
+            column = index % width
+            ((column * (23 + 2 * feature) + 31 * feature) % 173 - 86).to_f32 *
+              (0.0107421875_f32 + feature.to_f32 * 0.001953125_f32)
+          end
+          message_values = Array(Float32).new(3 * width) do |index|
+            feature = index // width
+            column = index % width
+            ((column * (29 + 4 * feature) + 17 * feature) % 113 - 56).to_f32 *
+              (0.005859375_f32 + feature.to_f32 * 0.00146484375_f32)
+          end
+
+          concat_input = support.guarded_float_view(input_values, suffix, buffers)
+          concat_reference_bank = support.guarded_float_view(bank_values, suffix, buffers)
+          concat_no_save_bank = support.guarded_float_view(bank_values, suffix, buffers)
+          concat_save_bank = support.guarded_float_view(bank_values, suffix, buffers)
+          concat_queries = support.guarded_float_view(query_values, suffix, buffers)
+          concat_messages = support.guarded_float_view(message_values, suffix, buffers)
+          concat_unit = support.guarded_float_view(Array(Float32).new(width, 0.0_f32), suffix, buffers)
+          concat_reference_mixed = support.guarded_float_view(Array(Float32).new(width, 0.0_f32), suffix, buffers)
+          concat_reference_features = support.guarded_float_view(Array(Float32).new(6 * width, 123.0_f32), suffix, buffers)
+          concat_no_save_mixed = support.guarded_float_view(Array(Float32).new(width, 321.0_f32), suffix, buffers)
+          concat_no_save_features = support.guarded_float_view(Array(Float32).new(6 * width, 321.0_f32), suffix, buffers)
+          concat_save_mixed = support.guarded_float_view(Array(Float32).new(width, 321.0_f32), suffix, buffers)
+          concat_save_features = support.guarded_float_view(Array(Float32).new(6 * width, 321.0_f32), suffix, buffers)
+
+          weighted_input_values = Array(Float32).new(width) do |index|
+            ((index * 41 % 263) - 131).to_f32 * 0.0068359375_f32 +
+              ((index * 5 % 23) - 11).to_f32 * 0.001220703125_f32
+          end
+          weighted_bank_values = Array(Float32).new(bank_elements) do |index|
+            ((index * 31 % 337) - 168).to_f32 * 0.0048828125_f32 +
+              ((index // width) - 1).to_f32 * 0.02734375_f32
+          end
+          weighted_query_values = Array(Float32).new(3 * width) do |index|
+            feature = index // width
+            column = index % width
+            ((column * (19 + 6 * feature) + 13 * feature) % 191 - 95).to_f32 *
+              (0.0087890625_f32 + feature.to_f32 * 0.00244140625_f32)
+          end
+          weight_values = Array(Array(Float32)).new(3) do |feature|
+            Array(Float32).new(width) do |index|
+              ((index * (13 + 2 * feature) + 7 * feature) % 47 - 23).to_f32 *
+                (0.021484375_f32 + feature.to_f32 * 0.00390625_f32)
+            end
+          end
+          weighted_input = support.guarded_float_view(weighted_input_values, suffix, buffers)
+          weighted_reference_bank = support.guarded_float_view(weighted_bank_values, suffix, buffers)
+          weighted_no_save_bank = support.guarded_float_view(weighted_bank_values, suffix, buffers)
+          weighted_save_bank = support.guarded_float_view(weighted_bank_values, suffix, buffers)
+          weighted_queries = support.guarded_float_view(weighted_query_values, suffix, buffers)
+          weighted_unit = support.guarded_float_view(Array(Float32).new(width, 0.0_f32), suffix, buffers)
+          weighted_weights = {
+            support.guarded_float_view(weight_values[0], suffix, buffers),
+            support.guarded_float_view(weight_values[1], suffix, buffers),
+            support.guarded_float_view(weight_values[2], suffix, buffers),
+          }
+          weighted_reference_mixtures = support.guarded_float_view(Array(Float32).new(3 * width, 0.0_f32), suffix, buffers)
+          weighted_reference_output = support.guarded_float_view(Array(Float32).new(3 * width, 123.0_f32), suffix, buffers)
+          weighted_no_save_output = support.guarded_float_view(Array(Float32).new(3 * width, 321.0_f32), suffix, buffers)
+          weighted_save_output = support.guarded_float_view(Array(Float32).new(3 * width, 321.0_f32), suffix, buffers)
+
+          concat_input_before = support.raw_bits(concat_input, prefix + width + suffix)
+          concat_queries_before = support.raw_bits(concat_queries, prefix + 3 * width + suffix)
+          concat_messages_before = support.raw_bits(concat_messages, prefix + 3 * width + suffix)
+          concat_bank_before = support.raw_bits(concat_reference_bank, bank_buffer_elements)
+          weighted_input_before = support.raw_bits(weighted_input, prefix + width + suffix)
+          weighted_queries_before = support.raw_bits(weighted_queries, prefix + 3 * width + suffix)
+          weighted_bank_before = support.raw_bits(weighted_reference_bank, bank_buffer_elements)
+          weighted_weights_before = weighted_weights.map do |weight|
+            support.raw_bits(weight, prefix + width + suffix)
+          end
+
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          encoder_ended = false
+          begin
+            concat_eps = 0.00031_f32
+            unit_eps = 0.00047_f32
+            output_eps = 0.0021_f32
+
+            # Independent normalization, raw depth mix, and three controller
+            # feature pairs are the oracle for the fused scalar-query path.
+            math.rms(encoder, concat_input, concat_unit, nil, width, 1_i32, concat_eps)
+            math.depth_mix(encoder, concat_reference_bank, count, concat_unit, concat_queries,
+              concat_reference_mixed, width, 1_i32, 1_i32)
+            3.times do |feature|
+              math.rms_concat(encoder, concat_reference_mixed, concat_messages.slice(feature * width),
+                concat_reference_features.slice(feature * 2 * width), width, 1_i32, concat_eps)
+            end
+            math.depth_mix_concat(encoder, concat_input, concat_no_save_bank, count, concat_queries,
+              concat_messages, concat_no_save_mixed, concat_no_save_features, width, concat_eps,
+              1_i32, 3_i32)
+            math.depth_mix_concat(encoder, concat_input, concat_save_bank, count, concat_queries,
+              concat_messages, concat_save_mixed, concat_save_features, width, concat_eps,
+              1_i32, 3_i32, save_to_bank: true)
+
+            # Three independent query/weight dispatches are the oracle for
+            # the fused weighted triplet; each query and scale is distinct.
+            math.rms(encoder, weighted_input, weighted_unit, nil, width, 1_i32, unit_eps)
+            3.times do |feature|
+              offset = feature * width
+              math.depth_mix(encoder, weighted_reference_bank, count, weighted_unit,
+                weighted_queries.slice(offset), weighted_reference_mixtures.slice(offset),
+                width, 1_i32, 1_i32)
+              math.rms(encoder, weighted_reference_mixtures.slice(offset),
+                weighted_reference_output.slice(offset), weighted_weights[feature],
+                width, 1_i32, output_eps)
+            end
+            math.depth_mix_rms_triplet(encoder, weighted_input, weighted_no_save_bank, count,
+              weighted_queries, weighted_weights, weighted_no_save_output, width, unit_eps, output_eps)
+            math.depth_mix_rms_triplet(encoder, weighted_input, weighted_save_bank, count,
+              weighted_queries, weighted_weights, weighted_save_output, width, unit_eps, output_eps,
+              save_to_bank: true)
+
+            encoder.end_encoding
+            encoder_ended = true
+            command.commit_and_wait
+
+            concat_expected_mixed_bits = support.read(concat_reference_mixed, width).map(&.unsafe_as(UInt32))
+            support.read(concat_no_save_mixed, width).map(&.unsafe_as(UInt32)).should eq(concat_expected_mixed_bits)
+            support.read(concat_save_mixed, width).map(&.unsafe_as(UInt32)).should eq(concat_expected_mixed_bits)
+            concat_expected_features_bits = support.read(concat_reference_features, 6 * width).map(&.unsafe_as(UInt32))
+            support.read(concat_no_save_features, 6 * width).map(&.unsafe_as(UInt32)).should eq(concat_expected_features_bits)
+            support.read(concat_save_features, 6 * width).map(&.unsafe_as(UInt32)).should eq(concat_expected_features_bits)
+
+            weighted_expected_bits = support.read(weighted_reference_output, 3 * width).map(&.unsafe_as(UInt32))
+            support.read(weighted_no_save_output, 3 * width).map(&.unsafe_as(UInt32)).should eq(weighted_expected_bits)
+            support.read(weighted_save_output, 3 * width).map(&.unsafe_as(UInt32)).should eq(weighted_expected_bits)
+
+            support.raw_bits(concat_input, prefix + width + suffix).should eq(concat_input_before)
+            support.raw_bits(concat_queries, prefix + 3 * width + suffix).should eq(concat_queries_before)
+            support.raw_bits(concat_messages, prefix + 3 * width + suffix).should eq(concat_messages_before)
+            support.raw_bits(concat_reference_bank, bank_buffer_elements).should eq(concat_bank_before)
+            support.raw_bits(concat_no_save_bank, bank_buffer_elements).should eq(concat_bank_before)
+            concat_expected_save_bank = concat_bank_before.dup
+            concat_unit_bits = support.read(concat_unit, width).map(&.unsafe_as(UInt32))
+            concat_unit_bits.each_with_index do |bits, index|
+              concat_expected_save_bank[prefix + count * width + index] = bits
+            end
+            support.raw_bits(concat_save_bank, bank_buffer_elements).should eq(concat_expected_save_bank)
+
+            support.raw_bits(weighted_input, prefix + width + suffix).should eq(weighted_input_before)
+            support.raw_bits(weighted_queries, prefix + 3 * width + suffix).should eq(weighted_queries_before)
+            weighted_weights.each_with_index do |weight, index|
+              support.raw_bits(weight, prefix + width + suffix).should eq(weighted_weights_before[index])
+            end
+            support.raw_bits(weighted_reference_bank, bank_buffer_elements).should eq(weighted_bank_before)
+            support.raw_bits(weighted_no_save_bank, bank_buffer_elements).should eq(weighted_bank_before)
+            weighted_expected_save_bank = weighted_bank_before.dup
+            weighted_unit_bits = support.read(weighted_unit, width).map(&.unsafe_as(UInt32))
+            weighted_unit_bits.each_with_index do |bits, index|
+              weighted_expected_save_bank[prefix + count * width + index] = bits
+            end
+            support.raw_bits(weighted_save_bank, bank_buffer_elements).should eq(weighted_expected_save_bank)
+
+            [
+              {concat_unit, width}, {concat_reference_mixed, width},
+              {concat_no_save_mixed, width}, {concat_save_mixed, width},
+              {concat_reference_features, 6 * width}, {concat_no_save_features, 6 * width},
+              {concat_save_features, 6 * width}, {weighted_unit, width},
+              {weighted_reference_mixtures, 3 * width}, {weighted_reference_output, 3 * width},
+              {weighted_no_save_output, 3 * width}, {weighted_save_output, 3 * width},
+            ].each do |guarded|
+              bits = support.raw_bits(guarded[0], prefix + guarded[1] + suffix)
+              bits[0, prefix].should eq(prefix_bits)
+              bits[prefix + guarded[1], suffix].should eq(suffix_bits)
+            end
+            {concat_reference_bank, concat_no_save_bank, concat_save_bank,
+             weighted_reference_bank, weighted_no_save_bank, weighted_save_bank}.each do |bank|
+              bits = support.raw_bits(bank, bank_buffer_elements)
+              bits[0, prefix].should eq(prefix_bits)
+              bits[prefix + bank_elements, suffix].should eq(suffix_bits)
+            end
+          ensure
+            encoder.end_encoding unless encoder_ended
+          end
+        ensure
+          buffers.each(&.release)
+        end
+      end
+    end
+
     it "encodes offset-aware row and element math in one command buffer" do
       pending! "Metal unavailable" unless ML::Metal::Device.init!
 
