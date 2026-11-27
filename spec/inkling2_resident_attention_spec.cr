@@ -16,6 +16,12 @@ require "../src/ml/gguf/inkling2_resident_math"
     end
   end
 
+  class ML::GGUF::Inkling2ResidentAttention
+    def resident_spec_fast_global_split_partition_count(keys : Int32) : Int32
+      fast_global_split_partition_count(keys)
+    end
+  end
+
   private record ResidentProjectedRow,
     q : Array(Float32),
     k : Array(Float32),
@@ -1123,6 +1129,101 @@ require "../src/ml/gguf/inkling2_resident_math"
         ensure
           reference.close
           fast.close
+        end
+      end
+
+      it "selects dynamic split-K partitions only for fast long global attention" do
+        config = resident_test_config(sliding: false, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 1_024_i32, max_seq: 20_481_i32)
+        sliding_config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 1_024_i32, max_seq: 20_481_i32)
+        fast = ML::GGUF::Inkling2ResidentAttention.new(config, false, 20_481_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast)
+        regular = ML::GGUF::Inkling2ResidentAttention.new(config, false, 20_481_i32)
+        sliding_fast = ML::GGUF::Inkling2ResidentAttention.new(sliding_config, true, 20_481_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast)
+        begin
+          fast.resident_spec_fast_global_split_partition_count(16_384_i32).should eq(4_i32)
+          fast.resident_spec_fast_global_split_partition_count(16_385_i32).should eq(5_i32)
+          fast.resident_spec_fast_global_split_partition_count(20_480_i32).should eq(5_i32)
+          fast.resident_spec_fast_global_split_partition_count(20_481_i32).should eq(6_i32)
+          regular.resident_spec_fast_global_split_partition_count(20_481_i32).should eq(4_i32)
+          sliding_fast.resident_spec_fast_global_split_partition_count(20_481_i32).should eq(4_i32)
+        ensure
+          fast.close
+          regular.close
+          sliding_fast.close
+        end
+      end
+
+      it "keeps fast scalar and verify4 split-K aligned at the 16,384-key global boundary for F32 and F16 KV" do
+        start = 16_381_i32
+        max_seq = start + 4
+        {ML::GGUF::Inkling2ResidentAttention::KVStorage::F32,
+         ML::GGUF::Inkling2ResidentAttention::KVStorage::F16}.each do |kv_storage|
+          config = resident_test_config(sliding: false, n_head: 3_i32, n_head_kv: 1_i32,
+            head_dim: 128_i32, rel_dim: 16_i32, window: 1_024_i32, max_seq: max_seq)
+          weights = resident_attention_weights(config)
+          matmul = ML::GGUF::Inkling2CPUMatmul.new
+          pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
+          projected = Array(ResidentProjectedRow).new(max_seq) { |row| pattern[row % pattern.size] }
+          blocked = ML::GGUF::Inkling2ResidentAttention.new(config, false, max_seq,
+            rollback_rows: 4_i32, prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast,
+            kv_storage: kv_storage)
+          scalar = ML::GGUF::Inkling2ResidentAttention.new(config, false, max_seq,
+            prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast,
+            kv_storage: kv_storage)
+          begin
+            # Exercise normal cache growth with bounded Flash prefill
+            # commands so that Shader Validation can run this test.
+            growth_ends = (256_i32...start).step(by: 256_i32).to_a << start
+            prefix_start = 0_i32
+            growth_ends.each do |prefix_end|
+              prefix_rows = projected[prefix_start, prefix_end - prefix_start]
+              resident_run_tile(blocked, prefix_start, prefix_rows, weights, config)
+              resident_run_tile(scalar, prefix_start, prefix_rows, weights, config)
+              prefix_start = prefix_end
+            end
+
+            block_rows = projected[start, 4]
+            ML::Metal::PipelineCache.clear
+            actual = resident_run_tile(blocked, start, block_rows, weights, config, decode_block: true)
+            suffix = kv_storage.f16? ? "_f16" : ""
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel#{suffix}").should be_true
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split#{suffix}").should be_false
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8#{suffix}").should be_false
+
+            expected = [] of Float32
+            4.times do |row|
+              expected.concat(resident_run_tile(scalar, start + row, [block_rows[row]], weights, config))
+            end
+            resident_bits(actual).should eq(resident_bits(expected))
+
+            {start, start + 1, start + 2, start + 3}.each do |position|
+              block_key, block_value, block_position = blocked.key_value_at(position, max_seq)
+              scalar_key, scalar_value, scalar_position = scalar.key_value_at(position, max_seq)
+              block_position.should eq(scalar_position)
+              block_key.size.should eq(config.n_head_kv * config.head_dim)
+              resident_bits(block_key).should eq(resident_bits(scalar_key))
+              resident_bits(block_value).should eq(resident_bits(scalar_value))
+            end
+
+            # Rewind the accepted prefix of the speculative block and replay
+            # the two rows that span 16,384/16,385 visible keys.
+            blocked.rewind(start + 2)
+            replay = resident_run_tile(blocked, start + 2, block_rows[2, 2], weights, config, decode_block: true)
+            width = config.n_head * config.head_dim
+            resident_bits(replay).should eq(resident_bits(actual[2 * width, 2 * width]))
+            {start + 2, start + 3}.each do |position|
+              block_key, block_value, _ = blocked.key_value_at(position, max_seq)
+              scalar_key, scalar_value, _ = scalar.key_value_at(position, max_seq)
+              resident_bits(block_key).should eq(resident_bits(scalar_key))
+              resident_bits(block_value).should eq(resident_bits(scalar_value))
+            end
+          ensure
+            blocked.close
+            scalar.close
+          end
         end
       end
 

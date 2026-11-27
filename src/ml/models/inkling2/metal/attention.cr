@@ -882,19 +882,36 @@ module ML::GGUF
 
         split_rows = rows - split_begin
         if split_rows > 0
-          row_offset = split_begin
-          q_width = @config.n_head * @config.head_dim
-          relative_width = @config.n_head * @config.rel_dim
-          split_q = attention_row_view(q, row_offset, q_width)
-          split_q_rel = attention_row_view(q_rel, row_offset, relative_width)
-          split_gate = attention_row_view(gate, row_offset, q_width)
-          split_sink = attention_row_view(sink, row_offset, @config.n_head)
-          split_output = attention_row_view(output, row_offset, q_width)
-          # Preserve the original tile origin for K/V lookup. The query offset
-          # advances the suffix while keeping prior block rows visible in-tile.
-          encode_attention_split(encoder, scratch, split_q, k, v, split_q_rel,
-            split_gate, split_sink, relative_bias, split_output, start, split_rows,
-            row_offset, relative_extent, scalar: !decode_block && rows == 1)
+          first_keys = start + split_begin + 1
+          last_keys = start + rows
+          first_partitions = fast_global_split_partition_count(first_keys)
+          last_partitions = fast_global_split_partition_count(last_keys)
+
+          if split_rows > 1 && first_partitions != last_partitions
+            # A verify4 tile crossing a 4096-score partition boundary must
+            # keep each row's scalar partition count. Query views are sliced,
+            # while K/V retain the original tile base and row offset.
+            row_offset = split_begin
+            while row_offset < rows
+              partitions = fast_global_split_partition_count(start + row_offset + 1)
+              partition_rows = 1_i32
+              while row_offset + partition_rows < rows &&
+                    fast_global_split_partition_count(start + row_offset + partition_rows + 1) == partitions
+                partition_rows += 1
+              end
+
+              encode_attention_split_rows(encoder, scratch, q, k, v, q_rel, gate, sink,
+                relative_bias, output, start, row_offset, partition_rows, relative_extent,
+                partitions, scalar: !decode_block && rows == 1)
+              row_offset += partition_rows
+            end
+          else
+            # Preserve the existing whole-suffix dispatch when every row has
+            # the same partition count, including all paths through 16,384.
+            encode_attention_split_rows(encoder, scratch, q, k, v, q_rel, gate, sink,
+              relative_bias, output, start, split_begin, split_rows, relative_extent,
+              last_partitions, scalar: !decode_block && rows == 1)
+          end
         end
       end
 
@@ -1115,6 +1132,48 @@ module ML::GGUF
         view.slice(checked_elements(row, width, "attention row offset"))
       end
 
+      private def encode_attention_split_rows(
+        encoder : ML::Metal::ComputeEncoder,
+        scratch : Inkling2ResidentScratch,
+        q : Inkling2View,
+        k : Inkling2View,
+        v : Inkling2View,
+        q_rel : Inkling2View,
+        gate : Inkling2View,
+        sink : Inkling2View,
+        relative_bias : Inkling2View,
+        output : Inkling2View,
+        start : Int32,
+        row_offset : Int32,
+        rows : Int32,
+        relative_extent : Int32,
+        partitions : Int32,
+        *,
+        scalar : Bool,
+      ) : Nil
+        q_width = @config.n_head * @config.head_dim
+        relative_width = @config.n_head * @config.rel_dim
+        encode_attention_split(encoder, scratch,
+          attention_row_view(q, row_offset, q_width), k, v,
+          attention_row_view(q_rel, row_offset, relative_width),
+          attention_row_view(gate, row_offset, q_width),
+          attention_row_view(sink, row_offset, @config.n_head), relative_bias,
+          attention_row_view(output, row_offset, q_width), start, rows, row_offset,
+          relative_extent, partitions, scalar: scalar)
+      end
+
+      # Fast global split-K keeps each partition at or below the 4096-score
+      # parallel limit. All other paths retain the historical four partitions.
+      private def fast_global_split_partition_count(keys : Int32) : Int32
+        return SPLIT_KEY_PARTITIONS unless @prefill_mode.fast? && !@sliding &&
+                                           @config.head_dim == 128 && @config.rel_dim == 16 &&
+                                           keys > SPLIT_KEY_PARTITIONS * FAST_SPLIT_PARALLEL_SCORE_LIMIT
+
+        partitions = keys // FAST_SPLIT_PARALLEL_SCORE_LIMIT
+        partitions += 1 if keys % FAST_SPLIT_PARALLEL_SCORE_LIMIT != 0
+        Math.max(SPLIT_KEY_PARTITIONS, partitions)
+      end
+
       private def encode_attention_regular(
         encoder : ML::Metal::ComputeEncoder,
         q : Inkling2View,
@@ -1180,19 +1239,20 @@ module ML::GGUF
         rows : Int32,
         query_row_offset : Int32,
         relative_extent : Int32,
+        partitions : Int32,
         *,
         scalar : Bool,
       ) : Nil
-        partial_width = checked_elements(SPLIT_KEY_PARTITIONS, @config.head_dim + 2, "split attention partition")
+        partial_width = checked_elements(partitions, @config.head_dim + 2, "split attention partition")
         partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
         partial_count = checked_elements(rows, partial_width, "split attention output")
         partials = scratch.take(partial_count)
         keys = start + query_row_offset + rows
         keys = Math.min(keys, @config.sliding_window) if @sliding
-        partition_size = (keys - 1) // SPLIT_KEY_PARTITIONS + 1
+        partition_size = (keys - 1) // partitions + 1
 
-        # The Apple Silicon fast profile can cache a 16K context's four FP32
-        # score partitions instead of recomputing QK in the value pass.
+        # The fast profile can cache up to 4096 FP32 scores per partition
+        # instead of recomputing QK in the value pass.
         parallel_limit = @prefill_mode.fast? ? FAST_SPLIT_PARALLEL_SCORE_LIMIT : SPLIT_PARALLEL_SCORE_LIMIT
         parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= parallel_limit
         if parallel
@@ -1209,11 +1269,11 @@ module ML::GGUF
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
           start, rows, relative_extent, query_row_offset)
         encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
-        encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
+        encoder.set_value(partitions.to_u32, 21)
         encoder.set_value(query_row_offset.to_u32, 22)
         encoder.set_value(shared_floats.to_u32, 23) unless parallel
         encoder.set_threadgroup_memory(((shared_floats + 3) // 4) * 16, 0)
-        encoder.dispatch({threads * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {threads, 1, 1})
+        encoder.dispatch({threads * partitions, rows, @config.n_head}, {threads, 1, 1})
 
         encoder.set_pipeline(pipeline("inkling2_resident_attention_combine"))
         encoder.set_buffer(partials.buffer, 0, offset: partials.offset)
@@ -1222,7 +1282,7 @@ module ML::GGUF
         encoder.set_value(rows.to_u32, 3)
         encoder.set_value(@config.n_head.to_u32, 4)
         encoder.set_value(@config.head_dim.to_u32, 5)
-        encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 6)
+        encoder.set_value(partitions.to_u32, 6)
         encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
       end
 
