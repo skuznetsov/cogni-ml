@@ -459,7 +459,19 @@ kernel void inkling2_resident_q8_projection_group(
     device const float* x = input + descriptor.input_offset;
     device float* y = output + descriptor.output_offset;
     float sum = 0.0f;
-    for (uint ib = 0; ib < nb; ++ib) {
+    // Load two blocks before updating the same accumulator in K order.
+    uint ib = 0;
+    for (; ib + 1 < nb; ib += 2) {
+        const float scale0 = (float)weights[ib].d;
+        const float scale1 = (float)weights[ib + 1].d;
+        const float quant0 = (float)weights[ib].qs[lane];
+        const float quant1 = (float)weights[ib + 1].qs[lane];
+        const float value0 = x[ib * Q8_0_QK + lane];
+        const float value1 = x[(ib + 1) * Q8_0_QK + lane];
+        sum += scale0 * value0 * quant0;
+        sum += scale1 * value1 * quant1;
+    }
+    if (ib < nb) {
         const float value = x[ib * Q8_0_QK + lane];
         sum += (float)weights[ib].d * value * (float)weights[ib].qs[lane];
     }

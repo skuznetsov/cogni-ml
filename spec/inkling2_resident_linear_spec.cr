@@ -92,6 +92,9 @@ require "../src/ml/gguf/inkling2_engine"
         offsets["q8_tiled_projection"] = io.pos
         io.write(q8_bytes(39, 64))
 
+        offsets["q8_group_projection"] = io.pos
+        io.write(q8_bytes(12, 96))
+
         router = Array(Float32).new(3 * 32, 0_f32)
         router[0] = 16_f32
         router[32] = -16_f32
@@ -434,16 +437,18 @@ require "../src/ml/gguf/inkling2_engine"
       linear = ML::GGUF::Inkling2ResidentLinear.new(gguf)
       buffers = [] of ML::MetalBuffer
       begin
-        first_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_projection"], 7 * 34)
-        second_raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["gate_up"], 8 * 34)
-        first = ML::GGUF::QuantWeight.new(first_raw[0, 4 * 34], ML::GGUF::TensorType::Q8_0, 4, 32)
-        second = ML::GGUF::QuantWeight.new(second_raw, ML::GGUF::TensorType::Q8_0, 8, 32)
-        unaligned = ML::GGUF::QuantWeight.new(first_raw, ML::GGUF::TensorType::Q8_0, 7, 32)
+        # Three K32 blocks exercise both the paired loads and the scalar tail.
+        in_dim = 96
+        row_bytes = (in_dim // 32) * 34
+        raw = Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_group_projection"], 12 * row_bytes)
+        first = ML::GGUF::QuantWeight.new(raw[0, 4 * row_bytes], ML::GGUF::TensorType::Q8_0, 4, in_dim)
+        second = ML::GGUF::QuantWeight.new(raw[4 * row_bytes, 8 * row_bytes], ML::GGUF::TensorType::Q8_0, 8, in_dim)
+        unaligned = ML::GGUF::QuantWeight.new(raw[0, 7 * row_bytes], ML::GGUF::TensorType::Q8_0, 7, in_dim)
 
         {1, 2, 3, 4}.each do |rows|
-          values = Array(Float32).new(2 * rows * 32 + 1) { |index| ((index * 7) % 31 - 15).to_f32 * 0.019_f32 }
+          values = Array(Float32).new(2 * rows * in_dim + 1) { |index| ((index * 7) % 31 - 15).to_f32 * 0.019_f32 }
           input = Inkling2LinearSpecSupport.float_view(values, buffers)
-          inputs = {input.slice(1), input, input.slice(1 + rows * 32)}
+          inputs = {input.slice(1), input, input.slice(1 + rows * in_dim)}
           reference = Inkling2LinearSpecSupport.float_view(Array(Float32).new(12 * rows, 0_f32), buffers)
           guarded = Inkling2LinearSpecSupport.float_view(Array(Float32).new(12 * rows + 3, 123_f32), buffers)
           outputs = {guarded.slice(1), nil, guarded.slice(2 + 4 * rows)}

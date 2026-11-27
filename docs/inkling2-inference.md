@@ -483,6 +483,9 @@ GEMMs. Warming this mode after direct M16 adds one routing pipeline.
 
 The resident path fuses Q/K/V/R preparation. Eligible Q8_0 attention
 projections share a dispatch in scalar decode and block4 verification.
+The scalar kernel preloads pairs of K32 blocks and accumulates them in
+the original FP32 order. On a three-pass M2 Max run at 1022+48, the
+grouped projection intervals fell from 4.68 to 4.43 ms per token.
 On Apple Silicon, prefill tiles with 16 to 1,024 rows can run compatible
 Q8_0 Q and gate projections in one dispatch with a shared 32-by-32 FP32
 input tile. Each projection keeps its own FP32 accumulation order and
