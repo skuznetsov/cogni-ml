@@ -199,16 +199,27 @@ inline void inkling2_resident_clip_query_head(
     }
 }
 
+template <typename KV, bool RoundedOracle>
+inline KV inkling2_resident_prepared_value(float value)
+{
+    if (RoundedOracle) return KV(float(half(value)));
+    return KV(value);
+}
+
 // Each SIMD group prepares one Q, relative-Q, or paired K/V head. The host
-// bounds both widths to 256 and dispatches only active rows and heads.
+// bounds both widths to 256 and dispatches only active rows and heads. K/V
+// inputs remain FP32; only the prepared output type varies.
+template <typename KV, bool RoundedOracle>
 kernel void inkling2_resident_prepare_qkvr(
     device float* queries                 [[buffer(0)]],
-    device float* keys                    [[buffer(1)]],
-    device float* values                  [[buffer(2)]],
+    device const float* keys              [[buffer(1)]],
+    device const float* values            [[buffer(2)]],
     device float* relative_queries        [[buffer(3)]],
     device const float* query_scale       [[buffer(4)]],
     device const float* relative_scale    [[buffer(5)]],
     constant Inkling2PrepareQKVRParams& params [[buffer(6)]],
+    device KV* prepared_keys              [[buffer(7)]],
+    device KV* prepared_values            [[buffer(8)]],
     ushort lane [[thread_index_in_simdgroup]],
     uint3 tgpig [[threadgroup_position_in_grid]])
 {
@@ -256,15 +267,25 @@ kernel void inkling2_resident_prepare_qkvr(
     for (uint chunk = 0; chunk < chunks; ++chunk) {
         const uint channel = (uint)lane + chunk * 32;
         if (channel < head_dim) {
-            keys[base + channel] = key_values[chunk] * key_clip;
-            values[base + channel] = value_values[chunk] * value_scale;
+            const float prepared_key = key_values[chunk] * key_clip;
+            const float prepared_value = value_values[chunk] * value_scale;
+            prepared_keys[base + channel] = inkling2_resident_prepared_value<KV, RoundedOracle>(prepared_key);
+            prepared_values[base + channel] = inkling2_resident_prepared_value<KV, RoundedOracle>(prepared_value);
         }
     }
 }
 
+typedef decltype(inkling2_resident_prepare_qkvr<float, false>) inkling2_resident_prepare_qkvr_f32_t;
+template [[host_name("inkling2_resident_prepare_qkvr")]] kernel inkling2_resident_prepare_qkvr_f32_t inkling2_resident_prepare_qkvr<float, false>;
+typedef decltype(inkling2_resident_prepare_qkvr<float, true>) inkling2_resident_prepare_qkvr_rounded_f32_t;
+template [[host_name("inkling2_resident_prepare_qkvr_rounded_f32")]] kernel inkling2_resident_prepare_qkvr_rounded_f32_t inkling2_resident_prepare_qkvr<float, true>;
+typedef decltype(inkling2_resident_prepare_qkvr<half, false>) inkling2_resident_prepare_qkvr_f16_t;
+template [[host_name("inkling2_resident_prepare_qkvr_f16")]] kernel inkling2_resident_prepare_qkvr_f16_t inkling2_resident_prepare_qkvr<half, false>;
+
+template <typename KV>
 inline float inkling2_resident_score(
     device const float* query,
-    device const float* key,
+    device const KV* key,
     device const float* query_relative,
     device const float* relative_bias,
     float sink,
@@ -276,7 +297,7 @@ inline float inkling2_resident_score(
 {
     float qk_partial = 0.0f;
     for (uint dim = (uint)lane; dim < head_dim; dim += 32) {
-        qk_partial += query[dim] * key[dim];
+        qk_partial += query[dim] * float(key[dim]);
     }
     float score = simd_sum(qk_partial) * rsqrt((float)head_dim);
     if (distance < relative_extent) {
@@ -324,16 +345,17 @@ inline float inkling2_resident_score_with_key(
 
 // One SIMD group handles one query row and one query head. Scores are streamed
 // twice (max, then denominator/context), avoiding a context-length scratch tile.
+template <typename KV>
 kernel void inkling2_resident_attention(
     device const float* q               [[buffer(0)]],
-    device const float* k_tile          [[buffer(1)]],
-    device const float* v_tile          [[buffer(2)]],
+    device const KV* k_tile             [[buffer(1)]],
+    device const KV* v_tile             [[buffer(2)]],
     device const float* q_relative      [[buffer(3)]],
     device const float* gate            [[buffer(4)]],
     device const float* sink            [[buffer(5)]],
     device const float* relative_bias   [[buffer(6)]],
-    device const float* k_cache         [[buffer(7)]],
-    device const float* v_cache         [[buffer(8)]],
+    device const KV* k_cache            [[buffer(7)]],
+    device const KV* v_cache            [[buffer(8)]],
     device       float* output          [[buffer(9)]],
     constant uint& start                [[buffer(10)]],
     constant uint& rows                 [[buffer(11)]],
@@ -370,7 +392,7 @@ kernel void inkling2_resident_attention(
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* key = k_cache + cache_base;
+        device const KV* key = k_cache + cache_base;
         if (in_tile) {
             const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
             key = k_tile + tile_base;
@@ -391,8 +413,8 @@ kernel void inkling2_resident_attention(
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* key = k_cache + cache_base;
-        device const float* value = v_cache + cache_base;
+        device const KV* key = k_cache + cache_base;
+        device const KV* value = v_cache + cache_base;
         if (in_tile) {
             const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
             key = k_tile + tile_base;
@@ -408,7 +430,7 @@ kernel void inkling2_resident_attention(
         for (uint chunk = 0; chunk < chunks; ++chunk) {
             const uint channel = (uint)lane + chunk * 32;
             if (channel < head_dim) {
-                context[chunk] += weight * value[channel];
+                context[chunk] += weight * float(value[channel]);
             }
         }
     }
@@ -423,19 +445,25 @@ kernel void inkling2_resident_attention(
     }
 }
 
+typedef decltype(inkling2_resident_attention<float>) inkling2_resident_attention_f32_t;
+template [[host_name("inkling2_resident_attention")]] kernel inkling2_resident_attention_f32_t inkling2_resident_attention<float>;
+typedef decltype(inkling2_resident_attention<half>) inkling2_resident_attention_f16_t;
+template [[host_name("inkling2_resident_attention_f16")]] kernel inkling2_resident_attention_f16_t inkling2_resident_attention<half>;
+
 // Prefill specialization for one row and query head. Four SIMD groups compute
 // four key scores at a time; the cached scores then feed max, softmax, and
 // context without recomputing QK or relative-position terms.
+template <typename KV>
 kernel void inkling2_resident_attention_prefill_scores(
     device const float* q               [[buffer(0)]],
-    device const float* k_tile          [[buffer(1)]],
-    device const float* v_tile          [[buffer(2)]],
+    device const KV* k_tile             [[buffer(1)]],
+    device const KV* v_tile             [[buffer(2)]],
     device const float* q_relative      [[buffer(3)]],
     device const float* gate            [[buffer(4)]],
     device const float* sink            [[buffer(5)]],
     device const float* relative_bias   [[buffer(6)]],
-    device const float* k_cache         [[buffer(7)]],
-    device const float* v_cache         [[buffer(8)]],
+    device const KV* k_cache            [[buffer(7)]],
+    device const KV* v_cache            [[buffer(8)]],
     device       float* output          [[buffer(9)]],
     constant uint& start                [[buffer(10)]],
     constant uint& rows                 [[buffer(11)]],
@@ -475,7 +503,7 @@ kernel void inkling2_resident_attention_prefill_scores(
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* key = k_cache + cache_base;
+        device const KV* key = k_cache + cache_base;
         if (in_tile) {
             const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
             key = k_tile + tile_base;
@@ -518,8 +546,8 @@ kernel void inkling2_resident_attention_prefill_scores(
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const uint kv_row = in_tile ? key_position - start : slot;
         const size_t value_base = (size_t)kv_row * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* value = (in_tile ? v_tile : v_cache) + value_base;
-        context += weight * value[channel];
+        device const KV* value = (in_tile ? v_tile : v_cache) + value_base;
+        context += weight * float(value[channel]);
     }
 
     const float gate_value = gate[output_base + channel];
@@ -527,20 +555,26 @@ kernel void inkling2_resident_attention_prefill_scores(
     output[output_base + channel] = (context / denominator) * sigmoid;
 }
 
+typedef decltype(inkling2_resident_attention_prefill_scores<float>) inkling2_resident_attention_prefill_scores_f32_t;
+template [[host_name("inkling2_resident_attention_prefill_scores")]] kernel inkling2_resident_attention_prefill_scores_f32_t inkling2_resident_attention_prefill_scores<float>;
+typedef decltype(inkling2_resident_attention_prefill_scores<half>) inkling2_resident_attention_prefill_scores_f16_t;
+template [[host_name("inkling2_resident_attention_prefill_scores_f16")]] kernel inkling2_resident_attention_prefill_scores_f16_t inkling2_resident_attention_prefill_scores<half>;
+
 // GQA prefill specialization for two adjacent rows and one KV head. One SIMD
 // group loads each K tuple once and forms all visible scores for its six query
 // heads. The value pass likewise loads each V channel once and updates all six
 // contexts in ascending absolute-key order.
+template <typename KV>
 kernel void inkling2_resident_attention_prefill_shared_kv(
     device const float* q               [[buffer(0)]],
-    device const float* k_tile          [[buffer(1)]],
-    device const float* v_tile          [[buffer(2)]],
+    device const KV* k_tile             [[buffer(1)]],
+    device const KV* v_tile             [[buffer(2)]],
     device const float* q_relative      [[buffer(3)]],
     device const float* gate            [[buffer(4)]],
     device const float* sink            [[buffer(5)]],
     device const float* relative_bias   [[buffer(6)]],
-    device const float* k_cache         [[buffer(7)]],
-    device const float* v_cache         [[buffer(8)]],
+    device const KV* k_cache            [[buffer(7)]],
+    device const KV* v_cache            [[buffer(8)]],
     device       float* output          [[buffer(9)]],
     constant uint& start                [[buffer(10)]],
     constant uint& rows                 [[buffer(11)]],
@@ -590,14 +624,14 @@ kernel void inkling2_resident_attention_prefill_shared_kv(
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * 128;
-        device const float* key = k_cache + cache_base;
+        device const KV* key = k_cache + cache_base;
         if (in_tile) {
             const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * 128;
             key = k_tile + tile_base;
         }
         float key_values[4];
         for (uint chunk = 0; chunk < 4; ++chunk) {
-            key_values[chunk] = key[(uint)lane + chunk * 32];
+            key_values[chunk] = float(key[(uint)lane + chunk * 32]);
         }
 
         for (uint output_index = 0; output_index < 6; ++output_index) {
@@ -676,8 +710,8 @@ kernel void inkling2_resident_attention_prefill_shared_kv(
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const uint kv_row = in_tile ? key_position - start : slot;
         const size_t value_base = (size_t)kv_row * (size_t)kv_width + (size_t)kv_head * 128;
-        device const float* value = (in_tile ? v_tile : v_cache) + value_base;
-        const float value_channel = value[channel];
+        device const KV* value = (in_tile ? v_tile : v_cache) + value_base;
+        const float value_channel = float(value[channel]);
 
         for (uint output_index = 0; output_index < 6; ++output_index) {
             const uint row_slot = output_index / 3;
@@ -704,20 +738,26 @@ kernel void inkling2_resident_attention_prefill_shared_kv(
     }
 }
 
+typedef decltype(inkling2_resident_attention_prefill_shared_kv<float>) inkling2_resident_attention_prefill_shared_kv_f32_t;
+template [[host_name("inkling2_resident_attention_prefill_shared_kv")]] kernel inkling2_resident_attention_prefill_shared_kv_f32_t inkling2_resident_attention_prefill_shared_kv<float>;
+typedef decltype(inkling2_resident_attention_prefill_shared_kv<half>) inkling2_resident_attention_prefill_shared_kv_f16_t;
+template [[host_name("inkling2_resident_attention_prefill_shared_kv_f16")]] kernel inkling2_resident_attention_prefill_shared_kv_f16_t inkling2_resident_attention_prefill_shared_kv<half>;
+
 // Decode-only split-K attention. Each SIMD group owns a contiguous key range
 // and writes one local softmax tuple (max, denominator, weighted V sum).
 // A following kernel combines those tuples and contributes the learned sink
 // exactly once as a zero logit.
+template <typename KV>
 kernel void inkling2_resident_attention_split(
     device const float* q               [[buffer(0)]],
-    device const float* k_tile          [[buffer(1)]],
-    device const float* v_tile          [[buffer(2)]],
+    device const KV* k_tile             [[buffer(1)]],
+    device const KV* v_tile             [[buffer(2)]],
     device const float* q_relative      [[buffer(3)]],
     device const float* gate            [[buffer(4)]],
     device const float* sink            [[buffer(5)]],
     device const float* relative_bias   [[buffer(6)]],
-    device const float* k_cache         [[buffer(7)]],
-    device const float* v_cache         [[buffer(8)]],
+    device const KV* k_cache            [[buffer(7)]],
+    device const KV* v_cache            [[buffer(8)]],
     device       float* partials        [[buffer(9)]],
     constant uint& start                [[buffer(10)]],
     constant uint& rows                 [[buffer(11)]],
@@ -766,7 +806,7 @@ kernel void inkling2_resident_attention_split(
         const bool in_tile = key_position >= start;
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const size_t cache_base = (size_t)slot * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
-        device const float* key = k_cache + cache_base;
+        device const KV* key = k_cache + cache_base;
         if (in_tile) {
             const size_t tile_base = (size_t)(key_position - start) * (size_t)kv_width + (size_t)kv_head * (size_t)head_dim;
             key = k_tile + tile_base;
@@ -791,12 +831,12 @@ kernel void inkling2_resident_attention_split(
         const uint slot = sliding != 0 ? key_position % capacity : key_position;
         const uint kv_row = in_tile ? key_position - start : slot;
         const size_t kv_base = (size_t)kv_row * kv_width + (size_t)kv_head * head_dim;
-        device const float* value = (in_tile ? v_tile : v_cache) + kv_base;
+        device const KV* value = (in_tile ? v_tile : v_cache) + kv_base;
         float score;
         if (save_scores) {
             score = cached_scores[key_index - partition_begin];
         } else {
-            device const float* key = (in_tile ? k_tile : k_cache) + kv_base;
+            device const KV* key = (in_tile ? k_tile : k_cache) + kv_base;
             const uint distance = position - key_position;
             score = inkling2_resident_score(
                 q + q_base, key, q_relative + relative_base, relative_bias,
@@ -808,7 +848,7 @@ kernel void inkling2_resident_attention_split(
         for (uint chunk = 0; chunk < chunks; ++chunk) {
             const uint channel = (uint)lane + chunk * 32;
             if (channel < head_dim) {
-                context[chunk] += weight * value[channel];
+                context[chunk] += weight * float(value[channel]);
             }
         }
     }
@@ -824,6 +864,11 @@ kernel void inkling2_resident_attention_split(
         }
     }
 }
+
+typedef decltype(inkling2_resident_attention_split<float>) inkling2_resident_attention_split_f32_t;
+template [[host_name("inkling2_resident_attention_split")]] kernel inkling2_resident_attention_split_f32_t inkling2_resident_attention_split<float>;
+typedef decltype(inkling2_resident_attention_split<half>) inkling2_resident_attention_split_f16_t;
+template [[host_name("inkling2_resident_attention_split_f16")]] kernel inkling2_resident_attention_split_f16_t inkling2_resident_attention_split<half>;
 
 struct Inkling2SplitKVSpan {
     uint end;
@@ -842,17 +887,17 @@ static inline Inkling2SplitKVSpan inkling2_split_kv_span(
 // Split-K specialization for 128 value channels and 16 relative channels.
 // The host guarantees all scores fit in threadgroup memory. The partition
 // boundaries and FP32 reductions match the single-SIMD split path.
-template <uint ScoreGroups>
+template <typename KV, uint ScoreGroups>
 kernel void inkling2_resident_attention_split_parallel(
     device const float* q               [[buffer(0)]],
-    device const float* k_tile          [[buffer(1)]],
-    device const float* v_tile          [[buffer(2)]],
+    device const KV* k_tile             [[buffer(1)]],
+    device const KV* v_tile             [[buffer(2)]],
     device const float* q_relative      [[buffer(3)]],
     device const float* gate            [[buffer(4)]],
     device const float* sink            [[buffer(5)]],
     device const float* relative_bias   [[buffer(6)]],
-    device const float* k_cache         [[buffer(7)]],
-    device const float* v_cache         [[buffer(8)]],
+    device const KV* k_cache            [[buffer(7)]],
+    device const KV* v_cache            [[buffer(8)]],
     device       float* partials        [[buffer(9)]],
     constant uint& start                [[buffer(10)]],
     constant uint& rows                 [[buffer(11)]],
@@ -913,17 +958,17 @@ kernel void inkling2_resident_attention_split_parallel(
     // Keep the group's original stride across span boundaries.
     for (uint i = group; i < count;) {
         const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
-        device const float* keys = span.from_tile ? k_tile : k_cache;
+        device const KV* keys = span.from_tile ? k_tile : k_cache;
         size_t offset = (size_t)span.row * kv_width + head_offset;
         #pragma clang loop unroll_count(2)
         for (; i < span.end; i += groups, offset += key_stride) {
-            const device float* key = keys + offset + lane;
+            const device KV* key = keys + offset + lane;
             // The four additions retain inkling2_resident_score's lane order.
             float qk_partial = 0.f;
-            qk_partial += query_lane[0] * key[0];
-            qk_partial += query_lane[1] * key[32];
-            qk_partial += query_lane[2] * key[64];
-            qk_partial += query_lane[3] * key[96];
+            qk_partial += query_lane[0] * float(key[0]);
+            qk_partial += query_lane[1] * float(key[32]);
+            qk_partial += query_lane[2] * float(key[64]);
+            qk_partial += query_lane[3] * float(key[96]);
             float score = simd_sum(qk_partial) * rsqrt((float)channels);
             const uint distance = position - (key_begin + i);
             if (distance < relative_extent) {
@@ -965,13 +1010,13 @@ kernel void inkling2_resident_attention_split_parallel(
     float denominator = 0.0f;
     for (uint i = 0; i < count;) {
         const auto span = inkling2_split_kv_span(i, count, cache_end, first_end, first_slot, first_tile_row);
-        device const float* values = span.from_tile ? v_tile : v_cache;
+        device const KV* values = span.from_tile ? v_tile : v_cache;
         size_t offset = (size_t)span.row * kv_width + head_offset + channel;
         #pragma clang loop unroll_count(8)
         for (; i < span.end; ++i, offset += kv_width) {
             const float weight = cached_scores[i];
             if (group == 0) denominator += weight;
-            context += weight * values[offset];
+            context += weight * float(values[offset]);
         }
     }
     const size_t partial_base = (query_head * partitions + partition) * (channels + 2);
@@ -982,9 +1027,14 @@ kernel void inkling2_resident_attention_split_parallel(
     partials[partial_base + 2 + channel] = context;
 }
 
-typedef decltype(inkling2_resident_attention_split_parallel<4>) inkling2_attention_split_parallel_t;
-template [[host_name("inkling2_resident_attention_split_parallel")]] kernel inkling2_attention_split_parallel_t inkling2_resident_attention_split_parallel<4>;
-template [[host_name("inkling2_resident_attention_split_qk8")]] kernel inkling2_attention_split_parallel_t inkling2_resident_attention_split_parallel<8>;
+typedef decltype(inkling2_resident_attention_split_parallel<float, 4>) inkling2_attention_split_parallel_f32_qk4_t;
+template [[host_name("inkling2_resident_attention_split_parallel")]] kernel inkling2_attention_split_parallel_f32_qk4_t inkling2_resident_attention_split_parallel<float, 4>;
+typedef decltype(inkling2_resident_attention_split_parallel<float, 8>) inkling2_attention_split_parallel_f32_qk8_t;
+template [[host_name("inkling2_resident_attention_split_qk8")]] kernel inkling2_attention_split_parallel_f32_qk8_t inkling2_resident_attention_split_parallel<float, 8>;
+typedef decltype(inkling2_resident_attention_split_parallel<half, 4>) inkling2_attention_split_parallel_f16_qk4_t;
+template [[host_name("inkling2_resident_attention_split_parallel_f16")]] kernel inkling2_attention_split_parallel_f16_qk4_t inkling2_resident_attention_split_parallel<half, 4>;
+typedef decltype(inkling2_resident_attention_split_parallel<half, 8>) inkling2_attention_split_parallel_f16_qk8_t;
+template [[host_name("inkling2_resident_attention_split_qk8_f16")]] kernel inkling2_attention_split_parallel_f16_qk8_t inkling2_resident_attention_split_parallel<half, 8>;
 
 // Merge local softmax tuples. The sink contributes one zero logit globally,
 // then the resulting context is gated exactly as in the regular kernel.
@@ -1032,11 +1082,12 @@ kernel void inkling2_resident_attention_combine(
 // Persist the post-convolution K/V tile after all queries have consumed its
 // transient rows. For oversized sliding batches, only the last ring's rows are
 // copied, so each destination slot has one writer.
+template <typename KV>
 kernel void inkling2_resident_cache_commit(
-    device const float* k_tile       [[buffer(0)]],
-    device const float* v_tile       [[buffer(1)]],
-    device       float* k_cache      [[buffer(2)]],
-    device       float* v_cache      [[buffer(3)]],
+    device const KV* k_tile          [[buffer(0)]],
+    device const KV* v_tile          [[buffer(1)]],
+    device KV* k_cache               [[buffer(2)]],
+    device KV* v_cache               [[buffer(3)]],
     constant uint& start             [[buffer(4)]],
     constant uint& rows              [[buffer(5)]],
     constant uint& capacity          [[buffer(6)]],
@@ -1060,11 +1111,17 @@ kernel void inkling2_resident_cache_commit(
     v_cache[destination] = v_tile[source];
 }
 
+typedef decltype(inkling2_resident_cache_commit<float>) inkling2_resident_cache_commit_f32_t;
+template [[host_name("inkling2_resident_cache_commit")]] kernel inkling2_resident_cache_commit_f32_t inkling2_resident_cache_commit<float>;
+typedef decltype(inkling2_resident_cache_commit<half>) inkling2_resident_cache_commit_f16_t;
+template [[host_name("inkling2_resident_cache_commit_f16")]] kernel inkling2_resident_cache_commit_f16_t inkling2_resident_cache_commit<half>;
+
+template <typename KV>
 kernel void inkling2_resident_cache_copy(
-    device const float* old_k      [[buffer(0)]],
-    device const float* old_v      [[buffer(1)]],
-    device       float* new_k      [[buffer(2)]],
-    device       float* new_v      [[buffer(3)]],
+    device const KV* old_k          [[buffer(0)]],
+    device const KV* old_v          [[buffer(1)]],
+    device KV* new_k                [[buffer(2)]],
+    device KV* new_v                [[buffer(3)]],
     constant uint& first_element   [[buffer(4)]],
     constant uint& element_count   [[buffer(5)]],
     uint tid [[thread_position_in_grid]])
@@ -1074,3 +1131,8 @@ kernel void inkling2_resident_cache_copy(
     new_k[element] = old_k[element];
     new_v[element] = old_v[element];
 }
+
+typedef decltype(inkling2_resident_cache_copy<float>) inkling2_resident_cache_copy_f32_t;
+template [[host_name("inkling2_resident_cache_copy")]] kernel inkling2_resident_cache_copy_f32_t inkling2_resident_cache_copy<float>;
+typedef decltype(inkling2_resident_cache_copy<half>) inkling2_resident_cache_copy_f16_t;
+template [[host_name("inkling2_resident_cache_copy_f16")]] kernel inkling2_resident_cache_copy_f16_t inkling2_resident_cache_copy<half>;

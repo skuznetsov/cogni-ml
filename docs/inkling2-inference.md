@@ -274,9 +274,9 @@ global reference exceeded its 450 s time limit.
 Isolated benchmark snapshots on the M2 Max used the research IQ4_NL GGUF,
 three passes, and fixed Python token IDs. The fast stack uses FP32 MMA for
 the loop controllers, the standard SIMT router, vector half Flash with
-inline relative bias, and half staging for grouped MoE. Accumulation and
-the persistent KV cache stay FP32. The timer includes the final full logit
-readback.
+inline relative bias, and half staging for grouped MoE. Accumulation stays
+FP32, and the persistent KV cache defaults to FP32. The timer includes the
+final full logit readback.
 
 | Prompt tokens | Benchmark configuration | Prefill (tok/s) | Quiet pairs |
 | ---: | --- | ---: | ---: |
@@ -310,6 +310,28 @@ under `fast-prefill-stack-20261125.vYu44dHy`,
 `prefill-ping-outer-20261125.cVXxiD7X`,
 `scratch-rewind-grow-20261125.4rGLaYCt`, and
 `flash-gqa3-global-20261125.StGHpUZT`.
+
+### Experimental FP16 KV storage
+
+The supported three-pass Metal fast profile accepts `INKLING2_KV_CACHE=fp32`
+(the default), `fp16-global` for global visits, or `fp16-all` for both
+global and sliding visits. Restart the process to switch modes. Attention
+accumulation and convolution histories stay FP32. Each packed visit rounds
+its prepared K/V before any local attention read or cache write, including
+rows in a speculative block.
+
+The storage check compares packed visits with FP32 visits rounded through
+half at the same point. It covers the 63/64-row Flash threshold, the commit
+between attention spans, cache growth, ring wrap, and block rewind followed
+by scalar replay. On the research IQ4_NL checkpoint, both packed layouts
+matched their rounded references bitwise on the fixed 1,022- and
+8,192-token Python prefixes and 48 forced decode steps.
+
+After 8,192 prompt tokens and 48 scalar decode steps, the target KV
+allocation was 896 MiB in FP32, 608 MiB with `fp16-global`, and 448 MiB
+with `fp16-all`. These figures cover KV buffers with the speculative
+rollback reserve disabled. Prefill scratch was 482 MiB in all three runs.
+See `fp16-kv-20261126.Tn68Hoc3/REPORT.md` in the local benchmark workspace.
 
 ### Comparison with llama.cpp
 

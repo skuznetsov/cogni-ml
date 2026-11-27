@@ -3,6 +3,7 @@ require "./scratch"
 
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
   require "./linear"
+  require "../../../formats/gguf/dequant"
   require "../../../metal/device"
   require "../../../metal/dispatch"
   require "../../../core/buffer"
@@ -423,6 +424,12 @@ module ML::GGUF
         end
       end
 
+      enum KVStorage
+        F32
+        RoundedF32
+        F16
+      end
+
       getter sliding : Bool
       getter max_seq : Int32
       getter kv_width : Int32
@@ -435,6 +442,7 @@ module ML::GGUF
       @v_cache : ML::MetalBuffer? = nil
       @cache_capacity = 0_i32
       @physical_cache_capacity : Int32
+      @kv_element_bytes : Int32
       @retired_caches = [] of ML::MetalBuffer
       @last_end_position : Int32? = nil
       @last_encoded_start_position : Int32? = nil
@@ -443,9 +451,14 @@ module ML::GGUF
       @closed = false
 
       def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32, *,
-                     @rollback_rows : Int32 = 0, @prefill_mode : PrefillMode = PrefillMode::Regular)
+                     @rollback_rows : Int32 = 0, @prefill_mode : PrefillMode = PrefillMode::Regular,
+                     @kv_storage : KVStorage = KVStorage::F32)
         raise ArgumentError.new("Inkling 2 resident max_seq must be positive") unless @max_seq > 0
         raise ArgumentError.new("Inkling 2 resident attention rollback rows must be non-negative") if @rollback_rows < 0
+        if @kv_storage.f16? && @prefill_mode.ordered?
+          raise ArgumentError.new("Inkling 2 ordered attention requires FP32 KV storage")
+        end
+        @kv_element_bytes = @kv_storage.f16? ? sizeof(UInt16) : sizeof(Float32)
         @kv_width = @config.n_head_kv * @config.head_dim
         @capacity = @sliding ? Math.min(@max_seq, @config.sliding_window) : @max_seq
         @physical_cache_capacity = if @sliding
@@ -521,7 +534,15 @@ module ML::GGUF
                         @value_convolution.encode(encoder, scratch, start, rows, v, v_taps, dynamic_v, dynamic_heads: dynamic_v ? n_head_kv : 0)}
                      end
 
-        encode_prepare_qkvr(encoder, q, key, value, q_rel, q_clip, rel_clip, start, rows)
+        # Convolution keeps the raw FP32 inputs in its history. Both local
+        # attention reads and cache commits use the prepared representation.
+        keys, values = if @kv_storage.f16?
+                         bytes = rows.to_i64 * @kv_width * @kv_element_bytes
+                         {scratch.take_bytes(bytes), scratch.take_bytes(bytes)}
+                       else
+                         {key, value}
+                       end
+        encode_prepare_qkvr(encoder, q, key, value, keys, values, q_rel, q_clip, rel_clip, start, rows)
 
         attended = scratch.take(checked_elements(rows, q_width, "attention output"))
         # Each span reads its local K/V directly. Commit it before the next
@@ -532,8 +553,9 @@ module ML::GGUF
         while row_offset < rows
           span_start = start + row_offset
           span_rows = Math.min(rows - row_offset, row_limit)
-          span_key = key.slice(row_offset * @kv_width)
-          span_value = value.slice(row_offset * @kv_width)
+          kv_offset = row_offset.to_i64 * @kv_width * @kv_element_bytes
+          span_key = keys.slice_bytes(kv_offset)
+          span_value = values.slice_bytes(kv_offset)
           encode_attention(encoder, scratch, q.slice(row_offset * q_width), span_key, span_value,
             q_rel.slice(row_offset * rel_width), gate.slice(row_offset * q_width), sink.slice(row_offset * n_head),
             relative_bias, attended.slice(row_offset * q_width), span_start, span_rows, relative_extent, decode_block)
@@ -621,13 +643,23 @@ module ML::GGUF
         key_cache = @k_cache || raise IndexError.new("Inkling 2 resident cache has no keys")
         value_cache = @v_cache || raise IndexError.new("Inkling 2 resident cache has no values")
         slot = @sliding ? index % @cache_capacity : index
-        key_cache.sync
-        value_cache.sync
-        key_ptr = key_cache.contents.as(Pointer(Float32)) + slot * @kv_width
-        value_ptr = value_cache.contents.as(Pointer(Float32)) + slot * @kv_width
-        key = Array(Float32).new(@kv_width) { |channel| key_ptr[channel] }
-        value = Array(Float32).new(@kv_width) { |channel| value_ptr[channel] }
-        {key, value, index}
+        {read_cache_row(key_cache, slot), read_cache_row(value_cache, slot), index}
+      end
+
+      def cache_bytes : Int64
+        (@k_cache.try(&.size) || 0_i64) + (@v_cache.try(&.size) || 0_i64)
+      end
+
+      private def read_cache_row(cache : ML::MetalBuffer, slot : Int32) : Array(Float32)
+        cache.sync
+        offset = slot.to_i64 * @kv_width
+        if @kv_storage.f16?
+          ptr = cache.contents.as(Pointer(UInt16)) + offset
+          Array(Float32).new(@kv_width) { |channel| Dequant.fp16_to_f32(ptr[channel]) }
+        else
+          ptr = cache.contents.as(Pointer(Float32)) + offset
+          Array(Float32).new(@kv_width) { |channel| ptr[channel] }
+        end
       end
 
       # Call after the command buffer completes (or is discarded). Growth
@@ -710,6 +742,8 @@ module ML::GGUF
         q : Inkling2View,
         keys : Inkling2View,
         values : Inkling2View,
+        prepared_keys : Inkling2View,
+        prepared_values : Inkling2View,
         q_rel : Inkling2View,
         q_clip : Inkling2View,
         rel_clip : Inkling2View,
@@ -729,14 +763,21 @@ module ML::GGUF
           rms_eps: @config.rms_eps,
           log_scale_alpha: @config.log_scale_alpha,
         )
-        encoder.set_pipeline(pipeline("inkling2_resident_prepare_qkvr"))
+        name = case @kv_storage
+               in .f32?         then "inkling2_resident_prepare_qkvr"
+               in .rounded_f32? then "inkling2_resident_prepare_qkvr_rounded_f32"
+               in .f16?         then "inkling2_resident_prepare_qkvr_f16"
+               end
+        encoder.set_pipeline(pipeline(name))
         encoder.set_buffer(q.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: q.offset)
-        encoder.set_buffer(keys.buffer, 1, ML::Metal::BufferAccess::ReadWrite, offset: keys.offset)
-        encoder.set_buffer(values.buffer, 2, ML::Metal::BufferAccess::ReadWrite, offset: values.offset)
+        encoder.set_buffer(keys.buffer, 1, offset: keys.offset)
+        encoder.set_buffer(values.buffer, 2, offset: values.offset)
         encoder.set_buffer(q_rel.buffer, 3, ML::Metal::BufferAccess::ReadWrite, offset: q_rel.offset)
         encoder.set_buffer(q_clip.buffer, 4, offset: q_clip.offset)
         encoder.set_buffer(rel_clip.buffer, 5, offset: rel_clip.offset)
         encoder.set_bytes(pointerof(params).as(Void*), sizeof(LibInkling2Attention::PrepareQKVRParams), 6)
+        encoder.set_buffer(prepared_keys.buffer, 7, ML::Metal::BufferAccess::Write, offset: prepared_keys.offset)
+        encoder.set_buffer(prepared_values.buffer, 8, ML::Metal::BufferAccess::Write, offset: prepared_values.offset)
         encoder.dispatch({32, rows, 2 * @config.n_head + @config.n_head_kv}, {32, 1, 1})
       end
 
@@ -841,7 +882,7 @@ module ML::GGUF
           cache_capacity: @cache_capacity.to_u32,
           relative_stride: 0_u32,
         )
-        pipeline = ML::Metal::PipelineCache.get_or_compile("inkling2_flash_f16_vec", FLASH_PREFILL_SOURCE)
+        pipeline = ML::Metal::PipelineCache.get_or_compile(kv_pipeline_name("inkling2_flash_f16_vec"), FLASH_PREFILL_SOURCE)
         raise "incompatible Flash SIMD width" unless pipeline.thread_execution_width == 32
         encoder.set_pipeline(pipeline)
         {q, k, v, q_rel, relative_bias, gate, sink}.each_with_index do |view, index|
@@ -1068,7 +1109,7 @@ module ML::GGUF
           end
         end
 
-        encoder.set_pipeline(pipeline(name))
+        encoder.set_pipeline(pipeline(kv_pipeline_name(name)))
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
           start, rows, relative_extent, 0)
         encoder.set_buffer(output.buffer, 9, ML::Metal::BufferAccess::Write, offset: output.offset)
@@ -1120,7 +1161,7 @@ module ML::GGUF
           threads = 32
           shared_floats = Math.min(partition_size, SPLIT_SCORE_CACHE_LIMIT)
         end
-        encoder.set_pipeline(pipeline(split_pipeline))
+        encoder.set_pipeline(pipeline(kv_pipeline_name(split_pipeline)))
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
           start, rows, relative_extent, query_row_offset)
         encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
@@ -1199,7 +1240,7 @@ module ML::GGUF
         key_cache = @k_cache.not_nil!
         value_cache = @v_cache.not_nil!
         total = checked_elements(@sliding ? Math.min(rows, @cache_capacity) : rows, @kv_width, "KV cache commit")
-        encoder.set_pipeline(pipeline("inkling2_resident_cache_commit"))
+        encoder.set_pipeline(pipeline(kv_pipeline_name("inkling2_resident_cache_commit")))
         encoder.set_buffer(keys.buffer, 0, offset: keys.offset)
         encoder.set_buffer(values.buffer, 1, offset: values.offset)
         encoder.set_buffer(key_cache, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -1224,7 +1265,7 @@ module ML::GGUF
         base = 0_i64
         while base < total
           chunk = Math.min(MAX_GRID_ELEMENTS.to_i64, total - base).to_i32
-          encoder.set_pipeline(pipeline("inkling2_resident_cache_copy"))
+          encoder.set_pipeline(pipeline(kv_pipeline_name("inkling2_resident_cache_copy")))
           encoder.set_buffer(old_keys, 0)
           encoder.set_buffer(old_values, 1)
           encoder.set_buffer(new_keys, 2, ML::Metal::BufferAccess::Write)
@@ -1282,12 +1323,16 @@ module ML::GGUF
 
       private def checked_bytes(rows : Int32, width : Int32, name : String) : Int64
         elements = rows.to_i64 * width
-        raise ArgumentError.new("Inkling 2 resident #{name} exceeds Int64 bytes") unless rows > 0 && width > 0 && elements <= Int64::MAX // sizeof(Float32)
-        elements * sizeof(Float32)
+        raise ArgumentError.new("Inkling 2 resident #{name} exceeds Int64 bytes") unless rows > 0 && width > 0 && elements <= Int64::MAX // @kv_element_bytes
+        elements * @kv_element_bytes
       end
 
       private def ensure_open! : Nil
         raise "Inkling 2 resident attention is closed" if @closed
+      end
+
+      private def kv_pipeline_name(name : String) : String
+        @kv_storage.f16? ? "#{name}_f16" : name
       end
 
       private def pipeline(name : String) : ML::Metal::ComputePipeline

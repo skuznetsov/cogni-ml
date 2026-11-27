@@ -1,4 +1,5 @@
 require "./weights"
+require "./kv_cache"
 require "./loopcd"
 require "./matmul"
 require "./cpu/attention"
@@ -140,7 +141,7 @@ module ML::GGUF
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
                    prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, greedy_verifier : Bool? = false,
                    @depth_speculation : Bool = false, fast_prefill : Bool = false, loopcd : Inkling2LoopCD? = nil,
-                   dspark_path : String? = nil)
+                   dspark_path : String? = nil, kv_cache : Inkling2KVCache = Inkling2KVCache.from_env)
       @loopcd = loopcd if loopcd && loopcd.strength > 0_f32
       if @loopcd
         raise ArgumentError.new("Inkling 2 LoopCD requires resident Metal") unless metal && resident
@@ -169,7 +170,7 @@ module ML::GGUF
       end
       @weights = Inkling2Weights.new(path)
       @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes, prefill_tile,
-        auto_prefill_tile, fast_prefill, dspark: !dspark_path.nil?)
+        auto_prefill_tile, fast_prefill, kv_cache, dspark: !dspark_path.nil?)
       @core_prefix = Array(Int32).new(@passes, 0) if @stop_delta
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         if dspark_path
@@ -563,7 +564,7 @@ module ML::GGUF
     end
 
     private def prepare(metal : Bool, resident : Bool, passes : Int32?, prefill_tile : Int32?,
-                        auto_prefill_tile : Bool, fast_prefill : Bool, *, dspark : Bool)
+                        auto_prefill_tile : Bool, fast_prefill : Bool, kv_cache : Inkling2KVCache, *, dspark : Bool)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
@@ -608,10 +609,11 @@ module ML::GGUF
           append_rows = MAX_AUTO_APPEND_PREFILL_TILE if auto_prefill_tile
           @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
             append_prefill_rows: append_rows, rollback_rows: (@greedy_verifier || @depth_speculation || dspark) ? DEPTH_BLOCK_ROWS : 0,
-            depth_speculation: @depth_speculation, fast_prefill: @fast_prefill, loopcd: @loopcd)
+            depth_speculation: @depth_speculation, fast_prefill: @fast_prefill, loopcd: @loopcd, kv_cache: kv_cache)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
+      raise ArgumentError.new("Inkling 2 FP16 KV requires the supported three-pass resident Metal fast profile") unless kv_cache.f32?
       raise ArgumentError.new("Inkling 2 DSpark requires fixed-depth resident Metal") if dspark
       raise ArgumentError.new("Inkling 2 greedy verification requires fixed-depth resident Metal") if @greedy_verifier
       raise ArgumentError.new("Inkling 2 depth speculation requires fixed-depth resident Metal") if @depth_speculation

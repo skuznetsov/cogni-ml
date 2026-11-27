@@ -243,16 +243,17 @@ require "../src/ml/gguf/inkling2_resident_math"
     expected_pipeline : String,
     rollback_rows : Int32 = 0,
     prefill_mode : ML::GGUF::Inkling2ResidentAttention::PrefillMode? = nil,
+    kv_storage : ML::GGUF::Inkling2ResidentAttention::KVStorage = ML::GGUF::Inkling2ResidentAttention::KVStorage::F32,
     snapshot_positions : Array(Int32) = [] of Int32,
     expect_regular_fallback : Bool = false,
   ) : ResidentAttentionRun
     ML::Metal::PipelineCache.clear
     attention = if mode = prefill_mode
                   ML::GGUF::Inkling2ResidentAttention.new(config, sliding, max_seq,
-                    rollback_rows: rollback_rows, prefill_mode: mode)
+                    rollback_rows: rollback_rows, prefill_mode: mode, kv_storage: kv_storage)
                 else
                   ML::GGUF::Inkling2ResidentAttention.new(config, sliding, max_seq,
-                    rollback_rows: rollback_rows)
+                    rollback_rows: rollback_rows, kv_storage: kv_storage)
                 end
     begin
       output = [] of Float32
@@ -270,6 +271,19 @@ require "../src/ml/gguf/inkling2_resident_math"
     ensure
       attention.close
     end
+  end
+
+  private def resident_new_attention(
+    config : ML::GGUF::Inkling2Config,
+    sliding : Bool,
+    max_seq : Int32,
+    *,
+    kv_storage : ML::GGUF::Inkling2ResidentAttention::KVStorage = ML::GGUF::Inkling2ResidentAttention::KVStorage::F32,
+    rollback_rows : Int32 = 0,
+    prefill_mode : ML::GGUF::Inkling2ResidentAttention::PrefillMode = ML::GGUF::Inkling2ResidentAttention::PrefillMode::Regular,
+  ) : ML::GGUF::Inkling2ResidentAttention
+    ML::GGUF::Inkling2ResidentAttention.new(config, sliding, max_seq,
+      kv_storage: kv_storage, rollback_rows: rollback_rows, prefill_mode: prefill_mode)
   end
 
   private def resident_bits(values : Array(Float32)) : Array(UInt32)
@@ -393,6 +407,175 @@ require "../src/ml/gguf/inkling2_resident_math"
 
   if ML::Metal::Device.init!
     describe ML::GGUF::Inkling2ResidentAttention do
+      it "matches packed FP16 and rounded-FP32 KV at the 63/64 fast-prefill boundary and tail" do
+        config = resident_test_config(sliding: false, n_head: 3_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 4_i32, max_seq: 128_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 128_i32))
+        tiles = [{0_i32, 63_i32}, {63_i32, 64_i32}, {127_i32, 1_i32}]
+        retained_positions = [0_i32, 62_i32, 63_i32, 126_i32, 127_i32]
+
+        packed = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 128_i32, rollback_rows: 0_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::F16,
+          expected_pipeline: "inkling2_flash_f16_vec_f16", snapshot_positions: retained_positions)
+        rounded = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 128_i32, rollback_rows: 0_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::RoundedF32,
+          expected_pipeline: "inkling2_flash_f16_vec", snapshot_positions: retained_positions)
+        full = resident_run_prefill_mode(config, weights, projected, tiles,
+          sliding: false, max_seq: 128_i32, rollback_rows: 0_i32,
+          prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::F32,
+          expected_pipeline: "inkling2_flash_f16_vec", snapshot_positions: retained_positions)
+
+        resident_bits(packed.output).should eq(resident_bits(rounded.output))
+        packed.snapshots.zip(rounded.snapshots).each do |actual, expected|
+          actual[2].should eq(expected[2])
+          resident_bits(actual[0]).should eq(resident_bits(expected[0]))
+          resident_bits(actual[1]).should eq(resident_bits(expected[1]))
+        end
+        differs_from_f32 = packed.snapshots.zip(full.snapshots).any? do |quantized, unquantized|
+          resident_bits(quantized[0]) != resident_bits(unquantized[0]) ||
+            resident_bits(quantized[1]) != resident_bits(unquantized[1])
+        end
+        differs_from_f32.should be_true
+      end
+
+      it "matches rounded FP16 global KV through cache growth and scalar/block split attention above 512 keys" do
+        config = resident_test_config(sliding: false, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 4_i32, max_seq: 520_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        projected = resident_projected_rows(weights, matmul, resident_inputs(config, 518_i32))
+        packed = resident_new_attention(config, false, 520_i32,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::F16)
+        rounded = resident_new_attention(config, false, 520_i32,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::RoundedF32)
+        scalar = resident_new_attention(config, false, 520_i32,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::F16)
+        begin
+          prefix_end = 255_i32
+          prefix = projected[0, prefix_end]
+          packed_prefix = resident_run_tile(packed, 0_i32, prefix, weights, config)
+          rounded_prefix = resident_run_tile(rounded, 0_i32, prefix, weights, config)
+          scalar_prefix = resident_run_tile(scalar, 0_i32, prefix, weights, config)
+          resident_bits(packed_prefix).should eq(resident_bits(rounded_prefix))
+          resident_bits(packed_prefix).should eq(resident_bits(scalar_prefix))
+          packed.cache_bytes.should eq(256_i64 * config.n_head_kv * config.head_dim * sizeof(UInt16) * 2)
+          rounded.cache_bytes.should eq(256_i64 * config.n_head_kv * config.head_dim * sizeof(Float32) * 2)
+
+          # This append copies the accepted 255-row prefix while growing the
+          # global cache from its initial 256-row allocation beyond 512 rows.
+          growth_rows = projected[prefix_end, 258]
+          packed_growth = resident_run_tile(packed, prefix_end, growth_rows, weights, config)
+          rounded_growth = resident_run_tile(rounded, prefix_end, growth_rows, weights, config)
+          scalar_growth = resident_run_tile(scalar, prefix_end, growth_rows, weights, config)
+          resident_bits(packed_growth).should eq(resident_bits(rounded_growth))
+          resident_bits(packed_growth).should eq(resident_bits(scalar_growth))
+          packed.cache_bytes.should eq(520_i64 * config.n_head_kv * config.head_dim * sizeof(UInt16) * 2)
+          rounded.cache_bytes.should eq(520_i64 * config.n_head_kv * config.head_dim * sizeof(Float32) * 2)
+
+          split_start = 513_i32
+          block_rows = projected[split_start, 4]
+          ML::Metal::PipelineCache.clear
+          packed_block = resident_run_tile(packed, split_start, block_rows, weights, config, decode_block: true)
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel_f16").should be_true
+          rounded_block = resident_run_tile(rounded, split_start, block_rows, weights, config, decode_block: true)
+          resident_bits(packed_block).should eq(resident_bits(rounded_block))
+
+          scalar_block = [] of Float32
+          ML::Metal::PipelineCache.clear
+          scalar_block.concat(resident_run_tile(scalar, split_start, [block_rows[0]], weights, config))
+          {% if flag?(:aarch64) %}
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8_f16").should be_true
+          {% else %}
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel_f16").should be_true
+          {% end %}
+          3.times do |offset|
+            row = offset + 1
+            scalar_block.concat(resident_run_tile(scalar, split_start + row, [block_rows[row]], weights, config))
+          end
+          resident_bits(packed_block).should eq(resident_bits(scalar_block))
+
+          tail = [projected[517]]
+          packed_tail = resident_run_tile(packed, 517_i32, tail, weights, config)
+          rounded_tail = resident_run_tile(rounded, 517_i32, tail, weights, config)
+          scalar_tail = resident_run_tile(scalar, 517_i32, tail, weights, config)
+          resident_bits(packed_tail).should eq(resident_bits(rounded_tail))
+          resident_bits(packed_tail).should eq(resident_bits(scalar_tail))
+
+          {0_i32, 254_i32, 255_i32, 512_i32, 513_i32, 516_i32, 517_i32}.each do |position|
+            packed_key, packed_value, packed_position = packed.key_value_at(position, 518_i32)
+            rounded_key, rounded_value, rounded_position = rounded.key_value_at(position, 518_i32)
+            packed_position.should eq(rounded_position)
+            packed_position.should eq(position)
+            resident_bits(packed_key).should eq(resident_bits(rounded_key))
+            resident_bits(packed_value).should eq(resident_bits(rounded_value))
+          end
+        ensure
+          packed.close
+          rounded.close
+          scalar.close
+        end
+      end
+
+      it "keeps rounded FP16 KV through the 1024-window wrap when a decode block is kept and replayed" do
+        config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 1_i32, rel_dim: 1_i32, window: 1024_i32, max_seq: 1_032_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
+        projected = Array(ResidentProjectedRow).new(1_032) { |row| pattern[row % pattern.size] }
+        packed = resident_new_attention(config, true, 1_032_i32, rollback_rows: 4_i32,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::F16)
+        rounded = resident_new_attention(config, true, 1_032_i32, rollback_rows: 4_i32,
+          kv_storage: ML::GGUF::Inkling2ResidentAttention::KVStorage::RoundedF32)
+        begin
+          prefix = projected[0, 1_026]
+          resident_run_tile(packed, 0_i32, prefix, weights, config)
+          resident_run_tile(rounded, 0_i32, prefix, weights, config)
+
+          speculative = projected[1_026, 4]
+          packed_kept_block = resident_run_tile(packed, 1_026_i32, speculative, weights, config, decode_block: true)
+          rounded_kept_block = resident_run_tile(rounded, 1_026_i32, speculative, weights, config, decode_block: true)
+          resident_bits(packed_kept_block).should eq(resident_bits(rounded_kept_block))
+          accepted_before_replay = [1_026_i32, 1_027_i32].map do |position|
+            {packed.key_value_at(position, 1_030_i32), rounded.key_value_at(position, 1_030_i32)}
+          end
+
+          packed.rewind(1_028_i32)
+          rounded.rewind(1_028_i32)
+          replay = pattern.first(4)
+          packed_replay = resident_run_tile(packed, 1_028_i32, replay, weights, config, decode_block: true)
+          rounded_replay = resident_run_tile(rounded, 1_028_i32, replay, weights, config, decode_block: true)
+          resident_bits(packed_replay).should eq(resident_bits(rounded_replay))
+
+          [1_026_i32, 1_027_i32, 1_028_i32, 1_031_i32].each_with_index do |position, index|
+            packed_key, packed_value, packed_position = packed.key_value_at(position, 1_032_i32)
+            rounded_key, rounded_value, rounded_position = rounded.key_value_at(position, 1_032_i32)
+            packed_position.should eq(position)
+            rounded_position.should eq(position)
+            resident_bits(packed_key).should eq(resident_bits(rounded_key))
+            resident_bits(packed_value).should eq(resident_bits(rounded_value))
+            if index < 2
+              before_packed, before_rounded = accepted_before_replay[index]
+              resident_bits(packed_key).should eq(resident_bits(before_packed[0]))
+              resident_bits(packed_value).should eq(resident_bits(before_packed[1]))
+              resident_bits(rounded_key).should eq(resident_bits(before_rounded[0]))
+              resident_bits(rounded_value).should eq(resident_bits(before_rounded[1]))
+            end
+          end
+          packed.cache_bytes.should eq(rounded.cache_bytes // 2)
+        ensure
+          packed.close
+          rounded.close
+        end
+      end
+
       it "keeps 128-channel full-prefill results bitwise across regular, scores, and shared-KV modes" do
         config = resident_test_config(sliding: false, n_head: 3_i32, n_head_kv: 1_i32,
           head_dim: 128_i32, rel_dim: 16_i32, window: 4_i32, max_seq: 7_i32)

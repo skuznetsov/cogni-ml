@@ -2,6 +2,7 @@ require "./attention"
 require "./linear"
 require "./math"
 require "./dspark"
+require "../kv_cache"
 require "../loopcd"
 
 module ML::GGUF
@@ -149,7 +150,10 @@ module ML::GGUF
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
                    max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil,
                    rollback_rows : Int32 = 0, @depth_speculation : Bool = false, @fast_prefill : Bool = false,
-                   @loopcd : Inkling2LoopCD? = nil)
+                   @loopcd : Inkling2LoopCD? = nil, kv_cache : Inkling2KVCache = Inkling2KVCache::F32)
+      unless kv_cache.f32? || @fast_prefill
+        raise ArgumentError.new("Inkling 2 FP16 KV requires the supported three-pass resident Metal fast profile")
+      end
       @config = @weights.config
       @max_seq = max_seq
       @scratch = Inkling2ResidentScratch.new(@fast_prefill)
@@ -176,7 +180,7 @@ module ML::GGUF
                                        end
       @linear = Inkling2ResidentLinear.new(@weights.gguf, prefill_expert_tile_routes: tile_routes,
         prefill_indirect_dispatch: indirect_dispatch, fast_prefill: @fast_prefill)
-      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode)
+      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows, prefill_mode, kv_cache)
     end
 
     def fast_prefill? : Bool
@@ -405,23 +409,13 @@ module ML::GGUF
     end
 
     private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32, rollback_rows : Int32,
-                                prefill_mode : Inkling2ResidentAttention::PrefillMode)
+                                prefill_mode : Inkling2ResidentAttention::PrefillMode, kv_cache : Inkling2KVCache)
       physical_visits.each do |physical|
-        sliding = @config.sliding?(physical)
-        @visits << Visit.new(
-          Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode),
-          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
-          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
-        )
+        @visits << new_visit(physical, max_seq, rollback_rows, prefill_mode, kv_cache)
       end
       if @depth_speculation || @loopcd.try(&.mode.logits?)
         (@config.core_end...@config.n_layer).each do |physical|
-          sliding = @config.sliding?(physical)
-          @reference_epilogue_visits << Visit.new(
-            Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode),
-            Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
-            Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
-          )
+          @reference_epilogue_visits << new_visit(physical, max_seq, rollback_rows, prefill_mode, kv_cache)
         end
       end
       @depth_checkpoint = allocate_private(checkpoint_bytes) if @depth_speculation
@@ -431,6 +425,25 @@ module ML::GGUF
     rescue ex
       close
       raise ex
+    end
+
+    private def new_visit(physical : Int32, max_seq : Int32, rollback_rows : Int32,
+                          prefill_mode : Inkling2ResidentAttention::PrefillMode, kv_cache : Inkling2KVCache) : Visit
+      sliding = @config.sliding?(physical)
+      Visit.new(
+        Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows, prefill_mode: prefill_mode,
+          kv_storage: kv_storage_for(kv_cache, sliding)),
+        Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
+        Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
+      )
+    end
+
+    private def kv_storage_for(kv_cache : Inkling2KVCache, sliding : Bool) : Inkling2ResidentAttention::KVStorage
+      if kv_cache.f16_all? || (kv_cache.f16_global? && !sliding)
+        Inkling2ResidentAttention::KVStorage::F16
+      else
+        Inkling2ResidentAttention::KVStorage::F32
+      end
     end
 
     private def allocate_shared(bytes : Int64) : ML::MetalBuffer

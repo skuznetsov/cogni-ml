@@ -4,7 +4,11 @@ require "../../../metal/dispatch"
 module ML::GGUF
   record Inkling2View, buffer : ML::MetalBuffer, offset : Int64 = 0_i64 do
     def slice(elements : Int) : self
-      self.class.new(buffer, offset + elements.to_i64 * sizeof(Float32))
+      slice_bytes(elements.to_i64 * sizeof(Float32))
+    end
+
+    def slice_bytes(bytes : Int64) : self
+      self.class.new(buffer, offset + bytes)
     end
   end
 
@@ -66,9 +70,12 @@ module ML::GGUF
     end
 
     def take(elements : Int) : Inkling2View
-      bytes = elements.to_i64 * sizeof(Float32)
+      take_bytes(elements.to_i64 * sizeof(Float32))
+    end
+
+    def take_bytes(bytes : Int64) : Inkling2View
+      raise ArgumentError.new("Inkling 2 scratch allocation must be positive") unless bytes > 0
       needed = (bytes + ALIGNMENT - 1) & ~(ALIGNMENT - 1)
-      raise ArgumentError.new("Inkling 2 scratch allocation must be positive") unless elements > 0
 
       loop do
         page = @buffers[@page]? || begin

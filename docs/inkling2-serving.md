@@ -35,10 +35,14 @@ with client.chat.completions.create(
 
 The generator and server select the fast prefill profile on the supported
 three-pass Metal layout. It uses 2,048-row outer tiles, vector Flash attention,
-FP32 MMA loop controllers, and grouped MoE with FP16 staging. Persistent KV and
-matrix accumulation stay in FP32. The profile uses a different reduction
-order and staging precision from the ordered reference. Select
-`--profile ordered` for the ordered FP32 prefill path.
+FP32 MMA loop controllers, and grouped MoE with FP16 staging. Matrix
+accumulation stays FP32, and persistent KV defaults to FP32. The profile uses
+a different reduction order and staging precision from the ordered reference.
+Select `--profile ordered` for the ordered FP32 prefill path.
+
+On the three-pass Metal fast profile, set `INKLING2_KV_CACHE=fp16-global` or
+`INKLING2_KV_CACHE=fp16-all` when starting the server to try packed KV storage.
+See [experimental FP16 KV storage](inkling2-inference.md#experimental-fp16-kv-storage).
 
 Requests that omit `temperature` use the same greedy path as `temperature=0`.
 On three-pass Metal, this path uses GPU top-1 and verifies exact n-gram drafts

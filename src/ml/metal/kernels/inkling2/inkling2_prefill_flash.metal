@@ -65,9 +65,10 @@ static inline float inkling2_flash_relative_value(
     return inkling2_flash_relative_dot(q_rel + qbase, relative_bias, distance);
 }
 
+template <typename KV>
 static inline float inkling2_flash_load_key(
-    device const float* local_k,
-    device const float* cache_k,
+    device const KV* local_k,
+    device const KV* cache_k,
     uint key,
     uint kv_head,
     uint channel,
@@ -75,17 +76,18 @@ static inline float inkling2_flash_load_key(
 {
     if (key >= p.start) {
         const size_t index = (((size_t)(key - p.start) * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-        return local_k[index];
+        return float(local_k[index]);
     }
     if (p.cache_capacity == 0) return 0.0f;
     const uint cache_row = key % p.cache_capacity;
     const size_t index = (((size_t)cache_row * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-    return cache_k[index];
+    return float(cache_k[index]);
 }
 
+template <typename KV>
 static inline float inkling2_flash_load_value(
-    device const float* local_v,
-    device const float* cache_v,
+    device const KV* local_v,
+    device const KV* cache_v,
     uint key,
     uint kv_head,
     uint channel,
@@ -93,25 +95,48 @@ static inline float inkling2_flash_load_value(
 {
     if (key >= p.start) {
         const size_t index = (((size_t)(key - p.start) * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-        return local_v[index];
+        return float(local_v[index]);
     }
     if (p.cache_capacity == 0) return 0.0f;
     const uint cache_row = key % p.cache_capacity;
     const size_t index = (((size_t)cache_row * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-    return cache_v[index];
+    return float(cache_v[index]);
 }
 
-template <typename Operand, bool FastMath = false, bool VectorLoader = false>
+static inline float4 inkling2_flash_load_vector4(device const float* source)
+{
+    return *((device const float4*)source);
+}
+
+static inline half4 inkling2_flash_load_vector4(device const half* source)
+{
+    return *((device const half4*)source);
+}
+
+template <typename KV>
+struct Inkling2FlashVector4;
+
+template <>
+struct Inkling2FlashVector4<float> {
+    using type = float4;
+};
+
+template <>
+struct Inkling2FlashVector4<half> {
+    using type = half4;
+};
+
+template <typename Operand, typename KV, bool FastMath = false, bool VectorLoader = false>
 static inline void inkling2_flash_core(
     device const float* q,
-    device const float* local_k,
-    device const float* local_v,
+    device const KV* local_k,
+    device const KV* local_v,
     device const float* q_rel,
     device const float* relative_bias,
     device const float* gate,
     device const float* sink,
-    device const float* cache_k,
-    device const float* cache_v,
+    device const KV* cache_k,
+    device const KV* cache_v,
     device float* output,
     device const float* relative_table,
     constant Inkling2FlashParams& p,
@@ -120,6 +145,7 @@ static inline void inkling2_flash_core(
     threadgroup Operand* key_stage,
     threadgroup Operand* value_stage)
 {
+    using SourceVector4 = typename Inkling2FlashVector4<KV>::type;
     using OperandMatrix = simdgroup_matrix<Operand, 8, 8>;
     using AccumulatorMatrix = simdgroup_matrix<float, 8, 8>;
 
@@ -164,27 +190,27 @@ static inline void inkling2_flash_core(
 
     for (uint key0 = key_begin; key0 <= last_position; key0 += inkling2_flash_bk) {
         if (VectorLoader) {
-            // Four contiguous F32 channels share one source-row and base calculation
-            // for both K and V. The typed vector loads require 16-byte-aligned
-            // bindings and the native 128-channel row stride.
+            // Four contiguous channels share one source-row and base calculation
+            // for both K and V. The F32 path uses float4; the F16 path keeps the
+            // coalesced half4 values in half through the half staging store.
             for (uint item = tid; item < inkling2_flash_bk * (inkling2_flash_head_dim / 4u); item += inkling2_flash_threads) {
                 const uint key_offset = item / (inkling2_flash_head_dim / 4u);
                 const uint channel = (item % (inkling2_flash_head_dim / 4u)) * 4u;
                 const uint key = key0 + key_offset;
-                float4 kval = float4(0.0f);
-                float4 vval = float4(0.0f);
+                SourceVector4 kval = SourceVector4(0.0f);
+                SourceVector4 vval = SourceVector4(0.0f);
                 if (key < p.start + p.rows) {
                     if (key >= p.start) {
                         const uint source_row = key - p.start;
                         const size_t source_base = (((size_t)source_row * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-                        kval = *((device const float4*)(local_k + source_base));
-                        vval = *((device const float4*)(local_v + source_base));
+                        kval = inkling2_flash_load_vector4(local_k + source_base);
+                        vval = inkling2_flash_load_vector4(local_v + source_base);
                     } else if (p.cache_capacity != 0u) {
                         const uint source_row = p.sliding_window == 0u
                             ? key : key % p.cache_capacity;
                         const size_t source_base = (((size_t)source_row * p.kv_heads + kv_head) * inkling2_flash_head_dim) + channel;
-                        kval = *((device const float4*)(cache_k + source_base));
-                        vval = *((device const float4*)(cache_v + source_base));
+                        kval = inkling2_flash_load_vector4(cache_k + source_base);
+                        vval = inkling2_flash_load_vector4(cache_v + source_base);
                     }
                 }
                 const size_t stage_k = (size_t)channel * inkling2_flash_ldk + key_offset;
@@ -314,6 +340,31 @@ kernel void inkling2_flash_f16_vec(
 {
     threadgroup half key_stage[inkling2_flash_head_dim * inkling2_flash_ldk];
     threadgroup half value_stage[inkling2_flash_bk * inkling2_flash_ldv];
-    inkling2_flash_core<half, false, true>(q, local_k, local_v, q_rel, relative_bias, gate, sink,
+    inkling2_flash_core<half, float, false, true>(q, local_k, local_v, q_rel, relative_bias, gate, sink,
+        cache_k, cache_v, output, relative_table, p, group, tid, key_stage, value_stage);
+}
+
+// Half-operand vector-load Flash prefill for physically half K/V and cache K/V.
+// Other inputs and outputs keep the original F32 ABI; attention accumulations
+// remain F32 in inkling2_flash_core.
+kernel void inkling2_flash_f16_vec_f16(
+    device const float* q                  [[buffer(0)]],
+    device const half* local_k             [[buffer(1)]],
+    device const half* local_v             [[buffer(2)]],
+    device const float* q_rel              [[buffer(3)]],
+    device const float* relative_bias      [[buffer(4)]],
+    device const float* gate                [[buffer(5)]],
+    device const float* sink                [[buffer(6)]],
+    device const half* cache_k             [[buffer(7)]],
+    device const half* cache_v             [[buffer(8)]],
+    device float* output                    [[buffer(9)]],
+    constant Inkling2FlashParams& p         [[buffer(10)]],
+    device const float* relative_table      [[buffer(11)]],
+    uint3 group                             [[threadgroup_position_in_grid]],
+    uint tid                                [[thread_index_in_threadgroup]])
+{
+    threadgroup half key_stage[inkling2_flash_head_dim * inkling2_flash_ldk];
+    threadgroup half value_stage[inkling2_flash_bk * inkling2_flash_ldv];
+    inkling2_flash_core<half, half, false, true>(q, local_k, local_v, q_rel, relative_bias, gate, sink,
         cache_k, cache_v, output, relative_table, p, group, tid, key_stage, value_stage);
 }
