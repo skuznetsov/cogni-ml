@@ -91,6 +91,41 @@ module ML::GGUF
         output
       end
 
+      # The output may alias either input at the same row offset. The
+      # history ring always receives the raw convolution input.
+      def encode_scalar_residual(
+        encoder : ML::Metal::ComputeEncoder,
+        start : Int32,
+        input : Inkling2View,
+        taps_weights : Inkling2View,
+        output : Inkling2View,
+        residual : Inkling2View? = nil,
+      ) : Nil
+        validate_encode!(start, 1, input, taps_weights, nil, 0)
+        validate_view!(output, @channels, "convolution output")
+        validate_view!(residual, @channels, "convolution residual") if residual
+
+        history = history_for_encode || input.buffer
+        addend = residual || input
+        params = LibInkling2Attention::ScalarConvolutionResidualParams.new(
+          channels: @channels.to_u32, taps: @taps.to_u32, start: start.to_u32,
+          history_slots: @history_slots.to_u32, add_residual: residual ? 1_u32 : 0_u32)
+        encoder.set_pipeline(pipeline("inkling2_resident_scalar_convolution_residual"))
+        encoder.set_buffer(input.buffer, 0, offset: input.offset)
+        encoder.set_buffer(taps_weights.buffer, 1, offset: taps_weights.offset)
+        encoder.set_buffer(history, 2, ML::Metal::BufferAccess::ReadWrite)
+        encoder.set_buffer(addend.buffer, 3, offset: addend.offset)
+        encoder.set_buffer(output.buffer, 4, ML::Metal::BufferAccess::Write, offset: output.offset)
+        encoder.set_bytes(pointerof(params).as(Void*), sizeof(LibInkling2Attention::ScalarConvolutionResidualParams), 5)
+        encoder.dispatch_1d(@channels, scalar_residual_threads)
+        record_encoded_tile(start, 1)
+      end
+
+      # Override for same-binary geometry measurements.
+      private def scalar_residual_threads : Int32
+        128
+      end
+
       # Each thread owns one channel of one history ring. It reads the old
       # taps before replacing the current slot with the raw projection.
       def encode_scalar_pair(
@@ -329,6 +364,15 @@ module ML::GGUF
     end
 
     private lib LibInkling2Attention
+      # Matches Inkling2ScalarConvolutionResidualParams in inkling2_resident_attention.metal.
+      struct ScalarConvolutionResidualParams
+        channels : UInt32
+        taps : UInt32
+        start : UInt32
+        history_slots : UInt32
+        add_residual : UInt32
+      end
+
       # Matches Inkling2ScalarConvolutionPairParams in inkling2_resident_attention.metal.
       struct ScalarConvolutionPairParams
         channels : UInt32

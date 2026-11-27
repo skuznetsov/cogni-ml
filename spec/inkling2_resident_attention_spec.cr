@@ -177,6 +177,87 @@ require "../src/ml/gguf/inkling2_resident_math"
     ML::GGUF::Inkling2View.new(buffer)
   end
 
+  private def resident_guarded_view(values : Array(Float32), buffers : Array(ML::MetalBuffer)) : ML::GGUF::Inkling2View
+    prefix = 2_i32
+    data = Array(Float32).new(prefix, -777.0_f32) + values + Array(Float32).new(2, -999.0_f32)
+    view = resident_shared_view(data, buffers)
+    ML::GGUF::Inkling2View.new(view.buffer, prefix.to_i64 * sizeof(Float32))
+  end
+
+  private def resident_scalar_convolution_row(channels : Int32, seed : Int32) : {Array(Float32), Array(Float32)}
+    input = Array(Float32).new(channels) do |channel|
+      ((seed * 11 + channel * 7) % 31 - 15).to_f32 * 0.03125_f32
+    end
+    residual = Array(Float32).new(channels) do |channel|
+      ((seed * 5 + channel * 3) % 17 - 8).to_f32 * 0.04_f32
+    end
+    {input, residual}
+  end
+
+  private def resident_check_scalar_convolution_residual(
+    start : Int32,
+    reference : {ML::GGUF::Inkling2ResidentConvolution, ML::GGUF::Inkling2ResidentConvolution},
+    fused : {ML::GGUF::Inkling2ResidentConvolution, ML::GGUF::Inkling2ResidentConvolution},
+    input_values : Array(Float32),
+    taps_values : Array(Float32),
+    residual_values : Array(Float32),
+  ) : Nil
+    width = input_values.size.to_i32
+    buffers = [] of ML::MetalBuffer
+    scratch = ML::GGUF::Inkling2ResidentScratch.new
+    command = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(command)
+    encoder_ended = false
+    begin
+      begin
+        taps = resident_guarded_view(taps_values, buffers)
+        reference_copy_input = resident_guarded_view(input_values, buffers)
+        reference_add_input = resident_guarded_view(input_values, buffers)
+        fused_copy_input = resident_guarded_view(input_values, buffers)
+        fused_add_input = resident_guarded_view(input_values, buffers)
+        expected_copy = resident_guarded_view(Array(Float32).new(width, 0.0_f32), buffers)
+        expected_add = resident_guarded_view(Array(Float32).new(width, 0.0_f32), buffers)
+        reference_residual = resident_guarded_view(residual_values, buffers)
+        fused_residual = resident_guarded_view(residual_values, buffers)
+
+        expected_copy_conv = reference[0].encode(encoder, scratch, start, 1_i32, reference_copy_input, taps)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, expected_copy_conv, expected_copy, width)
+
+        expected_add_conv = reference[1].encode(encoder, scratch, start, 1_i32, reference_add_input, taps)
+        ML::GGUF::Inkling2ResidentMath.add(encoder, reference_residual, expected_add_conv, expected_add, width)
+
+        fused[0].encode_scalar_residual(encoder, start, fused_copy_input, taps, fused_copy_input)
+        fused[1].encode_scalar_residual(encoder, start, fused_add_input, taps, fused_residual, fused_residual)
+      ensure
+        unless encoder_ended
+          encoder.end_encoding
+          encoder_ended = true
+        end
+      end
+      command.commit_and_wait
+
+      buffer_elements = 2 + width + 2
+      expected_copy_bits = resident_bits(expected_copy.buffer.read(buffer_elements)[2, width].to_a)
+      expected_add_bits = resident_bits(expected_add.buffer.read(buffer_elements)[2, width].to_a)
+      actual_copy_bits = resident_bits(fused_copy_input.buffer.read(buffer_elements)[2, width].to_a)
+      actual_add_bits = resident_bits(fused_residual.buffer.read(buffer_elements)[2, width].to_a)
+      actual_copy_bits.should eq(expected_copy_bits)
+      actual_add_bits.should eq(expected_add_bits)
+
+      prefix_bits = resident_bits(Array(Float32).new(2, -777.0_f32))
+      suffix_bits = resident_bits(Array(Float32).new(2, -999.0_f32))
+      {expected_copy, expected_add, fused_copy_input, fused_residual}.each do |view|
+        guarded_bits = resident_bits(view.buffer.read(buffer_elements))
+        guarded_bits[0, 2].should eq(prefix_bits)
+        guarded_bits[2 + width, 2].should eq(suffix_bits)
+      end
+    ensure
+      encoder.end_encoding unless encoder_ended
+      scratch.close
+      buffers.each(&.release)
+    end
+  end
+
   private def resident_run_tile(
     attention : ML::GGUF::Inkling2ResidentAttention,
     start : Int32,
@@ -1208,6 +1289,88 @@ require "../src/ml/gguf/inkling2_resident_math"
           (actual[0] - expected).abs.should be < 2e-6_f32
         ensure
           convolution.close
+        end
+      end
+
+      it "matches fused scalar residual convolution at a ring collision and on replay" do
+        channels = 7_i32
+        taps = 4_i32
+        tap_values = Array(Float32).new(channels * taps) do |index|
+          ((index * 5 % 19) - 9).to_f32 * 0.0625_f32
+        end
+        reference = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps),
+        }
+        fused = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps),
+        }
+        begin
+          5.times do |position|
+            input, residual = resident_scalar_convolution_row(channels, position.to_i32)
+            resident_check_scalar_convolution_residual(
+              position.to_i32, reference, fused, input, tap_values, residual
+            )
+          end
+        ensure
+          {reference, fused}.each { |convolutions| convolutions.each(&.close) }
+        end
+
+        reserve = 2_i32
+        replay_reference = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps, rollback_rows: reserve),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps, rollback_rows: reserve),
+        }
+        replay_fused = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps, rollback_rows: reserve),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, taps, rollback_rows: reserve),
+        }
+        begin
+          4.times do |position|
+            input, residual = resident_scalar_convolution_row(channels, position.to_i32 + 20)
+            resident_check_scalar_convolution_residual(
+              position.to_i32, replay_reference, replay_fused, input, tap_values, residual
+            )
+          end
+          {replay_reference, replay_fused}.each do |convolutions|
+            convolutions.each(&.begin_speculation(4_i32))
+          end
+          4.upto(5) do |position|
+            input, residual = resident_scalar_convolution_row(channels, position.to_i32 + 20)
+            resident_check_scalar_convolution_residual(
+              position.to_i32, replay_reference, replay_fused, input, tap_values, residual
+            )
+          end
+          {replay_reference, replay_fused}.each do |convolutions|
+            convolutions.each(&.finish_speculation(5_i32))
+          end
+          input, residual = resident_scalar_convolution_row(channels, 99_i32)
+          resident_check_scalar_convolution_residual(5_i32, replay_reference, replay_fused, input, tap_values, residual)
+        ensure
+          {replay_reference, replay_fused}.each { |convolutions| convolutions.each(&.close) }
+        end
+
+        single_tap_values = Array(Float32).new(channels) do |index|
+          ((index * 3 % 11) - 5).to_f32 * 0.125_f32
+        end
+        single_reference = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, 1_i32),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, 1_i32),
+        }
+        single_fused = {
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, 1_i32),
+          ML::GGUF::Inkling2ResidentConvolution.new(channels, 1_i32),
+        }
+        begin
+          1.times do |position|
+            input, residual = resident_scalar_convolution_row(channels, position.to_i32 + 40)
+            resident_check_scalar_convolution_residual(
+              position.to_i32, single_reference, single_fused, input, single_tap_values, residual
+            )
+          end
+        ensure
+          {single_reference, single_fused}.each { |convolutions| convolutions.each(&.close) }
         end
       end
 

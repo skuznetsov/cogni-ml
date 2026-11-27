@@ -79,6 +79,35 @@ kernel void inkling2_resident_convolution(
         channels, taps, start, dynamic_heads, history_slots, row, channel);
 }
 
+struct Inkling2ScalarConvolutionResidualParams {
+    uint channels;
+    uint taps;
+    uint start;
+    uint history_slots;
+    uint add_residual;
+};
+
+kernel void inkling2_resident_scalar_convolution_residual(
+    device const float* input       [[buffer(0)]],
+    device const float* weights     [[buffer(1)]],
+    device       float* history     [[buffer(2)]],
+    device const float* residual    [[buffer(3)]],
+    device       float* output      [[buffer(4)]],
+    constant Inkling2ScalarConvolutionResidualParams& params [[buffer(5)]],
+    uint channel [[thread_position_in_grid]])
+{
+    if (channel >= params.channels) return;
+
+    const float raw = input[channel];
+    const float convolved = inkling2_resident_convolve_channel(input, weights, input, history,
+        params.channels, params.taps, params.start, 0, params.history_slots, 0, channel);
+    // With no rollback reserve, this write replaces the oldest tap just read.
+    if (params.history_slots > 0) {
+        history[(params.start % params.history_slots) * params.channels + channel] = raw;
+    }
+    output[channel] = params.add_residual ? residual[channel] + convolved : convolved;
+}
+
 struct Inkling2ScalarConvolutionPairParams {
     uint channels;
     uint taps;

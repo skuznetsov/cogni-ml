@@ -899,7 +899,9 @@ module ML::GGUF
       save_block = physical % @config.res_block_size == 0
       queries = layer.attn_res_query
       fused_attn_query = queries if fuse_depth_mix && sliding && messages.nil?
-      attended = attend(tile, layer.attention, visit, recycle_attention_inputs) do
+      fuse_convolution = tile.rows == 1 && !tile.decode_block? && decode_fused_scalar_convolution?
+      attended = attend(tile, layer.attention, visit, recycle_attention_inputs,
+        residual_output: fuse_convolution ? residual : nil, add_residual: !save_block) do
         if query = fused_attn_query
           q_in = normalize_depth_mix(tile, tile.current, query, layer.q_norm, save_to_bank: save_block)
           next {q_in, q_in, q_in}
@@ -933,8 +935,8 @@ module ML::GGUF
           MathOps.rms(encoder, tile.current, block, nil, tile.width, tile.rows, DEPTH_EPS)
         end
         tile.block_count += 1
-        MathOps.copy(encoder, attended, residual, tile.elements)
-      else
+        MathOps.copy(encoder, attended, residual, tile.elements) if attended
+      elsif attended
         MathOps.add(encoder, tile.current, attended, residual, tile.elements)
       end
       @scratch.rewind(attention_mark)
@@ -957,14 +959,21 @@ module ML::GGUF
                end
       bias = layer.router_bias.try { |array| constant(array) }
       routed = @linear.moe(encoder, @scratch, layer, @config, ffn_in, bias, tile.rows, decode_block: tile.decode_block?)
-      convolved = visit.ffn_conv.encode(encoder, @scratch, tile.start, tile.rows, routed, constant(layer.ffn_post_conv))
-      MathOps.add(encoder, residual, convolved, tile.next_state, tile.elements)
+      taps = constant(layer.ffn_post_conv)
+      if fuse_convolution
+        visit.ffn_conv.encode_scalar_residual(encoder, tile.start, routed, taps, tile.next_state, residual)
+      else
+        convolved = visit.ffn_conv.encode(encoder, @scratch, tile.start, tile.rows, routed, taps)
+        MathOps.add(encoder, residual, convolved, tile.next_state, tile.elements)
+      end
       tile.swap
       @scratch.rewind(mark)
     end
 
-    private def attend(tile : Tile, weight : Inkling2AttentionWeights, visit : Visit,
-                       recycle_inputs : Bool, & : -> Tuple(Inkling2View, Inkling2View, Inkling2View)) : Inkling2View
+    # With a scalar residual destination, post-convolution writes there directly.
+    private def attend(tile : Tile, weight : Inkling2AttentionWeights, visit : Visit, recycle_inputs : Bool,
+                       *, residual_output : Inkling2View?, add_residual : Bool,
+                       & : -> Tuple(Inkling2View, Inkling2View, Inkling2View)) : Inkling2View?
       matrices = {weight.q, weight.k, weight.v, weight.rel_proj, weight.gate, weight.sink, weight.k_conv_proj, weight.v_conv_proj}
       if recycle_inputs
         outputs = matrices.map { |matrix| matrix.try { |m| @scratch.take(m.out_dim * tile.rows) } }
@@ -1003,6 +1012,11 @@ module ML::GGUF
         end
       end
       projected = project(tile, weight.output, context)
+      if output = residual_output
+        visit.post_conv.encode_scalar_residual(tile.encoder, tile.start, projected, taps, output,
+          add_residual ? tile.current : nil)
+        return
+      end
       visit.post_conv.encode(tile.encoder, @scratch, tile.start, tile.rows, projected, taps)
     end
 
@@ -1051,6 +1065,11 @@ module ML::GGUF
     # controller evaluation with the reference projection-plus-epilogue path.
     private def decode_fused_control? : Bool
       true
+    end
+
+    # Override in a same-binary comparison with separate convolution, commit and add.
+    private def decode_fused_scalar_convolution? : Bool
+      {{ flag?(:aarch64) }}
     end
 
     # Override in a same-binary comparison with the independent reductions.
