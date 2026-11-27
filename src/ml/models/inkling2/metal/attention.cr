@@ -1143,8 +1143,8 @@ module ML::GGUF
 
       private def scalar_split_wide_qk?(partition_size : Int32) : Bool
         {% if flag?(:aarch64) %}
-          # Use wider score parallelism around the sliding-window length.
-          partition_size.in?(SPLIT_WIDE_QK_MIN_PARTITION..SPLIT_PARALLEL_SCORE_LIMIT)
+          # The cached split-K path has already checked the active score limit.
+          partition_size >= SPLIT_WIDE_QK_MIN_PARTITION
         {% else %}
           false
         {% end %}

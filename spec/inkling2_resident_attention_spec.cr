@@ -814,19 +814,20 @@ require "../src/ml/gguf/inkling2_resident_math"
         end
       end
 
-      it "keeps global decode bitwise when the fast profile caches more than 512 scores per partition" do
+      it "keeps global block and scalar decode bitwise beyond 512 cached scores per partition" do
         start = 2047_i32
         block_rows = 4_i32
         end_position = start + block_rows
+        max_seq = end_position + 1
         config = resident_test_config(sliding: false, n_head: 1_i32, n_head_kv: 1_i32,
-          head_dim: 128_i32, rel_dim: 16_i32, window: 1024_i32, max_seq: end_position)
+          head_dim: 128_i32, rel_dim: 16_i32, window: 1024_i32, max_seq: max_seq)
         weights = resident_attention_weights(config)
         matmul = ML::GGUF::Inkling2CPUMatmul.new
         pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
         prefix = Array(ResidentProjectedRow).new(start) { |row| pattern[row % pattern.size] }
         continuation = pattern.first(block_rows)
-        reference = ML::GGUF::Inkling2ResidentAttention.new(config, false, end_position)
-        fast = ML::GGUF::Inkling2ResidentAttention.new(config, false, end_position,
+        reference = ML::GGUF::Inkling2ResidentAttention.new(config, false, max_seq)
+        fast = ML::GGUF::Inkling2ResidentAttention.new(config, false, max_seq,
           prefill_mode: ML::GGUF::Inkling2ResidentAttention::PrefillMode::Fast)
         begin
           resident_run_tile(reference, 0_i32, prefix, weights, config)
@@ -840,9 +841,18 @@ require "../src/ml/gguf/inkling2_resident_math"
           ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel").should be_true
           resident_bits(actual).should eq(resident_bits(expected))
 
-          (start...end_position).each do |position|
-            actual_k, actual_v, _ = fast.key_value_at(position, end_position)
-            expected_k, expected_v, _ = reference.key_value_at(position, end_position)
+          ML::Metal::PipelineCache.clear
+          next_row = [pattern[block_rows]]
+          expected_scalar = resident_run_tile(reference, end_position, next_row, weights, config)
+          actual_scalar = resident_run_tile(fast, end_position, next_row, weights, config)
+          {% if flag?(:aarch64) %}
+            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8").should be_true
+          {% end %}
+          resident_bits(actual_scalar).should eq(resident_bits(expected_scalar))
+
+          (start...max_seq).each do |position|
+            actual_k, actual_v, _ = fast.key_value_at(position, max_seq)
+            expected_k, expected_v, _ = reference.key_value_at(position, max_seq)
             resident_bits(actual_k).should eq(resident_bits(expected_k))
             resident_bits(actual_v).should eq(resident_bits(expected_v))
           end
