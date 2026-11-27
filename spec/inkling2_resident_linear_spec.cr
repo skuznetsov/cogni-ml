@@ -730,6 +730,13 @@ require "../src/ml/gguf/inkling2_engine"
           {rows, guarded_output}
         end
 
+        head_rows = 4
+        head_entries = head_rows * 39
+        head_input = Inkling2LinearSpecSupport.float_view([0_f32] + q8_decode_input, buffers).slice(1)
+        head_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(head_entries + 2, 123_f32), buffers)
+        linear.project(encoder, q8_tiled_projection, head_input, head_output.slice(1), head_rows,
+          decode_block: true, output_head: true)
+
         moe_input = Array(Float32).new(3 * 32) { |index| ((index % 13) - 6).to_f32 * 0.015_f32 }
         moe_input_view = Inkling2LinearSpecSupport.float_view(moe_input, buffers)
         bias_view = Inkling2LinearSpecSupport.float_view([0_f32, 0_f32, -1_f32], buffers)
@@ -886,6 +893,13 @@ require "../src/ml/gguf/inkling2_engine"
           Inkling2LinearSpecSupport.float_bits(data[1, entries]).should eq(
             Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_rowwise_output, entries)))
         end
+        head_data = Inkling2LinearSpecSupport.read(head_output, head_entries + 2)
+        {head_data.first, head_data.last}.should eq({123_f32, 123_f32})
+        Inkling2LinearSpecSupport.float_bits(head_data[1, head_entries]).should eq(
+          Inkling2LinearSpecSupport.float_bits(Inkling2LinearSpecSupport.read(q8_rowwise_output, head_entries)))
+        {% if flag?(:aarch64) %}
+          ML::Metal::PipelineCache.resident_linear_spec_contains?("inkling2_resident_decode_q8_pair_rows4").should be_true
+        {% end %}
         expected_moe = Inkling2LinearSpecSupport.moe_expected(layer, config, moe_input, 3_i32)
         Inkling2LinearSpecSupport.read(moe_readback, 96_i32).zip(expected_moe).each do |actual, expected|
           actual.should be_close(expected, 2e-3_f32)

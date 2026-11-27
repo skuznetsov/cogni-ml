@@ -128,10 +128,11 @@ module ML::GGUF
       # Encode a row-major F32 activation matrix `[rows, in_dim]` into an
       # output matrix `[rows, out_dim]`. `decode_block` admits one to four rows
       # and keeps the exact low-row SIMD matvec order while sharing each row's
-      # weights across the block. This method never submits or waits.
+      # weights across the block. A four-row Q8_0 output head can also share
+      # input loads between two output channels. This method never submits or waits.
       def project(encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
                   input : Inkling2View, output : Inkling2View, rows : Int32,
-                  *, decode_block : Bool = false) : Nil
+                  *, decode_block : Bool = false, output_head : Bool = false) : Nil
         ensure_open!
         raise ArgumentError.new("Inkling 2 resident projection has no rows") unless rows > 0
         if decode_block && rows > MAX_DECODE_BLOCK_ROWS
@@ -141,13 +142,18 @@ module ML::GGUF
         ensure_view!(input, checked_bytes(rows, weight.in_dim, "projection input"))
         ensure_view!(output, checked_bytes(rows, weight.out_dim, "projection output"))
 
+        pair_output_channels = {% if flag?(:aarch64) %}
+                                 output_head && decode_block && rows == 4 && weight.type.q8_0?
+                               {% else %}
+                                 false
+                               {% end %}
         row_base = 0_i32
         while row_base < rows
           count = Math.min(MAX_ROWS_PER_GRID, rows - row_base)
           input_offset = input.offset + row_base.to_i64 * weight.in_dim.to_i64 * sizeof(Float32)
           output_offset = output.offset + row_base.to_i64 * weight.out_dim.to_i64 * sizeof(Float32)
           encode_projection(encoder, weight, model_offset(weight.raw), input.buffer, input_offset,
-            output.buffer, output_offset, count)
+            output.buffer, output_offset, count, pair_output_channels)
           row_base += count
         end
       end
@@ -489,17 +495,24 @@ module ML::GGUF
 
       private def encode_projection(encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
                                     weight_offset : Int64, input : ML::MetalBuffer, input_offset : Int64,
-                                    output : ML::MetalBuffer, output_offset : Int64, rows : Int32) : Nil
-        if rows == 1
-          name = weight.type.f32? ? "simd_mv_f32_f32" : "simd_mv_q8_0_f32"
+                                    output : ML::MetalBuffer, output_offset : Int64, rows : Int32,
+                                    pair_output_channels : Bool) : Nil
+        if rows == 1 || pair_output_channels
+          if pair_output_channels
+            name = "inkling2_resident_decode_q8_pair_rows4"
+            output_tile = 8
+          else
+            name = weight.type.f32? ? "simd_mv_f32_f32" : "simd_mv_q8_0_f32"
+            output_tile = 4
+          end
           encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
           encoder.set_buffer(@model, 0, offset: weight_offset)
           encoder.set_buffer(input, 1, offset: input_offset)
           encoder.set_buffer(output, 2, ML::Metal::BufferAccess::Write, offset: output_offset)
           encoder.set_value(weight.in_dim.to_u32, 3)
           encoder.set_value(weight.out_dim.to_u32, 4)
-          encoder.set_value(1_u32, 5)
-          encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, 1, 1}, {128, 1, 1})
+          encoder.set_value(1_u32, 5) unless pair_output_channels
+          encoder.dispatch_threadgroups({(weight.out_dim + output_tile - 1) // output_tile, 1, 1}, {128, 1, 1})
           return
         end
 

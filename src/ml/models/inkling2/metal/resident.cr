@@ -725,7 +725,8 @@ module ML::GGUF
       vocab = @config.vocab_size
       projection_rows = loopcd_inputs && @weights.output.type.q8_0? ? 2 : rows
       logits = @scratch.take((loopcd_inputs ? 2 : rows) * padded_vocab)
-      @linear.project(encoder, @weights.output, normalized, logits, projection_rows, decode_block: tile.decode_block?)
+      @linear.project(encoder, @weights.output, normalized, logits, projection_rows,
+        decode_block: tile.decode_block?, output_head: true)
       output = Inkling2View.new(buffer)
       if loopcd_inputs
         reference = logits.slice(padded_vocab)

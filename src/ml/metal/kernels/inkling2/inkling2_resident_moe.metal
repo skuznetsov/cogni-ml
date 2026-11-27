@@ -375,6 +375,51 @@ kernel void inkling2_resident_gemm_q8_0(
     }
 }
 
+// A SIMD group shares each input load between two output channels.
+// Keep independent accumulators so every dot follows the scalar K order.
+kernel void inkling2_resident_decode_q8_pair_rows4(
+    device const uchar* raw [[buffer(0)]], device const float* x [[buffer(1)]],
+    device float* y [[buffer(2)]], constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]], uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]], ushort simd [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint Rows = 4;
+    const uint row = (4 * group.x + (uint)simd) * 2;
+    if (row >= out_dim) return;
+    const bool second = row + 1 < out_dim;
+    const uint blocks = in_dim / Q8_0_QK;
+    device const block_q8_0_56* w0 =
+        (device const block_q8_0_56*)raw + (size_t)row * blocks;
+    device const block_q8_0_56* w1 = w0 + blocks;
+
+    float sum0[Rows] = {};
+    float sum1[Rows] = {};
+    for (uint block = 0; block < blocks; ++block) {
+        const float scale0 = (float)w0[block].d;
+        const float q0 = (float)w0[block].qs[lane];
+        const float scale1 = second ? (float)w1[block].d : 0.0f;
+        const float q1 = second ? (float)w1[block].qs[lane] : 0.0f;
+        const uint k = block * Q8_0_QK + lane;
+        #pragma unroll
+        for (uint batch_row = 0; batch_row < Rows; ++batch_row) {
+            const float value = x[batch_row * (size_t)in_dim + k];
+            sum0[batch_row] += scale0 * value * q0;
+            sum1[batch_row] += scale1 * value * q1;
+        }
+    }
+
+    #pragma unroll
+    for (uint batch_row = 0; batch_row < Rows; ++batch_row) {
+        const float total0 = simd_sum(sum0[batch_row]);
+        const float total1 = simd_sum(sum1[batch_row]);
+        if (lane == 0) {
+            const size_t offset = batch_row * (size_t)out_dim + row;
+            y[offset] = total0;
+            if (second) y[offset + 1] = total1;
+        }
+    }
+}
+
 struct inkling2_q8_projection {
     ulong weight_offset;
     ulong input_offset;
