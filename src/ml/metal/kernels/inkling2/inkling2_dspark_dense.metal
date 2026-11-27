@@ -16,11 +16,11 @@ static inline void inkling2_dspark_dense_tile(
     uint in_dim,
     uint out_dim,
     uint rows,
-    uint3 group,
+    uint first_row,
+    uint column_tile,
     ushort lane,
     ushort simdgroup) {
-    const uint output_column = group.x * 8 + uint(simdgroup);
-    const uint first_row = FullTile ? 0 : group.y * 8;
+    const uint output_column = column_tile * 8 + uint(simdgroup);
     if (output_column >= out_dim || (!FullTile && first_row >= rows)) return;
 
     device const ushort* weight_row = weights + output_column * in_dim;
@@ -57,7 +57,7 @@ kernel void inkling2_dspark_dense(
     uint3 group [[threadgroup_position_in_grid]],
     ushort lane [[thread_index_in_simdgroup]],
     ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
-    inkling2_dspark_dense_tile<false>(weights, input, output, in_dim, out_dim, rows, group, lane, simdgroup);
+    inkling2_dspark_dense_tile<false>(weights, input, output, in_dim, out_dim, rows, group.y * 8, group.x, lane, simdgroup);
 }
 
 // The draft transformer always projects eight rows. Specialize that case
@@ -71,5 +71,25 @@ kernel void inkling2_dspark_dense_rows8(
     uint3 group [[threadgroup_position_in_grid]],
     ushort lane [[thread_index_in_simdgroup]],
     ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
-    inkling2_dspark_dense_tile<true>(weights, input, output, in_dim, out_dim, 8u, group, lane, simdgroup);
+    inkling2_dspark_dense_tile<true>(weights, input, output, in_dim, out_dim, 8u, 0u, group.x, lane, simdgroup);
+}
+
+// Context absorption can specialize every complete row tile and handle the
+// last partial tile in the same dispatch.
+kernel void inkling2_dspark_dense_tiled(
+    device const ushort* weights [[buffer(0)]],
+    device const float* input [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]],
+    constant uint& rows [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint first_row = group.y * 8;
+    if (group.y < rows / 8u) {
+        inkling2_dspark_dense_tile<true>(weights, input, output, in_dim, out_dim, rows, first_row, group.x, lane, simdgroup);
+    } else {
+        inkling2_dspark_dense_tile<false>(weights, input, output, in_dim, out_dim, rows, first_row, group.x, lane, simdgroup);
+    }
 }

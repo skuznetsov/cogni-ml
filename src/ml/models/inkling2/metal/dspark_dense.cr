@@ -21,6 +21,7 @@ require "../../../core/buffer"
         rows : Int32,
         in_dim : Int32,
         out_dim : Int32,
+        *, tiled : Bool = false,
       ) : Nil
         raise ArgumentError.new("Inkling 2 DSpark dense rows must be positive") unless rows > 0
         raise ArgumentError.new("Inkling 2 DSpark dense input width must be positive") unless in_dim > 0
@@ -44,7 +45,14 @@ require "../../../core/buffer"
         reject_overlap!(input, input_bytes, output, output_bytes, "input", "output")
 
         full_tile = rows == ROW_TILE
-        encoder.set_pipeline(pipeline(full_tile ? "inkling2_dspark_dense_rows8" : "inkling2_dspark_dense"))
+        name = if full_tile
+                 "inkling2_dspark_dense_rows8"
+               elsif tiled && rows > ROW_TILE
+                 "inkling2_dspark_dense_tiled"
+               else
+                 "inkling2_dspark_dense"
+               end
+        encoder.set_pipeline(pipeline(name))
         encoder.set_buffer(weight.buffer, 0, offset: weight.offset)
         encoder.set_buffer(input.buffer, 1, offset: input.offset)
         encoder.set_buffer(output.buffer, 2, ML::Metal::BufferAccess::Write, offset: output.offset)

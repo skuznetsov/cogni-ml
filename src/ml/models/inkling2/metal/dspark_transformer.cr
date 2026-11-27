@@ -21,6 +21,7 @@ module ML::GGUF
       private LAYERS       = 3_i32
       private RING_SIZE    = 1_024_i32
       private CONTEXT_MAX  = 1_023_i32
+      private ABSORB_TILED_MIN_ROWS = 64_i32
       private EPS          = 1e-6_f32
       private ROPE_BASE    = 1_000_000_f32
       private THREADS      = 256_i32
@@ -65,6 +66,7 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 DSpark context position exceeds Int32") if end_position > Int32::MAX
         validate_taps!(taps, rows)
 
+        tiled = rows >= ABSORB_TILED_MIN_ROWS
         reuse = scratch.mark
         begin
           LAYERS.times do |layer|
@@ -75,9 +77,9 @@ module ML::GGUF
             encode_mix_rows(encoder, taps, layer, mixed, rows)
             prefix = layer_prefix(layer)
             Inkling2DSparkDense.project(encoder, weight("#{prefix}.self_attn.k_proj_ctx.weight"),
-              mixed, key, rows, HIDDEN, KV_HEADS * HEAD_DIM)
+              mixed, key, rows, HIDDEN, KV_HEADS * HEAD_DIM, tiled: tiled)
             Inkling2DSparkDense.project(encoder, weight("#{prefix}.self_attn.v_proj_ctx.weight"),
-              mixed, value, rows, HIDDEN, KV_HEADS * HEAD_DIM)
+              mixed, value, rows, HIDDEN, KV_HEADS * HEAD_DIM, tiled: tiled)
             encode_context_commit(encoder, layer, key, value, start, rows)
             # Each layer's cache commit is the last reader of these temporary
             # projections; command order permits reusing this scratch span.
