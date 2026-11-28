@@ -1109,6 +1109,7 @@ require "../src/ml/gguf/inkling2_resident_math"
 
           actual = resident_run_tile(fast, start, continuation, weights, config, decode_block: true)
           ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel").should be_true
+          ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8").should be_false
           resident_bits(actual).should eq(resident_bits(expected))
 
           ML::Metal::PipelineCache.clear
@@ -1189,9 +1190,13 @@ require "../src/ml/gguf/inkling2_resident_math"
             ML::Metal::PipelineCache.clear
             actual = resident_run_tile(blocked, start, block_rows, weights, config, decode_block: true)
             suffix = kv_storage.f16? ? "_f16" : ""
-            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel#{suffix}").should be_true
+            {% if flag?(:aarch64) %}
+              ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8#{suffix}").should be_true
+              ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel#{suffix}").should be_false
+            {% else %}
+              ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_parallel#{suffix}").should be_true
+            {% end %}
             ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split#{suffix}").should be_false
-            ML::Metal::PipelineCache.resident_spec_contains?("inkling2_resident_attention_split_qk8#{suffix}").should be_false
 
             expected = [] of Float32
             4.times do |row|

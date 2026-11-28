@@ -521,13 +521,15 @@ The optimized split-K kernel computes scores once per partition and reuses
 them for PV. Its sliding-window loop walks contiguous spans of the KV ring
 in logical order, preserving the FP32 summation order across wrap.
 On Apple Silicon, scalar decode uses eight SIMD groups for scores and
-exponentials when the largest partition holds 128 to 512 keys and the
-model has 128 head channels and 16 relative channels. Each PV channel
-accumulates in ascending key order and the merge visits the four
-partitions in their original order.
+exponentials when the largest partition holds at least 128 keys within
+the active score cache limit and the model has 128 head channels and
+16 relative channels. Each PV channel accumulates in ascending key order
+and the merge visits partitions in order.
 On the supported fast profile, the parallel kernel caches up to 4,096
-scores per partition, covering up to 16,384 global keys with the same
-four partitions and FP32 summation order.
+scores per partition. Global attention uses four partitions through
+16,384 visible keys and adds partitions as the context grows. On Apple
+Silicon, fast block verification uses eight SIMD groups for cached
+scores on global attention once a block reaches 16,384 visible keys.
 
 Set `INKLING2_PREFILL_ATTENTION=scores` to cache FP32 scores during
 multirow resident prefill. Set it to `shared_kv` to share each K/V load

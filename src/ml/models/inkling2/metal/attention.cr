@@ -902,7 +902,7 @@ module ML::GGUF
 
               encode_attention_split_rows(encoder, scratch, q, k, v, q_rel, gate, sink,
                 relative_bias, output, start, row_offset, partition_rows, relative_extent,
-                partitions, scalar: !decode_block && rows == 1)
+                partitions, decode_block: decode_block)
               row_offset += partition_rows
             end
           else
@@ -910,7 +910,7 @@ module ML::GGUF
             # the same partition count, including all paths through 16,384.
             encode_attention_split_rows(encoder, scratch, q, k, v, q_rel, gate, sink,
               relative_bias, output, start, split_begin, split_rows, relative_extent,
-              last_partitions, scalar: !decode_block && rows == 1)
+              last_partitions, decode_block: decode_block)
           end
         end
       end
@@ -1149,7 +1149,7 @@ module ML::GGUF
         relative_extent : Int32,
         partitions : Int32,
         *,
-        scalar : Bool,
+        decode_block : Bool,
       ) : Nil
         q_width = @config.n_head * @config.head_dim
         relative_width = @config.n_head * @config.rel_dim
@@ -1159,7 +1159,7 @@ module ML::GGUF
           attention_row_view(gate, row_offset, q_width),
           attention_row_view(sink, row_offset, @config.n_head), relative_bias,
           attention_row_view(output, row_offset, q_width), start, rows, row_offset,
-          relative_extent, partitions, scalar: scalar)
+          relative_extent, partitions, decode_block: decode_block)
       end
 
       # Fast global split-K keeps each partition at or below the 4096-score
@@ -1241,7 +1241,7 @@ module ML::GGUF
         relative_extent : Int32,
         partitions : Int32,
         *,
-        scalar : Bool,
+        decode_block : Bool,
       ) : Nil
         partial_width = checked_elements(partitions, @config.head_dim + 2, "split attention partition")
         partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
@@ -1256,7 +1256,10 @@ module ML::GGUF
         parallel_limit = @prefill_mode.fast? ? FAST_SPLIT_PARALLEL_SCORE_LIMIT : SPLIT_PARALLEL_SCORE_LIMIT
         parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= parallel_limit
         if parallel
-          wide_qk = scalar && scalar_split_wide_qk?(partition_size)
+          scalar = !decode_block && rows == 1
+          long_global_block = decode_block && @prefill_mode.fast? && !@sliding &&
+                              keys >= SPLIT_KEY_PARTITIONS * FAST_SPLIT_PARALLEL_SCORE_LIMIT
+          wide_qk = (scalar || long_global_block) && split_wide_qk?(partition_size)
           split_pipeline = wide_qk ? "inkling2_resident_attention_split_qk8" : "inkling2_resident_attention_split_parallel"
           threads = wide_qk ? 2 * SPLIT_PARALLEL_THREADS : SPLIT_PARALLEL_THREADS
           shared_floats = partition_size
@@ -1286,7 +1289,7 @@ module ML::GGUF
         encoder.dispatch({32, rows, @config.n_head}, {32, 1, 1})
       end
 
-      private def scalar_split_wide_qk?(partition_size : Int32) : Bool
+      private def split_wide_qk?(partition_size : Int32) : Bool
         {% if flag?(:aarch64) %}
           # The cached split-K path has already checked the active score limit.
           partition_size >= SPLIT_WIDE_QK_MIN_PARTITION
