@@ -5,7 +5,8 @@ require "../models/inkling2/tokenizer"
 
 module ML::Serve
   class Inkling2Backend < OpenAI::Backend
-    private DEFAULT_COMPLETION_TOKENS = 256
+    private DEFAULT_CHAT_COMPLETION_TOKENS = 2_048
+    private DEFAULT_TEXT_COMPLETION_TOKENS =   256
 
     @tokenizer : GGUF::Inkling2Tokenizer
 
@@ -30,7 +31,8 @@ module ML::Serve
       end
 
       available = @engine.max_seq - ids.size
-      limit = options.max_tokens || Math.min(DEFAULT_COMPLETION_TOKENS, available)
+      default_limit = chat ? DEFAULT_CHAT_COMPLETION_TOKENS : DEFAULT_TEXT_COMPLETION_TOKENS
+      limit = options.max_tokens || Math.min(default_limit, available)
       if limit <= 0 || limit > available
         message = "The prompt (#{ids.size} tokens) and requested completion exceed the #{@engine.max_seq}-token context"
         raise OpenAI::RequestError.new(message, param: param, code: "context_length_exceeded")

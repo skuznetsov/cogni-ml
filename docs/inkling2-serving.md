@@ -114,10 +114,14 @@ Both completion endpoints return JSON by default and Server-Sent Events
 for `stream: true`. Streams end with `[DONE]` and can include final token
 usage with `stream_options.include_usage`. The chat path renders text parts,
 accepts system, developer, user, and assistant messages, and counts sampled
-reasoning tokens in completion usage and limits. The checkpoint's default
-reasoning effort is `high`, and it can emit reasoning tokens even with
-`reasoning_effort="none"`. The server loads one GGUF and runs one sequence at a time.
-Each request starts with a fresh sequence.
+reasoning tokens in completion usage and limits. When the request omits the
+limit, chat completions use up to 2,048 tokens and raw text completions use up
+to 256, subject to the remaining context. Requests with an explicit
+`max_completion_tokens` or `max_tokens` that exceeds the remaining context
+return `context_length_exceeded`. The checkpoint's default reasoning effort
+is `high`, and it can emit reasoning tokens even with `reasoning_effort="none"`.
+The server loads one GGUF and runs one sequence at a time. Each request starts
+with a fresh sequence.
 
 The API scope is text and one choice. Requests for tool calls, multimodal
 output, or JSON-schema output are rejected. Configure harnesses to use
